@@ -1328,6 +1328,28 @@ def _maybe_auto_subscribe(conn: Any, task_id: str) -> bool:
                 or os.environ.get("HERMES_SESSION_KEY", "")
             )
             if not session_key:
+                # Kanban worker fallback: inherit subscriptions from own
+                # (parent) task. Dispatcher-spawned workers don't carry
+                # session contextvars / env vars (ContextVars don't survive
+                # subprocess fork), so they can't create their own
+                # subscription rows. Instead, copy any existing
+                # subscriptions from the spawning task so child-card
+                # completion events still notify the originating session.
+                _self_tid = os.environ.get("HERMES_KANBAN_TASK")
+                if _self_tid:
+                    from hermes_cli import kanban_db as _kb
+                    parent_subs = _kb.list_notify_subs(conn, _self_tid)
+                    if parent_subs:
+                        for sub in parent_subs:
+                            _kb.add_notify_sub(
+                                conn, task_id=task_id,
+                                platform=sub["platform"],
+                                chat_id=sub["chat_id"],
+                                thread_id=sub.get("thread_id"),
+                                user_id=sub.get("user_id"),
+                                notifier_profile=sub.get("notifier_profile"),
+                            )
+                        return True
                 return False  # CLI / cron / test — no persistent channel
             platform = "tui"
             chat_id = session_key
