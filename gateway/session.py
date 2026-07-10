@@ -2027,6 +2027,26 @@ class SessionStore:
         Sessions with active background processes are never reset.
         """
         session_key = self._generate_session_key(source)
+
+        # Fast-path: force-reset marker file (agent2agent_force_reset tool)
+        force_reset_file = self.sessions_dir / "force_reset.json"
+        if force_reset_file.exists():
+            try:
+                markers = json.loads(force_reset_file.read_text())
+                if isinstance(markers, dict) and session_key in markers:
+                    del markers[session_key]
+                    if markers:
+                        force_reset_file.write_text(json.dumps(markers))
+                    else:
+                        force_reset_file.unlink(missing_ok=True)
+                    logger.info(
+                        "gateway.session: force reset for %s via force_reset.json",
+                        session_key,
+                    )
+                    return "idle"
+            except Exception:
+                pass
+
         if self._has_active_processes_safe(session_key, context="reset"):
             logger.debug(
                 "Session reset skipped for %s — active background processes",
