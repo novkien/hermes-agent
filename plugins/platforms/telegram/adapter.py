@@ -9539,7 +9539,7 @@ class TelegramAdapter(BasePlatformAdapter):
             topic_info = self._get_dm_topic_info(str(chat.id), thread_id_str)
             if topic_info:
                 chat_topic = topic_info.get("name")
-                topic_skill = topic_info.get("skill")
+                topic_skill = topic_info.get("skills") or topic_info.get("skill")
 
             # Also check forum_topic_created service message for topic discovery
             if hasattr(message, "forum_topic_created") and message.forum_topic_created:
@@ -9578,7 +9578,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         tid = topic.get("thread_id")
                         if tid is not None and str(tid) == thread_id_str:
                             chat_topic = topic.get("name")
-                            topic_skill = topic.get("skill")
+                            topic_skill = topic.get("skills") or topic.get("skill")
                             break
                     break
 
@@ -9950,7 +9950,7 @@ def _apply_yaml_config(yaml_cfg: dict, telegram_cfg: dict) -> dict | None:
     _GENERIC_MERGE_KEYS = {
         "reply_prefix", "reply_in_thread", "reply_to_mode",
         "unauthorized_dm_behavior", "notice_delivery", "require_mention",
-        "channel_skill_bindings", "channel_prompts", "gateway_restart_notification",
+        "channel_skill_bindings", "gateway_restart_notification",
         "allow_from", "allow_admin_from", "dm_policy", "group_policy",
     }
     for _k, _v in _telegram_extra.items():
