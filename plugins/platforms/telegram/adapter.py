@@ -1608,20 +1608,17 @@ class TelegramAdapter(BasePlatformAdapter):
     def _rich_eligible(self, content: str) -> bool:
         """Capability/content eligibility for rich, ignoring ``expect_edits``.
 
-        Shared core of :meth:`_should_attempt_rich` minus the per-call
-        ``expect_edits`` metadata gate.  The rich EDIT-finalize path
-        (:meth:`_try_edit_rich`) needs this: a streamed preview is sent with
-        ``expect_edits=True`` to stay on the editable path mid-stream, but the
-        FINAL edit should still upgrade to rich when the content warrants it.
+        Overridden for Jarvis: always uses rich path (removed the restrictive
+        ``_needs_rich_rendering`` and ``_has_telegram_desktop_cjk_rich_garble_shape``
+        gates so every message goes through sendRichMessage for clean rendering).
+        Crash guard for details+math is kept.
         """
         return bool(
             self._rich_delivery_enabled()
             and not getattr(self, "_rich_send_disabled", False)
             and content
             and content.strip()
-            and self._needs_rich_rendering(content)
             and not self._has_telegram_desktop_details_math_crash_shape(content)
-            and not self._has_telegram_desktop_cjk_rich_garble_shape(content)
             and self._content_fits_rich_limits(content)
             and self._bot_supports_rich()
         )
@@ -1969,7 +1966,6 @@ class TelegramAdapter(BasePlatformAdapter):
             and content
             and content.strip()
             and not self._has_telegram_desktop_details_math_crash_shape(content)
-            and not self._has_telegram_desktop_cjk_rich_garble_shape(content)
             and self._content_fits_rich_limits(content)
             and self._bot_supports_rich()
         )
