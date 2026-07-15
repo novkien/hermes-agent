@@ -27,12 +27,38 @@ logger = logging.getLogger(__name__)
 _HASS_URL: str = ""
 _HASS_TOKEN: str = ""
 
+def _resolve_ha_token() -> str:
+    """Resolve the HA token, auto-refreshing via refresh token if needed."""
+    token = _HASS_TOKEN or os.getenv("HASS_TOKEN", "")
+    if token:
+        return token
+    # Fallback: use refresh token from env to get access token
+    rt = os.getenv("HASS_REFRESH_TOKEN", "")
+    if not rt:
+        return ""
+    try:
+        from urllib.request import Request, urlopen
+        from urllib.parse import urlencode
+        url = (_HASS_URL or os.getenv("HASS_URL", "http://homeassistant.local:8123")).rstrip("/")
+        data = urlencode({
+            "grant_type": "refresh_token",
+            "client_id": "http://localhost:8123/",
+            "refresh_token": rt
+        }).encode()
+        r = Request(url + "/auth/token", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        resp = json.loads(urlopen(r, timeout=10).read())
+        return resp.get("access_token", "")
+    except Exception as e:
+        logging.getLogger(__name__).debug("HA token refresh failed: %s", e)
+        return ""
+
+
 
 def _get_config():
     """Return (hass_url, hass_token) from env vars at call time."""
     return (
         (_HASS_URL or os.getenv("HASS_URL", "http://homeassistant.local:8123")).rstrip("/"),
-        _HASS_TOKEN or os.getenv("HASS_TOKEN", ""),
+        _HASS_TOKEN or _resolve_ha_token(),
     )
 
 # Regex for valid HA entity_id format (e.g. "light.living_room", "sensor.temperature_1")
@@ -342,8 +368,8 @@ def _handle_list_services(args: dict, **kw) -> str:
 # ---------------------------------------------------------------------------
 
 def _check_ha_available() -> bool:
-    """Tool is only available when HASS_TOKEN is set."""
-    return bool(os.getenv("HASS_TOKEN"))
+    """Tool is only available when HA token can be resolved."""
+    return bool(_resolve_ha_token())
 
 
 # ---------------------------------------------------------------------------
