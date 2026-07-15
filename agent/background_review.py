@@ -119,7 +119,7 @@ def _msg_text(m: Dict) -> str:
     return ""
 
 
-def _digest_history(messages_snapshot: List[Dict], tail: int = 24) -> List[Dict]:
+def _digest_history(messages_snapshot: List[Dict], tail: int = 70) -> List[Dict]:
     """Compact replay for the routed (different-model) path only.
 
     Keeps the recent ``tail`` messages verbatim, collapses older turns into one
@@ -144,14 +144,14 @@ def _digest_history(messages_snapshot: List[Dict], tail: int = 24) -> List[Dict]
         role = m.get("role")
         text = _msg_text(m).replace("\n", " ")
         if role == "user" and text:
-            lines.append(f"USER: {text[:300]}")
+            lines.append(f"USER: {text[:600]}")
         elif role == "assistant":
             tcs = m.get("tool_calls") or []
             if tcs:
                 names = [(tc.get("function") or {}).get("name", "?") for tc in tcs if isinstance(tc, dict)]
                 lines.append(f"ASSISTANT[tools: {', '.join(names)}]")
             if text:
-                lines.append(f"ASSISTANT: {text[:200]}")
+                lines.append(f"ASSISTANT: {text[:1000]}")
     digest = {
         "role": "user",
         "content": (
