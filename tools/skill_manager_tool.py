@@ -122,14 +122,29 @@ def _guard_agent_created_enabled() -> bool:
         return False
 
 
+def _has_nopatch_lock(skill_dir: Path) -> bool:
+    """Return True if *skill_dir* contains a ``.nopatch`` marker file.
+
+    The marker acts as a per-skill opt-in to write-approval gating and
+    security scanning — independent of the global ``skills.guard_agent_created``
+    and ``skills.write_approval`` settings.  A skill without ``.nopatch`` is
+    treated as unguarded (no approval, no scan).
+    """
+    try:
+        return (skill_dir / ".nopatch").exists()
+    except OSError:
+        return False
+
+
 def _security_scan_skill(skill_dir: Path) -> Optional[str]:
     """Scan a skill directory after write. Returns error string if blocked, else None.
 
-    No-op when skills.guard_agent_created is disabled (the default).
+    Active when EITHER ``skills.guard_agent_created`` is true (global gate)
+    OR a ``.nopatch`` file exists in the skill directory (per-skill gate).
     """
     if not _GUARD_AVAILABLE:
         return None
-    if not _guard_agent_created_enabled():
+    if not _guard_agent_created_enabled() and not _has_nopatch_lock(skill_dir):
         return None
     try:
         result = scan_skill(skill_dir, source="agent-created")
@@ -337,6 +352,18 @@ def _background_review_write_guard(
             }
     except Exception:
         logger.debug("pinned skill guard lookup failed for %s", name, exc_info=True)
+
+    # .nopatch lock — respected by autonomous maintenance just like pin,
+    # because there is no user in the loop to consent to a patch here.
+    if _has_nopatch_lock(skill_dir):
+        return {
+            "success": False,
+            "error": (
+                f"Refusing background curator {action} for skill "
+                f"'{name}': skill is locked by .nopatch. "
+                "Autonomous review forks may not mutate locked skills."
+            ),
+        }
 
     try:
         from agent.skill_utils import is_external_skill_path
@@ -1309,6 +1336,40 @@ def _apply_skill_write_gate(action, name, **payload_kwargs):
     if _skill_gate_bypass.get():
         return None
 
+    # ── Per-skill .nopatch lock ──────────────────────────────────
+    # When a skill directory contains a ``.nopatch`` marker, all mutations
+    # are forced through write-approval staging regardless of the global
+    # ``skills.write_approval`` setting.  Skills without ``.nopatch``
+    # bypass the gate entirely (fast path, no approval needed).
+    # ``create`` is never gated by .nopatch because the skill dir doesn't
+    # exist yet.
+    if action != "create":
+        existing = _find_skill(name)
+        if existing and _has_nopatch_lock(existing["path"]):
+            try:
+                from tools import write_approval as wa
+            except Exception:
+                return None
+            payload = {"action": action, "name": name}
+            payload.update({k: v for k, v in payload_kwargs.items() if v is not None})
+            gist = wa.skill_gist(
+                action, name,
+                content=payload_kwargs.get("content") or "",
+                file_path=payload_kwargs.get("file_path") or "",
+                old_string=payload_kwargs.get("old_string") or "",
+                new_string=payload_kwargs.get("new_string") or "",
+            )
+            record = wa.stage_write(wa.SKILLS, payload, summary=gist, origin=wa.current_origin())
+            return json.dumps(
+                {"success": True, "staged": True, "pending_id": record["id"],
+                 "gist": gist, "message": (
+                     f"Skill '{name}' đã bị chặn, chờ user/human approve."
+                 )},
+                ensure_ascii=False,
+            )
+
+    # ── Global write-approval gate (skills.write_approval) ────────
+    # Only reached when no .nopatch lock applies.
     try:
         from tools import write_approval as wa
     except Exception:
