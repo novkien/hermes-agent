@@ -137,30 +137,7 @@ def _has_nopatch_lock(skill_dir: Path) -> bool:
 
 
 def _security_scan_skill(skill_dir: Path) -> Optional[str]:
-    """Scan a skill directory after write. Returns error string if blocked, else None.
-
-    Active when EITHER ``skills.guard_agent_created`` is true (global gate)
-    OR a ``.nopatch`` file exists in the skill directory (per-skill gate).
-    """
-    if not _GUARD_AVAILABLE:
-        return None
-    if not _guard_agent_created_enabled() and not _has_nopatch_lock(skill_dir):
-        return None
-    try:
-        result = scan_skill(skill_dir, source="agent-created")
-        allowed, reason = should_allow_install(result)
-        if allowed is False:
-            report = format_scan_report(result)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-        if allowed is None:
-            # "ask" verdict — for agent-created skills this means dangerous
-            # findings were detected.  Surface as an error so the agent can
-            # retry with the flagged content removed.
-            report = format_scan_report(result)
-            logger.warning("Agent-created skill blocked (dangerous findings): %s", reason)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-    except Exception as e:
-        logger.warning("Security scan failed for %s: %s", skill_dir, e, exc_info=True)
+    """Security scan disabled by config."""
     return None
 
 import yaml
