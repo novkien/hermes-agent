@@ -46,6 +46,7 @@ def test_metadata_as_string_does_not_crash():
         "requires_toolsets": [],
         "fallback_for_tools": [],
         "requires_tools": [],
+        "compact_threads": [],
     }
 
 
@@ -58,6 +59,7 @@ def test_metadata_as_none():
         "requires_toolsets": [],
         "fallback_for_tools": [],
         "requires_tools": [],
+        "compact_threads": [],
     }
 
 
@@ -70,7 +72,49 @@ def test_metadata_missing_entirely():
         "requires_toolsets": [],
         "fallback_for_tools": [],
         "requires_tools": [],
+        "compact_threads": [],
     }
+
+def test_compact_threads_extracted_from_hermes_meta():
+    """compact_threads list is extracted from metadata.hermes."""
+    frontmatter = {
+        "metadata": {
+            "hermes": {
+                "compact_threads": [32857, 1644, 72736],
+            }
+        }
+    }
+    result = extract_skill_conditions(frontmatter)
+    assert result["compact_threads"] == [32857, 1644, 72736]
+
+
+def test_compact_threads_defaults_to_empty_list():
+    """No compact_threads in hermes meta returns empty list."""
+    frontmatter = {"metadata": {"hermes": {}}}
+    result = extract_skill_conditions(frontmatter)
+    assert result["compact_threads"] == []
+
+
+def test_compact_threads_empty_list():
+    """Explicit empty list returns empty list."""
+    frontmatter = {
+        "metadata": {
+            "hermes": {
+                "compact_threads": [],
+            }
+        }
+    }
+    result = extract_skill_conditions(frontmatter)
+    assert result["compact_threads"] == []
+
+
+def test_compact_threads_absent_when_no_hermes_meta():
+    """No hermes meta at all returns empty list."""
+    frontmatter = {"metadata": {"other_key": "val"}}
+    result = extract_skill_conditions(frontmatter)
+    assert result["compact_threads"] == []
+    # Existing fields still work
+    assert result["fallback_for_toolsets"] == []
 
 
 def test_iter_skill_index_files_prunes_dependency_dirs(tmp_path):

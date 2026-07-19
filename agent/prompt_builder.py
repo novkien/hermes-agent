@@ -1556,6 +1556,14 @@ def build_skills_system_prompt(
     the rendered index. Nothing is ever hidden: every skill name stays
     visible and loadable via ``skill_view`` / ``skills_list``; only the
     descriptions are dropped, and a footer note explains the demotion.
+
+    ``thread_id``, when provided, enables per-skill ``compact_threads``
+    (``metadata.hermes.compact_threads`` in SKILL.md frontmatter). Skills
+    whose ``compact_threads`` list contains this thread ID render as
+    name-only (``- name``) instead of name+description.  Skills without a
+    matching thread ID render normally.  Both per-skill and per-category
+    compact modes compose: if either condition matches, the skill shows
+    name-only.
     """
     skills_dir = get_skills_dir()
     external_dirs = get_all_skills_dirs()[1:]  # skip local (index 0)
@@ -1588,6 +1596,7 @@ def build_skills_system_prompt(
 
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
     category_descriptions: dict[str, str] = {}
+    compact_skills: set[str] = set()
 
     if snapshot is not None:
         # Fast path: use pre-parsed metadata from disk
@@ -1611,6 +1620,14 @@ def build_skills_system_prompt(
             skills_by_category.setdefault(category, []).append(
                 (frontmatter_name, entry.get("description", ""))
             )
+            # Per-skill compact_threads: name-only if thread matches
+            if thread_id is not None:
+                _conds = entry.get("conditions") or {}
+                if any(
+                    str(t) == str(thread_id)
+                    for t in (_conds.get("compact_threads") or [])
+                ):
+                    compact_skills.add(frontmatter_name)
         category_descriptions = {
             str(k): str(v)
             for k, v in (snapshot.get("category_descriptions") or {}).items()
@@ -1636,6 +1653,14 @@ def build_skills_system_prompt(
             skills_by_category.setdefault(entry["category"], []).append(
                 (entry["frontmatter_name"], entry["description"])
             )
+            # Per-skill compact_threads: name-only if thread matches
+            if thread_id is not None:
+                _conds = extract_skill_conditions(frontmatter)
+                if any(
+                    str(t) == str(thread_id)
+                    for t in (_conds.get("compact_threads") or [])
+                ):
+                    compact_skills.add(entry["frontmatter_name"])
 
         # Read category-level DESCRIPTION.md files
         for desc_file in iter_skill_index_files(skills_dir, "DESCRIPTION.md"):
@@ -1692,6 +1717,14 @@ def build_skills_system_prompt(
                 skills_by_category.setdefault(entry["category"], []).append(
                     (frontmatter_name, entry["description"])
                 )
+                # Per-skill compact_threads from external dirs
+                if thread_id is not None:
+                    _conds = extract_skill_conditions(frontmatter)
+                    if any(
+                        str(t) == str(thread_id)
+                        for t in (_conds.get("compact_threads") or [])
+                    ):
+                        compact_skills.add(frontmatter_name)
             except Exception as e:
                 logger.debug("Error reading external skill %s: %s", skill_file, e)
 
@@ -1751,10 +1784,10 @@ def build_skills_system_prompt(
                 if name in seen:
                     continue
                 seen.add(name)
-                if desc:
-                    index_lines.append(f"    - {name}: {desc}")
-                else:
+                if name in compact_skills or not desc:
                     index_lines.append(f"    - {name}")
+                else:
+                    index_lines.append(f"    - {name}: {desc}")
 
         result = (
             "## Skills (mandatory)\n"

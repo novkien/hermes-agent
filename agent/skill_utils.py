@@ -627,6 +627,7 @@ def extract_skill_conditions(frontmatter: Dict[str, Any]) -> Dict[str, List]:
         "requires_toolsets": hermes.get("requires_toolsets", []),
         "fallback_for_tools": hermes.get("fallback_for_tools", []),
         "requires_tools": hermes.get("requires_tools", []),
+        "compact_threads": hermes.get("compact_threads", []),
     }
 
 

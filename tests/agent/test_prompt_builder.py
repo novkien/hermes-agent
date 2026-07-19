@@ -1607,6 +1607,129 @@ class TestBuildSkillsSystemPromptConditional:
         assert "nested-null" in result
 
 
+class TestBuildSkillsSystemPromptCompactThreads:
+    """Tests for per-skill compact_threads demotion (name-only per thread)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_skills_cache(self):
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        yield
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+
+    def test_compact_skill_hides_description_in_matching_thread(self, monkeypatch, tmp_path):
+        """Skill with metadata.hermes.compact_threads: [100] shows name-only when thread_id=100."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" not in result
+
+    def test_compact_skill_shows_description_in_non_matching_thread(self, monkeypatch, tmp_path):
+        """Same skill shows full entry when thread_id differs."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=200)
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" in result
+
+    def test_no_compact_threads_stays_normal(self, monkeypatch, tmp_path):
+        """Skill without compact_threads always shows full description."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "normal-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: normal-skill\ndescription: Normal stuff\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "normal-skill" in result
+        assert "Normal stuff" in result
+
+    def test_empty_compact_threads_stays_normal(self, monkeypatch, tmp_path):
+        """Skill with compact_threads: [] always shows full description."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "empty-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: empty-skill\ndescription: Empty list\n"
+            "metadata:\n  hermes:\n    compact_threads: []\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "empty-skill" in result
+        assert "Empty list" in result
+
+    def test_compact_threads_no_thread_id_shows_description(self, monkeypatch, tmp_path):
+        """When thread_id is None (not provided), compact_threads is ignored."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt()
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" in result
+
+    def test_compact_threads_and_categories_compose(self, monkeypatch, tmp_path):
+        """Both compact modes: category-demoted skill in compact thread is still name-only."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "social-media" / "tweet-stuff"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: tweet-stuff\ndescription: Tweet automation\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        # compact_categories alone demotes the whole category to [names only]
+        result = build_skills_system_prompt(
+            compact_categories=frozenset({"social-media"}),
+            thread_id=100,
+        )
+
+        assert "tweet-stuff" in result
+        assert "Tweet automation" not in result
+        # Both mechanisms agree — still name-only via category demotion
+        assert "social-media [names only]" in result
+
+    def test_cache_key_differs_by_thread_id(self, monkeypatch, tmp_path):
+        """Different thread_id values produce different cache entries."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        compact_result = build_skills_system_prompt(thread_id=100)
+        normal_result = build_skills_system_prompt(thread_id=200)
+
+        assert "Does secret stuff" not in compact_result
+        assert "Does secret stuff" in normal_result
+
+
 # =========================================================================
 # Tool-use enforcement guidance
 # =========================================================================
