@@ -305,6 +305,54 @@ KANBAN_GUIDANCE = (
     "cross-agent handoffs that outlive one API loop."
 )
 
+
+def resolve_kanban_worker_guidance(agent, valid_tool_names) -> str:
+    """Decide whether KANBAN_GUIDANCE should be injected into this session.
+
+    Order of precedence:
+      1. ``HERMES_KANBAN_TASK`` env var set → always inject (dispatcher-spawned worker).
+      2. ``kanban.disable_guidance_threads`` config lists this session's thread_id
+         → suppress (e.g. CEO coordinator topics that must not self-execute).
+      3. ``kanban_show`` tool is present (orchestrator/Manager profile with the
+         kanban toolset) → inject.
+      4. Otherwise → empty (normal chat session).
+
+    Returns KANBAN_GUIDANCE or "". Caller caches the result on
+    ``agent._kanban_worker_guidance`` so the membership test + config read
+    runs once at init, not on every system-prompt rebuild.
+    """
+    import os
+
+    # (1) Dispatcher-spawned worker — always gets the lifecycle guidance.
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        return KANBAN_GUIDANCE
+
+    thread_id = str(getattr(agent, "_thread_id", "") or "").strip()
+
+    # (2) Per-thread denylist (e.g. CEO coordinator topics). Suppress even
+    #     if the session happens to have the kanban toolset.
+    if thread_id:
+        try:
+            from hermes_cli.config import load_config
+            _disabled = (
+                load_config().get("kanban") or {}
+            ).get("disable_guidance_threads") or []
+            _disabled_set = {str(x).strip() for x in _disabled}
+            if thread_id in _disabled_set:
+                return ""
+        except Exception:
+            # Config read failures fall through to tool-presence check —
+            # never break agent init over a denylist lookup.
+            pass
+
+    # (3) Orchestrator / Manager profile with kanban toolset enabled.
+    if "kanban_show" in valid_tool_names:
+        return KANBAN_GUIDANCE
+
+    # (4) Normal chat session.
+    return ""
+
+
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"
     "You MUST use your tools to take action — do not describe what you would do "

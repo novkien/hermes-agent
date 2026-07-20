@@ -231,16 +231,19 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
     if "skill_manage" in agent.valid_tool_names:
         tool_guidance.append(SKILLS_GUIDANCE)
-    # Kanban worker/orchestrator lifecycle — only present when the
-    # dispatcher spawned this process (kanban_show check_fn gates on
-    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
-    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
+    # Kanban worker/orchestrator lifecycle guidance. Resolved once at
+    # __init__ via resolve_kanban_worker_guidance (see _kanban_worker_guidance).
+    # Precedence: HERMES_KANBAN_TASK → always; disable_guidance_threads →
+    # suppress; kanban_show present → inject; else empty.
     _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
     if _kanban_guidance:
         tool_guidance.append(_kanban_guidance)
-    elif _kanban_guidance is None and "kanban_show" in agent.valid_tool_names:
+    elif _kanban_guidance is None:
         # Fallback for code paths that bypass agent_init (rare).
-        tool_guidance.append(KANBAN_GUIDANCE)
+        from agent.prompt_builder import resolve_kanban_worker_guidance
+        _resolved = resolve_kanban_worker_guidance(agent, agent.valid_tool_names)
+        if _resolved:
+            tool_guidance.append(_resolved)
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
 
