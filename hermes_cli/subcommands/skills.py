@@ -312,4 +312,33 @@ def build_skills_parser(subparsers, *, cmd_skills: Callable) -> None:
         "config",
         help="Interactive skill configuration — enable/disable individual skills",
     )
+
+    skills_compact = skills_subparsers.add_parser(
+        "compact",
+        help="Compact/hide a skill's description at the current thread",
+        description=(
+            "Hide or show a skill's description in the system prompt for a specific "
+            "thread. When compacted, only the skill name is shown. Use --unhide to "
+            "restore the full description, --status to check, and --thread to specify "
+            "a thread ID (default: from env)."
+        ),
+    )
+    skills_compact.add_argument("name", help="Skill name to compact/unhide")
+    skills_compact.add_argument(
+        "--unhide",
+        action="store_true",
+        help="Restore the full description (remove from compact list)",
+    )
+    skills_compact.add_argument(
+        "--thread",
+        type=str,
+        default="",
+        help="Thread ID (default: HERMES_SESSION_THREAD_ID or HERMES_THREAD_ID env var)",
+    )
+    skills_compact.add_argument(
+        "--status",
+        action="store_true",
+        help="Show current compact state without making changes",
+    )
+
     skills_parser.set_defaults(func=cmd_skills)
