@@ -2522,25 +2522,81 @@ _RETRYABLE_ERROR_PATTERNS = (
 MessageHandler = Callable[[MessageEvent], Awaitable[Optional[Union[str, "EphemeralReply"]]]]
 
 
+def _iter_group_topics(config_extra: dict) -> list[dict]:
+    """Normalize Telegram ``group_topics`` config into chat/topic entries."""
+    group_topics = config_extra.get("group_topics", []) if isinstance(config_extra, dict) else []
+    if isinstance(group_topics, dict):
+        return [
+            {"chat_id": chat_id, "topics": topics}
+            for chat_id, topics in group_topics.items()
+        ]
+    if isinstance(group_topics, list):
+        return [entry for entry in group_topics if isinstance(entry, dict)]
+    return []
+
+
+def resolve_group_topic(
+    config_extra: dict,
+    chat_id: str | None,
+    thread_id: str | None,
+) -> dict | None:
+    """Resolve a Telegram group topic, including canonical cross-thread owners.
+
+    ``cross_thread`` shares configuration only. Callers must preserve the
+    incoming child ``thread_id`` for session routing and transcript isolation.
+    A direct child topic entry wins over inherited canonical config.
+    """
+    if not chat_id or not thread_id:
+        return None
+    topics: list[dict] = []
+    for chat_entry in _iter_group_topics(config_extra):
+        if str(chat_entry.get("chat_id", "")) != str(chat_id):
+            continue
+        raw_topics = chat_entry.get("topics", [])
+        if isinstance(raw_topics, list):
+            topics = [topic for topic in raw_topics if isinstance(topic, dict)]
+        break
+    for topic in topics:
+        if str(topic.get("thread_id", "")) == str(thread_id):
+            return topic
+    for topic in topics:
+        children = topic.get("cross_thread", [])
+        if isinstance(children, (list, tuple, set)) and any(
+            str(child) == str(thread_id) for child in children
+        ):
+            return topic
+    return None
+
+
+def resolve_cross_thread_canonical_id(
+    config_extra: dict,
+    thread_id: str | None,
+    parent_id: str | None = None,
+) -> str | None:
+    """Return a configured canonical topic ID for a child thread, if any."""
+    topic = resolve_group_topic(config_extra, parent_id, thread_id)
+    if topic is None:
+        return None
+    canonical_id = topic.get("thread_id")
+    if canonical_id is None or str(canonical_id) == str(thread_id):
+        return None
+    return str(canonical_id)
+
+
 def resolve_channel_prompt(
     config_extra: dict,
     channel_id: str,
     parent_id: str | None = None,
 ) -> str | None:
-    """Resolve a per-channel ephemeral prompt from platform config.
-
-    Looks up ``channel_prompts`` in the adapter's ``config.extra`` dict.
-    Prefers an exact match on *channel_id*; falls back to *parent_id*
-    (useful for forum threads / child channels inheriting a parent prompt).
-
-    Returns the prompt string, or None if no match is found.  Blank/whitespace-
-    only prompts are treated as absent.
-    """
+    """Resolve a per-channel ephemeral prompt from platform config."""
     prompts = config_extra.get("channel_prompts") or {}
     if not isinstance(prompts, dict):
         return None
 
-    for key in (channel_id, parent_id):
+    canonical_id = resolve_cross_thread_canonical_id(
+        config_extra, channel_id, parent_id
+    )
+    for key in (channel_id, parent_id, canonical_id):
         if not key:
             continue
         prompt = prompts.get(key)

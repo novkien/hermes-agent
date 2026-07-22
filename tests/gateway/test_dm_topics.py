@@ -784,6 +784,39 @@ def test_group_topic_unmapped_thread_id():
     assert event.source.chat_topic is None
 
 
+def test_group_topic_cross_thread_inherits_canonical_skill_without_aliasing_source():
+    """A Room child borrows config while retaining its physical thread ID."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": -1001234567890,
+            "topics": [
+                {
+                    "name": "CEO",
+                    "thread_id": 32857,
+                    "skills": ["agent2agent-ceo-operation"],
+                    "cross_thread": [70678, "70680"],
+                },
+            ],
+        }
+    ])
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=70678,
+        text="room task",
+        is_topic_message=True,
+        is_forum=True,
+    )
+
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill == ["agent2agent-ceo-operation"]
+    assert event.source.chat_topic == "CEO"
+    assert event.source.thread_id == "70678"
+
+
 def test_group_topic_unmapped_chat_id():
     """Chat ID not in group_topics config should fall through silently."""
     from gateway.platforms.base import MessageType

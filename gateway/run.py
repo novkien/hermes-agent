@@ -2991,6 +2991,14 @@ def _get_channel_override(
         ov = overrides.get(key)
         if ov is not None:
             return ov
+    if platform == Platform.TELEGRAM:
+        from gateway.platforms.base import resolve_cross_thread_canonical_id
+
+        canonical_id = resolve_cross_thread_canonical_id(
+            platform_config.extra, thread_id, chat_id
+        )
+        if canonical_id:
+            return overrides.get(canonical_id)
     return None
 
 
@@ -5150,16 +5158,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 resolved_session_key = None
 
         model = _resolve_gateway_model(user_config)
+        ch = None
+        cfg = getattr(self, "config", None)
+        if cfg and source is not None:
+            chat_id = str(source.chat_id) if source.chat_id else ""
+            thread_id = (
+                str(source.thread_id) if getattr(source, "thread_id", None) else None
+            )
+            parent_id = (
+                str(source.parent_chat_id)
+                if getattr(source, "parent_chat_id", None)
+                else None
+            )
+            ch = _get_channel_override(
+                cfg, source.platform, chat_id, thread_id=thread_id, parent_id=parent_id
+            )
         if resolved_session_key:
             self._rehydrate_session_model_override(resolved_session_key)
-        _override_state = (
-            self._peek_session_state(resolved_session_key)
-            if resolved_session_key
-            else None
-        )
-        override = (
-            _override_state.conversation.model_override if _override_state else None
-        )
+        override = self._session_model_overrides.get(resolved_session_key) if resolved_session_key else None
+        if ch is not None and ch.locked:
+            override = None
         if override:
             override_model = override.get("model", model)
             override_runtime = {
@@ -5208,36 +5226,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             model = runtime_model
 
-        cfg = getattr(self, "config", None)
-        if cfg and source is not None:
-            chat_id = str(source.chat_id) if source.chat_id else ""
-            thread_id = (
-                str(source.thread_id) if getattr(source, "thread_id", None) else None
-            )
-            parent_id = (
-                str(source.parent_chat_id)
-                if getattr(source, "parent_chat_id", None)
-                else None
-            )
-            ch = _get_channel_override(
-                cfg,
-                source.platform,
-                chat_id,
-                thread_id=thread_id,
-                parent_id=parent_id,
-            )
-            if ch:
-                if ch.model:
-                    model = ch.model
-                if ch.provider:
-                    runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(
-                        ch.provider
-                    )
-                    ch_runtime_model = runtime_kwargs.pop("model", None)
-                    # Only adopt the provider's bundled model when the override
-                    # did not specify an explicit model.
-                    if ch_runtime_model and not ch.model:
-                        model = ch_runtime_model
+        if ch:
+            if ch.model:
+                model = ch.model
+            if ch.provider:
+                runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(
+                    ch.provider
+                )
+                ch_runtime_model = runtime_kwargs.pop("model", None)
+                # Only adopt the provider's bundled model when the override
+                # did not specify an explicit model.
+                if ch_runtime_model and not ch.model:
+                    model = ch_runtime_model
 
         if override and resolved_session_key:
             model, runtime_kwargs = self._apply_session_model_override(
