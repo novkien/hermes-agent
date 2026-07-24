@@ -3046,13 +3046,6 @@ DEFAULT_CONFIG = {
         # worker process (if still running host-locally) is terminated
         # before the reclaim.  0 disables stale detection entirely.
         "dispatch_stale_timeout_seconds": 14400,
-        # Thread IDs (as strings) that must NOT receive KANBAN_GUIDANCE in
-        # their system prompt even when the kanban toolset is enabled.
-        # Use for pure-coordinator topics (e.g. CEO) that keep kanban_*
-        # tools for routing but must not be framed as Workers. Dispatcher-
-        # spawned workers (HERMES_KANBAN_TASK set) always receive guidance
-        # regardless of this list. Empty by default.
-        "disable_guidance_threads": [],
     },
 
     # execute_code settings — controls the tool used for programmatic tool calls.
