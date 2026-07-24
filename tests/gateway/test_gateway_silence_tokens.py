@@ -93,6 +93,45 @@ def test_failed_agent_result_never_counts_as_intentional_silence():
 
 
 @pytest.mark.asyncio
+async def test_topic_auto_skill_is_forwarded_without_mutating_user_text(monkeypatch, tmp_path):
+    runner = _runner(monkeypatch, tmp_path)
+    session_entry = runner.session_store.get_or_create_session.return_value
+    session_entry.updated_at = session_entry.created_at
+    runner._run_agent = AsyncMock(return_value={
+        "final_response": "ok",
+        "messages": [
+            {"role": "user", "content": "side chatter"},
+            {"role": "assistant", "content": "ok"},
+        ],
+        "tools": [],
+        "history_offset": 0,
+        "last_prompt_tokens": 0,
+        "api_calls": 1,
+        "failed": False,
+    })
+    monkeypatch.setattr(
+        "agent.skill_commands._load_skill_payload",
+        lambda *_args, **_kwargs: (object(), tmp_path, "topic-skill"),
+    )
+    monkeypatch.setattr(
+        "agent.skill_commands._build_skill_message",
+        lambda *_args, **_kwargs: "RENDERED TOPIC SKILL",
+    )
+    event = _event()
+    event.auto_skill = "topic-skill"
+
+    response = await runner._handle_message_with_agent(
+        event, _source(), "agent:main:telegram:group:-1001:12345", 1
+    )
+
+    assert response == "ok"
+    assert event.text == "side chatter"
+    forwarded = runner._run_agent.await_args.kwargs["auto_loaded_skill_prompt"]
+    assert "# Auto-Loaded Authoritative Skills" in forwarded
+    assert "RENDERED TOPIC SKILL" in forwarded
+
+
+@pytest.mark.asyncio
 async def test_silence_token_suppresses_delivery_but_preserves_transcript(monkeypatch, tmp_path):
     runner = _runner(monkeypatch, tmp_path)
     runner._run_agent = AsyncMock(return_value={

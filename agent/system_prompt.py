@@ -233,10 +233,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(MEMORY_GUIDANCE)
     if "session_search" in agent.valid_tool_names:
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
-    # Kanban worker/orchestrator lifecycle guidance. Resolved once at
-    # __init__ via resolve_kanban_worker_guidance (see _kanban_worker_guidance).
-    # Precedence: HERMES_KANBAN_TASK → always; disable_guidance_threads →
-    # suppress; kanban_show present → inject; else empty.
+    # Kanban worker/orchestrator lifecycle — only present when the
+    # dispatcher spawned this process (kanban_show check_fn gates on
+    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
+    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
     _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
     if _kanban_guidance:
         tool_guidance.append(_kanban_guidance)
@@ -290,6 +290,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             # paths, parallel tool calls, verify-before-edit, etc.)
             if "gemini" in _model_lower or "gemma" in _model_lower:
                 stable_parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
+
     has_skills_tools = any(name in agent.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
     if has_skills_tools:
         avail_toolsets = {
@@ -525,8 +526,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y')}"
     if agent.pass_session_id and agent.session_id:
         timestamp_line += f"\nSession ID: {agent.session_id}"
-    if getattr(agent, '_thread_id', None):
-        timestamp_line += f"\nThread: {agent._thread_id}"
     if agent.model:
         timestamp_line += f"\nModel: {agent.model}"
     if agent.provider:
