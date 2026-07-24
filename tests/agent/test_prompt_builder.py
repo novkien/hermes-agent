@@ -326,8 +326,8 @@ class TestParseSkillFile:
         long_desc = "A" * 100
         skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
         _, _, desc = _parse_skill_file(skill_file)
-        assert len(desc) <= 60
-        assert desc.endswith("...")
+        assert len(desc) == 100
+        assert desc == long_desc
 
     def test_nonexistent_file_returns_defaults(self, tmp_path):
         is_compat, frontmatter, desc = _parse_skill_file(tmp_path / "missing.md")
