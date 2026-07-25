@@ -184,6 +184,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts: List[str] = []
 
+    # Channel/thread role instructions must be part of the cached snapshot,
+    # not a request-only overlay. This makes the effective system prompt
+    # auditable in session logs and preserves the same bytes across normal,
+    # failover, restore, and compression paths.
+    _ephemeral = (getattr(agent, "ephemeral_system_prompt", None) or "").strip()
+    if _ephemeral:
+        stable_parts.append(_ephemeral)
+
     # Try SOUL.md as primary identity unless the caller explicitly skipped it.
     # Some execution modes (cron) still want HERMES_HOME persona while keeping
     # cwd project instructions disabled.

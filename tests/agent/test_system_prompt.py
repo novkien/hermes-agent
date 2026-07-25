@@ -130,6 +130,23 @@ def test_build_system_prompt_records_stable_prefix():
     assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
 
 
+def test_channel_override_is_baked_into_cached_system_prompt():
+    """A gateway channel override must be durable and cache-prefix stable."""
+    agent = _make_agent(ephemeral_system_prompt="CHANNEL ROLE")
+    with (
+        patch("run_agent.load_soul_md", return_value=""),
+        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_environment_hints", return_value=""),
+        patch("run_agent.build_context_files_prompt", return_value="context"),
+    ):
+        prompt = build_system_prompt(agent)
+
+    assert prompt.startswith("CHANNEL ROLE\n\n")
+    assert agent._cached_system_prompt_static.startswith("CHANNEL ROLE\n\n")
+    assert prompt.startswith(agent._cached_system_prompt_static)
+    assert prompt.count("CHANNEL ROLE") == 1
+
+
 def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
     """The cache split must not reorder the stored coding prompt."""
     import agent.system_prompt as system_prompt

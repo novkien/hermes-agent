@@ -120,11 +120,13 @@ class TestSyncFailoverSystemMessage:
         assert "Model: gemma4:e2b-mlx" in api_messages[0]["content"]
         assert result == agent._cached_system_prompt
 
-    def test_appends_ephemeral_system_prompt(self):
-        agent = _agent(ephemeral="Stay terse.")
+    def test_replays_baked_ephemeral_system_prompt_without_duplication(self):
+        baked_prompt = "Stay terse.\n\n" + _PROMPT
+        agent = _agent(prompt=baked_prompt, ephemeral="Stay terse.")
         api_messages = [{"role": "system", "content": _PROMPT}]
-        _sync_failover_system_message(agent, api_messages, _PROMPT)
-        assert api_messages[0]["content"].endswith("Stay terse.")
+        _sync_failover_system_message(agent, api_messages, baked_prompt)
+        assert api_messages[0]["content"] == baked_prompt
+        assert api_messages[0]["content"].count("Stay terse.") == 1
 
     def test_noop_without_cached_prompt(self):
         agent = _agent(prompt=None)

@@ -846,8 +846,8 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
         return active_system_prompt
     if api_messages and api_messages[0].get("role") == "system":
         effective = sp
-        if agent.ephemeral_system_prompt:
-            effective = (effective + "\n\n" + agent.ephemeral_system_prompt).strip()
+        # Note: ephemeral is already baked into _cached_system_prompt via
+        # build_system_prompt (see system_prompt.py). No need to prepend.
         if not _rewrite_system_content_blocks(api_messages[0], effective):
             api_messages[0]["content"] = effective
     return sp
@@ -1544,8 +1544,9 @@ def run_conversation(
         # prefix into content blocks on the wire, but the stored string and
         # its byte-stability remain unchanged.
         effective_system = active_system_prompt or ""
-        if agent.ephemeral_system_prompt:
-            effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+        # Note: ephemeral is already baked into _cached_system_prompt via
+        # build_system_prompt (see system_prompt.py), so active_system_prompt
+        # already includes it. No need to prepend here.
         if effective_system:
             api_messages = [{"role": "system", "content": effective_system}] + api_messages
 
