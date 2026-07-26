@@ -2100,6 +2100,11 @@ class MessageEvent:
     # Discord channel_skill_bindings).  A single name or ordered list.
     auto_skill: Optional[str | list[str]] = None
 
+    # Optional strict skill-visibility allowlist inherited from a configured
+    # Telegram group topic. Distinct from auto_skill: `skills` preloads full
+    # payloads; `enabled_skills` scopes the index and direct read access.
+    enabled_skills: Optional[list[str]] = None
+
     # Per-channel ephemeral system prompt (e.g. Discord channel_prompts).
     # Applied at API call time and never persisted to transcript history.
     channel_prompt: Optional[str] = None

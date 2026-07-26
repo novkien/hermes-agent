@@ -9530,6 +9530,7 @@ class TelegramAdapter(BasePlatformAdapter):
         thread_id_str = self._effective_message_thread_id(message)
         chat_topic = None
         topic_skill = None
+        enabled_skills = None
 
         if chat_type == "dm" and thread_id_str:
             topic_info = self._get_dm_topic_info(str(chat.id), thread_id_str)
@@ -9559,6 +9560,17 @@ class TelegramAdapter(BasePlatformAdapter):
             if topic:
                 chat_topic = topic.get("name")
                 topic_skill = topic.get("skills") or topic.get("skill")
+                if "enabled_skills" in topic:
+                    raw_enabled_skills = topic.get("enabled_skills")
+                    if not isinstance(raw_enabled_skills, list) or not raw_enabled_skills or not all(
+                        isinstance(item, str) and item.strip()
+                        for item in raw_enabled_skills
+                    ):
+                        raise ValueError(
+                            "Invalid Telegram group topic enabled_skills policy: "
+                            "expected a non-empty list of skill names"
+                        )
+                    enabled_skills = [item.strip() for item in raw_enabled_skills]
 
         # Build source
         source = self.build_source(
@@ -9640,6 +9652,7 @@ class TelegramAdapter(BasePlatformAdapter):
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
             auto_skill=topic_skill,
+            enabled_skills=enabled_skills,
             channel_prompt=_channel_prompt,
             timestamp=message.date,
         )

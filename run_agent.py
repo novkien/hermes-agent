@@ -503,6 +503,7 @@ class AIAgent:
         pass_session_id: bool = False,
         requested_provider: str = None,
         auto_loaded_skill_prompt: str = "",
+        enabled_skills: List[str] = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         from agent.agent_init import init_agent
@@ -581,6 +582,7 @@ class AIAgent:
             checkpoint_max_file_size_mb=checkpoint_max_file_size_mb,
             pass_session_id=pass_session_id,
             auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+            enabled_skills=enabled_skills,
         )
 
     def _get_session_db_for_recall(self):

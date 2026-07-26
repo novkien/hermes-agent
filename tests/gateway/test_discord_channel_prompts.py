@@ -294,7 +294,9 @@ async def test_run_agent_forwards_auto_loaded_skill_prompt(monkeypatch, tmp_path
         session_id="session-1",
         session_key="agent:main:discord:thread:12345",
         auto_loaded_skill_prompt="authoritative topic skill",
+        enabled_skills=["plan"],
     )
 
     assert result["final_response"] == "ok"
     assert _CapturingAgent.last_init["auto_loaded_skill_prompt"] == "authoritative topic skill"
+    assert _CapturingAgent.last_init["enabled_skills"] == ["plan"]

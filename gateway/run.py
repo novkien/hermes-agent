@@ -2875,6 +2875,17 @@ def _load_gateway_config() -> dict:
     return raw
 
 
+def _resolve_source_enabled_skills(source: SessionSource) -> list[str] | None:
+    """Return validated policy identities; reject configured errors fail-closed."""
+    from gateway.skill_policy import SkillPolicyStatus, resolve_enabled_skills_policy
+    policy = resolve_enabled_skills_policy(source, _load_gateway_config())
+    if policy.status is SkillPolicyStatus.UNCONFIGURED:
+        return None
+    if policy.status is not SkillPolicyStatus.CONFIGURED_VALID:
+        raise ValueError(f"Thread context policy error: {policy.error}")
+    return list(policy.identities)
+
+
 def _checkpoint_agent_kwargs(config: dict | None) -> dict:
     """Translate gateway checkpoint config into ``AIAgent`` constructor args.
 
@@ -12341,10 +12352,249 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _denied is not None:
                     return _denied
 
-            # Any recognized slash command: dispatch according to its
-            # declared busy_policy (dispatch / interrupt_then_dispatch /
-            # reject). Unrecognized commands and plain text fall through
-            # to the interrupt/queue logic below.
+            # Telegram sends /start for bot launches/deep-links. Treat it as a
+            # platform ping, not a user command: no help dump, no agent
+            # interrupt, no queued text.
+            if _cmd_def_inner and _cmd_def_inner.name == "start":
+                logger.info("Ignoring /start platform ping for active session %s", _quick_key)
+                return ""
+
+            if _cmd_def_inner and _cmd_def_inner.name == "restart":
+                return await self._handle_restart_command(event)
+
+            if _cmd_def_inner and _cmd_def_inner.name == "egress":
+                from hermes_cli.proxy_cli import format_status_text
+
+                return format_status_text()
+
+            # /stop must hard-kill the session when an agent is running.
+            # A soft interrupt (agent.interrupt()) doesn't help when the agent
+            # is truly hung — the executor thread is blocked and never checks
+            # _interrupt_requested.  Force-clean _running_agents so the session
+            # is unlocked and subsequent messages are processed normally.
+            if _cmd_def_inner and _cmd_def_inner.name == "stop":
+                await self._interrupt_and_clear_session(
+                    _quick_key,
+                    source,
+                    interrupt_reason=_INTERRUPT_REASON_STOP,
+                    invalidation_reason="stop_command",
+                )
+                logger.info("STOP for session %s — agent interrupted, session lock released", _quick_key)
+                return EphemeralReply(t("gateway.stop.stopped"))
+
+            # /reset and /new must bypass the running-agent guard so they
+            # actually dispatch as commands instead of being queued as user
+            # text (which would be fed back to the agent with the same
+            # broken history — #2170).  Interrupt the agent first, then
+            # clear the adapter's pending queue so the stale "/reset" text
+            # doesn't get re-processed as a user message after the
+            # interrupt completes.
+            if _cmd_def_inner and _cmd_def_inner.name == "new":
+                # Clear any pending messages so the old text doesn't replay
+                await self._interrupt_and_clear_session(
+                    _quick_key,
+                    source,
+                    interrupt_reason=_INTERRUPT_REASON_RESET,
+                    invalidation_reason="new_command",
+                )
+                # Clean up the running agent entry so the reset handler
+                # doesn't think an agent is still active.
+                return await self._handle_reset_command(event)
+
+            # /queue <prompt> — queue without interrupting.
+            # Semantics: each /queue invocation produces its own full agent
+            # turn, processed in FIFO order after the current run (and any
+            # earlier /queue items) finishes.  Messages are NOT merged.
+            if event.get_command() in {"queue", "q"}:
+                queued_text = event.get_command_args().strip()
+                # Preserve media/reply payloads: a /queue carrying a photo,
+                # document, or reply context is valid even with no prompt text
+                # (e.g. "/queue" as the caption of an image). Dropping these
+                # fields silently lost the attachment when the queued turn ran.
+                has_media = bool(getattr(event, "media_urls", None))
+                if not queued_text and not has_media:
+                    return "Usage: /queue <prompt>"
+                adapter = self._adapter_for_source(source)
+                if adapter:
+                    queued_event = MessageEvent(
+                        text=queued_text,
+                        message_type=event.message_type if has_media else MessageType.TEXT,
+                        source=event.source,
+                        raw_message=event.raw_message,
+                        message_id=event.message_id,
+                        media_urls=list(getattr(event, "media_urls", []) or []),
+                        media_types=list(getattr(event, "media_types", []) or []),
+                        reply_to_message_id=event.reply_to_message_id,
+                        reply_to_text=event.reply_to_text,
+                        reply_to_author_id=event.reply_to_author_id,
+                        reply_to_author_name=event.reply_to_author_name,
+                        reply_to_is_own_message=event.reply_to_is_own_message,
+                        auto_skill=event.auto_skill,
+                        enabled_skills=event.enabled_skills,
+                        channel_prompt=event.channel_prompt,
+                        channel_context=event.channel_context,
+                        internal=event.internal,
+                        timestamp=event.timestamp,
+                    )
+                    self._enqueue_fifo(_quick_key, queued_event, adapter)
+                depth = self._queue_depth(_quick_key, adapter=self._adapter_for_source(source))
+                if depth <= 1:
+                    return "Queued for the next turn."
+                return f"Queued for the next turn. ({depth} queued)"
+
+            # /steer <prompt> — inject mid-run after the next tool call.
+            # Unlike /queue (turn boundary), /steer lands BETWEEN tool-call
+            # iterations inside the same agent run, by appending to the
+            # last tool result's content. No interrupt, no new user turn,
+            # no role-alternation violation.
+            if _cmd_def_inner and _cmd_def_inner.name == "steer":
+                steer_text = event.get_command_args().strip()
+                if not steer_text:
+                    return "Usage: /steer <prompt>"
+                running_agent = self._running_agents.get(_quick_key)
+                if running_agent is _AGENT_PENDING_SENTINEL:
+                    # Agent hasn't started yet — queue as turn-boundary fallback.
+                    adapter = self._adapter_for_source(source)
+                    if adapter:
+                        queued_event = MessageEvent(
+                            text=steer_text,
+                            message_type=MessageType.TEXT,
+                            source=event.source,
+                            message_id=event.message_id,
+                            channel_prompt=event.channel_prompt,
+                            channel_context=event.channel_context,
+                        )
+                        adapter._pending_messages[_quick_key] = queued_event
+                    return "Agent still starting — /steer queued for the next turn."
+                if running_agent and hasattr(running_agent, "steer"):
+                    try:
+                        accepted = running_agent.steer(steer_text)
+                    except Exception as exc:
+                        logger.warning("Steer failed for session %s: %s", _quick_key, exc)
+                        return f"⚠️ Steer failed: {exc}"
+                    if accepted:
+                        preview = steer_text[:60] + ("..." if len(steer_text) > 60 else "")
+                        return f"⏩ Steer queued — arrives after the next tool call: '{preview}'"
+                    return "Steer rejected (empty payload)."
+                # Running agent is missing or lacks steer() — fall back to queue.
+                adapter = self._adapter_for_source(source)
+                if adapter:
+                    queued_event = MessageEvent(
+                        text=steer_text,
+                        message_type=MessageType.TEXT,
+                        source=event.source,
+                        message_id=event.message_id,
+                        channel_prompt=event.channel_prompt,
+                        channel_context=event.channel_context,
+                    )
+                    adapter._pending_messages[_quick_key] = queued_event
+                return "No active agent — /steer queued for the next turn."
+
+            # /model must not be used while the agent is running.
+            if _cmd_def_inner and _cmd_def_inner.name == "model":
+                return "Agent is running — wait or /stop first, then switch models."
+
+            # /codex-runtime must not be used while the agent is running.
+            # Switching mid-turn would split a turn across two transports.
+            if _cmd_def_inner and _cmd_def_inner.name == "codex-runtime":
+                return ("Agent is running — wait or /stop first, then "
+                        "change runtime.")
+
+            # /approve and /deny must bypass the running-agent interrupt path.
+            # The agent thread is blocked on a threading.Event inside
+            # tools/approval.py — sending an interrupt won't unblock it.
+            # Route directly to the approval handler so the event is signalled.
+            if _cmd_def_inner and _cmd_def_inner.name in {"approve", "deny"}:
+                if _cmd_def_inner.name == "approve":
+                    return await self._handle_approve_command(event)
+                return await self._handle_deny_command(event)
+
+            # /agents (/tasks alias) should be query-only and never interrupt.
+            if _cmd_def_inner and _cmd_def_inner.name == "agents":
+                return await self._handle_agents_command(event)
+
+            # /background must bypass the running-agent guard — it starts a
+            # parallel task and must never interrupt the active conversation.
+            # /btw is an alias of /background and resolves to the same canonical
+            # name, so this branch handles both commands.
+            if _cmd_def_inner and _cmd_def_inner.name == "background":
+                return await self._handle_background_command(event)
+
+            # /kanban must bypass the guard. It writes to a profile-agnostic
+            # DB (kanban.db), not to the running agent's state. In fact
+            # /kanban unblock is often the only way to free a worker that
+            # has blocked waiting for a peer — letting that be dispatched
+            # mid-run is the whole point of the board.
+            if _cmd_def_inner and _cmd_def_inner.name == "kanban":
+                return await self._handle_kanban_command(event)
+
+            # /goal is safe mid-run for status/pause/clear/wait (inspection
+            # and control-plane only — doesn't interrupt the running turn).
+            # Setting a new goal text mid-run is rejected with the same
+            # "wait or /stop" message as /model so we don't race a second
+            # continuation prompt against the current turn.
+            if _cmd_def_inner and _cmd_def_inner.name == "goal":
+                _goal_arg = (event.get_command_args() or "").strip().lower()
+                _goal_verb = _goal_arg.split(None, 1)[0] if _goal_arg else ""
+                # Exact-match control verbs (unchanged semantics), plus the
+                # wait/unwait barrier verbs which take a pid argument.
+                _is_control = (
+                    not _goal_arg
+                    or _goal_arg in {"status", "pause", "resume", "clear", "stop", "done", "unwait"}
+                    or _goal_verb == "wait"
+                )
+                if _is_control:
+                    return await self._handle_goal_command(event)
+                return "Agent is running — use /goal status / pause / clear / wait mid-run, or /stop before setting a new goal."
+
+            if _cmd_def_inner and _cmd_def_inner.name == "moa":
+                return "Agent is running — wait or /stop first, then run /moa."
+
+            # /subgoal is safe mid-run — it only modifies the goal's
+            # subgoals list, which the judge reads at the next turn
+            # boundary. No race with the running turn.
+            if _cmd_def_inner and _cmd_def_inner.name == "subgoal":
+                return await self._handle_subgoal_command(event)
+
+            # Session-level toggles that are safe to run mid-agent —
+            # /yolo can unblock a pending approval prompt, /verbose cycles
+            # the tool-progress display mode for the ongoing stream.
+            # Both modify session state without needing agent interaction
+            # and must not be queued (the safety net would discard them).
+            # /fast and /reasoning are config-only and take effect next
+            # message, so they fall through to the catch-all busy response
+            # below — users should wait and set them between turns.
+            if _cmd_def_inner and _cmd_def_inner.name in {"yolo", "verbose", "footer"}:
+                if _cmd_def_inner.name == "yolo":
+                    return await self._handle_yolo_command(event)
+                if _cmd_def_inner.name == "verbose":
+                    return await self._handle_verbose_command(event)
+                if _cmd_def_inner.name == "footer":
+                    return await self._handle_footer_command(event)
+
+            # Gateway-handled info/control commands with dedicated
+            # running-agent handlers.
+            if _cmd_def_inner and _cmd_def_inner.name in _DEDICATED_HANDLERS:
+                if _cmd_def_inner.name == "help":
+                    return await self._handle_help_command(event)
+                if _cmd_def_inner.name == "commands":
+                    return await self._handle_commands_command(event)
+                if _cmd_def_inner.name == "profile":
+                    return await self._handle_profile_command(event)
+                if _cmd_def_inner.name == "update":
+                    return await self._handle_update_command(event)
+                if _cmd_def_inner.name == "version":
+                    return await self._handle_version_command(event)
+
+            # Catch-all: any other recognized slash command reached the
+            # running-agent guard. Reject gracefully rather than falling
+            # through to interrupt + discard. Without this, commands
+            # like /model, /reasoning, /voice, /insights, /title,
+            # /resume, /retry, /undo, /compress, /usage,
+            # /reload-mcp, /sethome, /reset (all registered as Discord
+            # slash commands) would interrupt the agent AND get
+            # silently discarded by the slash-command safety net,
+            # producing a zero-char response. See #5057, #6252, #10370.
             if _cmd_def_inner:
                 return await self._dispatch_busy_slash_command(
                     event, _cmd_def_inner, _quick_key, source,
@@ -13035,6 +13285,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception as e:
                 logger.warning("Plugin command dispatch failed: %s", e)
 
+        # Resolve strict configured policy before every slash/bundle payload path.
+        # Failure is a denial, never a fallback to unrestricted loading.
+        _topic_enabled_skills = None
+        if command:
+            try:
+                _topic_enabled_skills = _resolve_source_enabled_skills(source)
+            except ValueError as exc:
+                return f"Skill policy denied: {exc}"
+
         # Skill slash commands: /skill-name loads the skill and sends to agent.
         # resolve_skill_command_key() handles the Telegram underscore/hyphen
         # round-trip so /claude_code from Telegram autocomplete still resolves
@@ -13059,7 +13318,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _bundle_plat = source.platform.value if source.platform else None
                     bundle_result = build_bundle_invocation_message(
                         bundle_key, user_instruction, task_id=_quick_key,
-                        platform=_bundle_plat,
+                        platform=_bundle_plat, enabled_skills=_topic_enabled_skills,
                     )
                     if bundle_result:
                         msg, _loaded, missing = bundle_result
@@ -13097,6 +13356,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 f"The **{_skill_name}** skill is disabled for {_plat}.\n"
                                 f"Enable it with: `hermes skills config`"
                             )
+                    if _topic_enabled_skills is not None and _skill_name not in _topic_enabled_skills:
+                        return f"Skill policy denied: **{_skill_name}** is not enabled for this topic."
                     user_instruction = event.get_command_args().strip()
                     # Stacked slash-skill invocations: `/skill-a /skill-b do
                     # XYZ` loads every leading skill (up to 5), not just the
@@ -13112,6 +13373,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     except Exception:
                         _build_stacked = None
                         extra_keys, stacked_instruction = [], user_instruction
+                    if extra_keys and _topic_enabled_skills is not None:
+                        _blocked_policy = [skill_cmds.get(k, {}).get("name", k) for k in extra_keys if skill_cmds.get(k, {}).get("name", "") not in _topic_enabled_skills]
+                        if _blocked_policy:
+                            return "Skill policy denied: stacked invocation contains disabled skill(s): " + ", ".join(_blocked_policy)
                     if extra_keys and _plat:
                         # split_stacked_skill_commands() only resolves that
                         # each extra token is a KNOWN skill command — like
@@ -14994,6 +15259,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 auto_loaded_skill_prompt=_auto_loaded_skill_prompt,
+                enabled_skills=_resolve_source_enabled_skills(source),
             )
 
             # Stop persistent typing indicator now that the agent is done.
@@ -19678,6 +19944,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         cache_keys: dict | None = None,
         user_id: str | None = None,
         user_id_alt: str | None = None,
+        enabled_skills: list[str] | None = None,
     ) -> str:
         """Compute a stable string key from agent config values.
 
@@ -19732,6 +19999,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _cache_keys_sorted,
                 str(user_id or ""),
                 str(user_id_alt or ""),
+                sorted(enabled_skills) if enabled_skills is not None else None,
             ],
             sort_keys=True,
             default=str,
@@ -21096,6 +21364,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
         auto_loaded_skill_prompt: str = "",
+        enabled_skills: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -21106,6 +21375,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         multiplexing is off this is a transparent pass-through — zero behavior
         change for single-profile gateways.
         """
+        # Every run boundary (including recursive, goal, /steer and synthetic
+        # A2A paths) derives policy anew from its physical source. Event-carried
+        # values are only a cache hint and never authority.
+        platform_value = getattr(getattr(source, "platform", None), "value", "")
+        if str(platform_value).lower() == "telegram":
+            try:
+                enabled_skills = _resolve_source_enabled_skills(source)
+            except ValueError as exc:
+                return {
+                    "final_response": f"Skill policy denied: {exc}",
+                    "messages": history,
+                    "api_calls": 0,
+                    "completed": False,
+                }
+
         if not getattr(getattr(self, "config", None), "multiplex_profiles", False):
             return await self._run_agent_inner(
                 message, context_prompt, history, source, session_id,
@@ -21115,6 +21399,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+                enabled_skills=enabled_skills,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -21127,6 +21412,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
                 auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+                enabled_skills=enabled_skills,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -21249,6 +21535,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
         auto_loaded_skill_prompt: str = "",
+        enabled_skills: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -21950,6 +22237,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 cache_keys=self._extract_cache_busting_config(user_config),
                 user_id=getattr(source, "user_id", None),
                 user_id_alt=getattr(source, "user_id_alt", None),
+                enabled_skills=enabled_skills,
             )
             agent = None
             reused_cached_agent = False
@@ -22186,6 +22474,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Reload from disk — do not reuse the startup snapshot (#60955).
                     fallback_model=self._refresh_fallback_model(),
                     auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+                    enabled_skills=enabled_skills,
                 )
                 if _cache_lock and _cache is not None:
                     with _cache_lock:
@@ -23783,9 +24072,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 next_message = pending
                 next_message_id = None
                 next_channel_prompt = None
+                next_enabled_skills = enabled_skills
                 next_session_key = session_key
                 if pending_event is not None:
                     next_source = getattr(pending_event, "source", None) or source
+                    # Event metadata is an untrusted snapshot. The physical next
+                    # source is authoritative and is re-resolved below.
                     if self._is_goal_continuation_event(pending_event) and not self._goal_still_active_for_session(session_id):
                         logger.info(
                             "Discarding stale goal continuation for session %s — goal is no longer active",
@@ -23814,6 +24106,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if next_message is None:
                         return result
                     next_message_id = self._reply_anchor_for_event(pending_event)
+                    next_enabled_skills = _resolve_source_enabled_skills(next_source)
                     next_channel_prompt = getattr(pending_event, "channel_prompt", None)
 
                 # Restart typing indicator so the user sees activity while
@@ -23857,6 +24150,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
                     auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+                    enabled_skills=next_enabled_skills,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:

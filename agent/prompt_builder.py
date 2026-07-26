@@ -1471,6 +1471,8 @@ def build_skills_system_prompt(
     available_tools: "set[str] | None" = None,
     available_toolsets: "set[str] | None" = None,
     compact_categories: "frozenset[str] | None" = None,
+    thread_id: "int | str | None" = None,
+    enabled_skills: "set[str] | frozenset[str] | None" = None,
 ) -> str:
     """Build a compact skill index for the system prompt.
 
@@ -1519,6 +1521,8 @@ def build_skills_system_prompt(
         _platform_hint,
         tuple(sorted(disabled)),
         tuple(sorted(compact_categories or ())),
+        str(thread_id),
+        None if enabled_skills is None else tuple(sorted(str(s) for s in enabled_skills)),
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -1545,6 +1549,8 @@ def build_skills_system_prompt(
             if not skill_matches_platform_list(platforms):
                 continue
             if frontmatter_name in disabled or skill_name in disabled:
+                continue
+            if enabled_skills is not None and frontmatter_name not in enabled_skills and skill_name not in enabled_skills:
                 continue
             if not _skill_should_show(
                 entry.get("conditions") or {},
@@ -1578,6 +1584,8 @@ def build_skills_system_prompt(
                 continue
             skill_name = entry["skill_name"]
             if entry["frontmatter_name"] in disabled or skill_name in disabled:
+                continue
+            if enabled_skills is not None and entry["frontmatter_name"] not in enabled_skills and skill_name not in enabled_skills:
                 continue
             if not _skill_should_show(
                 extract_skill_conditions(frontmatter),
@@ -1641,6 +1649,8 @@ def build_skills_system_prompt(
                 if frontmatter_name in seen_skill_names:
                     continue
                 if frontmatter_name in disabled or skill_name in disabled:
+                    continue
+                if enabled_skills is not None and frontmatter_name not in enabled_skills and skill_name not in enabled_skills:
                     continue
                 if not _skill_should_show(
                     extract_skill_conditions(frontmatter),

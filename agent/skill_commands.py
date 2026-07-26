@@ -194,6 +194,16 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
     raw_identifier = (skill_identifier or "").strip()
     if not raw_identifier:
         return None
+    # This is the final common payload-read gate for slash, stacked, bundle,
+    # and preload paths. Check before calling skill_view (which reads SKILL.md).
+    try:
+        from tools.skills_tool import _current_enabled_skills_policy
+        from gateway.skill_policy import canonical_skill_identity
+        enabled = _current_enabled_skills_policy()
+        if enabled is not None and canonical_skill_identity(raw_identifier) not in enabled:
+            return None
+    except ValueError:
+        return None
 
     try:
         from tools.skills_tool import SKILLS_DIR, skill_view
@@ -586,7 +596,7 @@ def build_skill_invocation_message(
     if not skill_info:
         return None
 
-    loaded = _load_skill_payload(skill_info["skill_dir"], task_id=task_id)
+    loaded = _load_skill_payload(skill_info["name"], task_id=task_id)
     if not loaded:
         return None
 
@@ -694,7 +704,7 @@ def build_stacked_skill_invocation_message(
             missing.append(cmd_key.lstrip("/"))
             continue
 
-        loaded = _load_skill_payload(skill_info["skill_dir"], task_id=task_id)
+        loaded = _load_skill_payload(skill_info["name"], task_id=task_id)
         if not loaded:
             missing.append(cmd_key.lstrip("/"))
             continue

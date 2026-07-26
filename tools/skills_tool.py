@@ -782,6 +782,25 @@ def _sort_skills(skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(skills, key=lambda s: (s.get("category") or "", s["name"]))
 
 
+def _current_enabled_skills_policy() -> Optional[Set[str]]:
+    """Return only a validated configured policy; reject policy errors."""
+    from gateway.skill_policy import SkillPolicyStatus, current_enabled_skills_policy
+    policy = current_enabled_skills_policy()
+    if policy.status is SkillPolicyStatus.UNCONFIGURED:
+        return None
+    if policy.status is not SkillPolicyStatus.CONFIGURED_VALID:
+        raise ValueError(f"Thread context policy error: {policy.error}")
+    try:
+        registry = _find_all_skills(skip_disabled=True)
+    except TypeError:  # lightweight callers/tests may expose legacy signature
+        registry = _find_all_skills()
+    known = {str(skill.get("name") or "") for skill in registry}
+    unknown = sorted(set(policy.identities) - known)
+    if unknown:
+        raise ValueError("Thread context policy error: unknown enabled_skills: " + ", ".join(unknown))
+    return set(policy.identities)
+
+
 def skills_list(category: str = None, task_id: str = None) -> str:
     """
     List all available skills (progressive disclosure tier 1 - minimal metadata).
@@ -812,6 +831,9 @@ def skills_list(category: str = None, task_id: str = None) -> str:
 
         # Find all skills
         all_skills = _find_all_skills()
+        enabled_policy = _current_enabled_skills_policy()
+        if enabled_policy is not None:
+            all_skills = [s for s in all_skills if s.get("name") in enabled_policy]
 
         if not all_skills:
             return json.dumps(
@@ -980,6 +1002,21 @@ def skill_view(
         JSON string with skill content or error message
     """
     try:
+        enabled_policy = _current_enabled_skills_policy()
+        if enabled_policy is not None:
+            from agent.skill_utils import normalize_skill_lookup_name
+            normalized_policy_name = normalize_skill_lookup_name(name)
+            if name not in enabled_policy and normalized_policy_name not in enabled_policy:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            f"Skill '{name}' is not enabled for this Telegram topic's "
+                            "thread context policy."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
         # Validate before the ':' qualified-name dispatch so a Windows drive
         # path (e.g. C:\skills\foo) can't be reinterpreted as a plugin
         # namespace, and so a traversal/absolute name never reaches the
