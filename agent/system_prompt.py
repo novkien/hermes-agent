@@ -535,7 +535,11 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if agent.pass_session_id and agent.session_id:
         timestamp_line += f"\nSession ID: {agent.session_id}"
     if getattr(agent, '_thread_id', None):
-        timestamp_line += f"\nThread: {agent._thread_id}"
+        timestamp_line += f"\nThread_ID: {agent._thread_id}"
+    if getattr(agent, '_chat_id', None):
+        timestamp_line += f"\nChat_ID: {agent._chat_id}"
+    if agent.platform:
+        timestamp_line += f"\nPlatform: {agent.platform}"
     if agent.model:
         timestamp_line += f"\nModel: {agent.model}"
     if agent.provider:

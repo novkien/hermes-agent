@@ -202,6 +202,28 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
     assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
 
 
+def test_volatile_timestamp_includes_chat_id_when_set():
+    """Chat_ID appears in the volatile timestamp when the agent has one."""
+    agent = _make_agent(_chat_id="-1001234567890", platform="telegram")
+    parts = _prompt_parts(agent)
+    assert "Chat_ID: -1001234567890" in parts["volatile"]
+    # No chat_id -> no line
+    agent2 = _make_agent(platform="telegram")
+    parts2 = _prompt_parts(agent2)
+    assert "Chat_ID:" not in parts2["volatile"]
+
+
+def test_volatile_timestamp_includes_platform_when_set():
+    """Platform appears in the volatile timestamp when the agent has one."""
+    agent = _make_agent(platform="discord")
+    parts = _prompt_parts(agent)
+    assert "Platform: discord" in parts["volatile"]
+    # No platform -> no line
+    agent2 = _make_agent(platform="")
+    parts2 = _prompt_parts(agent2)
+    assert "Platform:" not in parts2["volatile"]
+
+
 class TestTelegramRichMessagesHint:
     """Verify that TELEGRAM_RICH_MESSAGES_HINT is conditionally included."""
 
