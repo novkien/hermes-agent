@@ -2813,8 +2813,13 @@ def _gateway_config_home() -> Path:
     return _hermes_home
 
 
+class _GatewayConfig(dict):
+    """Raw gateway config carrying an explicit read/overlay failure marker."""
+    load_error: str | None = None
+
+
 def _load_gateway_config() -> dict:
-    """Load and parse ~/.hermes/config.yaml, returning {} on any error.
+    """Load and parse ~/.hermes/config.yaml without erasing read failures.
 
     Uses the module-level ``_hermes_home`` (so tests that monkeypatch it
     still see their fixture) and shares the mtime-keyed raw-yaml cache
@@ -2884,6 +2889,17 @@ def _resolve_source_enabled_skills(source: SessionSource) -> list[str] | None:
     if policy.status is not SkillPolicyStatus.CONFIGURED_VALID:
         raise ValueError(f"Thread context policy error: {policy.error}")
     return list(policy.identities)
+
+
+def _resolve_source_enabled_toolsets(source: SessionSource, config: dict | None = None):
+    """Resolve strict topic toolsets; an empty list is a zero-tool policy."""
+    from gateway.toolset_policy import ToolsetPolicyStatus, resolve_enabled_toolsets_policy
+    policy = resolve_enabled_toolsets_policy(source, config if config is not None else _load_gateway_config())
+    if policy.status is ToolsetPolicyStatus.UNCONFIGURED:
+        return None, policy.fingerprint
+    if policy.status is not ToolsetPolicyStatus.CONFIGURED_VALID:
+        raise ValueError(f"Thread toolset policy error: {policy.error}")
+    return list(policy.toolsets), policy.fingerprint
 
 
 def _checkpoint_agent_kwargs(config: dict | None) -> dict:
@@ -17088,7 +17104,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             platform_key = _platform_config_key(source.platform)
 
             from hermes_cli.tools_config import _get_platform_tools
-            enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+            _topic_toolsets, _toolset_policy_fingerprint = _resolve_source_enabled_toolsets(source, user_config)
+            enabled_toolsets = (_topic_toolsets if _topic_toolsets is not None
+                                else sorted(_get_platform_tools(user_config, platform_key)))
             agent_cfg = user_config.get("agent") or {}
             disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
 
@@ -19945,6 +19963,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_id: str | None = None,
         user_id_alt: str | None = None,
         enabled_skills: list[str] | None = None,
+        enabled_toolsets_policy_fingerprint: str | None = None,
     ) -> str:
         """Compute a stable string key from agent config values.
 
@@ -20000,6 +20019,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 str(user_id or ""),
                 str(user_id_alt or ""),
                 sorted(enabled_skills) if enabled_skills is not None else None,
+                enabled_toolsets_policy_fingerprint or "legacy",
             ],
             sort_keys=True,
             default=str,
@@ -21574,7 +21594,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         platform_key = _platform_config_key(source.platform)
 
         from hermes_cli.tools_config import _get_platform_tools
-        enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+        _topic_toolsets, _toolset_policy_fingerprint = _resolve_source_enabled_toolsets(source, user_config)
+        enabled_toolsets = (_topic_toolsets if _topic_toolsets is not None
+                            else sorted(_get_platform_tools(user_config, platform_key)))
         agent_cfg_local = user_config.get("agent") or {}
         disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
@@ -22238,6 +22260,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 user_id=getattr(source, "user_id", None),
                 user_id_alt=getattr(source, "user_id_alt", None),
                 enabled_skills=enabled_skills,
+                enabled_toolsets_policy_fingerprint=_toolset_policy_fingerprint,
             )
             agent = None
             reused_cached_agent = False

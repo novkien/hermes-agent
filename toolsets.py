@@ -171,6 +171,12 @@ TOOLSETS = {
         "tools": ["skills_list", "skill_view", "skill_manage"],
         "includes": []
     },
+
+    "skills_read": {
+        "description": "Read-only progressive skill discovery and inspection",
+        "tools": ["skills_list", "skill_view"],
+        "includes": []
+    },
     
     "browser": {
         "description": "Browser automation for web interaction (navigate, click, type, scroll, iframes, hold-click) with web search for finding URLs",
@@ -206,6 +212,30 @@ TOOLSETS = {
     "todo": {
         "description": "Task planning and tracking for multi-step work",
         "tools": ["todo"],
+        "includes": []
+    },
+
+    # Narrow reusable coordination capabilities.  Runtime/plugin registrations
+    # may contribute these schemas; they intentionally do not grant shell,
+    # filesystem, research, skill-management, or generic subagent execution.
+    "a2a_coordination": {
+        "description": "Inter-agent handoff and bounded session-reset coordination",
+        "tools": ["agent2agent_message", "agent2agent_force_reset"],
+        "includes": []
+    },
+    "kanban_coordination": {
+        "description": "Kanban work-item coordination without specialist execution tools",
+        "tools": ["kanban_show", "kanban_list", "kanban_create", "kanban_link", "kanban_unblock", "kanban_comment"],
+        "includes": []
+    },
+    "permit_request": {
+        "description": "Read and request owner permits without unrelated state tools",
+        "tools": ["permit_get", "permit_list", "permit_update"],
+        "includes": []
+    },
+    "room_coordination": {
+        "description": "Room admission and identity coordination via A2A controls",
+        "tools": ["agent2agent_message", "agent2agent_force_reset"],
         "includes": []
     },
     
