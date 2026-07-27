@@ -1,4 +1,4 @@
-# Hermes Agent - Development Guide
+# Repository Guidelines
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
@@ -220,6 +220,44 @@ source .venv/bin/activate   # or: source venv/bin/activate
 `scripts/run_tests.sh` probes `.venv` first, then `venv`, then
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).
+
+### Setup and Local Checks
+
+Use Python 3.11–3.13 and Node.js 20 or newer. Keep newly created virtual
+environments outside the checkout.
+
+```bash
+uv pip install -e ".[all,dev]"  # Python runtime and development tools
+npm install                     # JavaScript workspace dependencies
+scripts/run_tests.sh            # full hermetic, CI-equivalent Python suite
+scripts/run_tests.sh tests/gateway/test_config.py -q  # focused test file
+ruff check .                    # configured Python lint checks
+npm run check                   # checks across JavaScript workspaces
+hermes doctor                   # validate the local installation
+hermes gateway                  # start configured messaging adapters
+```
+
+## Python Style and Naming
+
+Use four-space indentation. Name functions and modules with `snake_case`,
+classes with `PascalCase`, and constants with `UPPER_CASE`. Add type hints
+where they clarify module boundaries or public interfaces. Ruff enforces
+explicit encodings for text I/O; use forms such as
+`open(path, encoding="utf-8")`. Keep implementations focused and extend an
+existing module before adding a parallel abstraction.
+
+## Git and Pull Requests
+
+Use Conventional Commits: `<type>(<scope>): <description>`, for example
+`fix(gateway): merge channel overrides` or
+`test(tools): cover timeout handling`. Common branch prefixes are `fix/`,
+`feat/`, `docs/`, `test/`, and `refactor/`.
+
+Keep each pull request to one logical change. Explain what changed, why it was
+needed, how reviewers can verify it, which platforms were tested, and which
+issue it addresses. Include screenshots for visible UI changes. Run focused
+tests while developing and the full `scripts/run_tests.sh` suite before
+requesting review.
 
 ## Project Structure
 
