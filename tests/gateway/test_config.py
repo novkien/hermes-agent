@@ -1740,6 +1740,40 @@ class TestLoadGatewayConfig:
         assert ov.provider == "openrouter"
         assert ov.system_prompt == "Daily news summarizer"
 
+    def test_top_level_channel_overrides_merge_with_nested_platform_map(
+        self, tmp_path, monkeypatch
+    ):
+        """Legacy top-level entries override by channel ID, not by whole map."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "platforms:\n"
+            "  telegram:\n"
+            "    channel_overrides:\n"
+            '      "1644":\n'
+            "        system_prompt: Research Manager role\n"
+            '      "62769":\n'
+            "        model: nested-model\n"
+            "telegram:\n"
+            "  channel_overrides:\n"
+            '    "62769":\n'
+            "      model: top-level-model\n"
+            '    "70452":\n'
+            "      model: bridge-model\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+
+        overrides = config.platforms[Platform.TELEGRAM].channel_overrides
+        assert set(overrides) == {"1644", "62769", "70452"}
+        assert overrides["1644"].system_prompt == "Research Manager role"
+        assert overrides["62769"].model == "top-level-model"
+        assert overrides["70452"].model == "bridge-model"
+
     def test_bridges_discord_channel_prompts_from_config_yaml(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()
