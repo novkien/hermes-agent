@@ -296,7 +296,7 @@ class GatewayKanbanWatchersMixin:
                             if not subs:
                                 logger.debug("kanban notifier: board %s has no subscriptions", slug)
                             for sub in subs:
-                                    try:
+                                try:
                                     owner_profile = sub.get("notifier_profile") or None
                                     if owner_profile and owner_profile != notifier_profile:
                                         _owner_adapters = getattr(self, "_profile_adapters", {}).get(owner_profile)
@@ -344,7 +344,6 @@ class GatewayKanbanWatchersMixin:
                                     logger.warning(
                                         "kanban notifier: subscription for %s on board %s failed: %s",
                                         sub.get("task_id"), slug, sub_exc,
-                                    )
                                     )
                         finally:
                             conn.close()
