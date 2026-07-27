@@ -16,6 +16,7 @@ Key design decisions:
 
 import asyncio
 import atexit
+import copy
 import contextlib
 import hashlib
 import json
@@ -27,7 +28,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -111,6 +112,134 @@ def _scrub_surrogates(value: Any) -> Any:
     well-formed text.
     """
     return _sanitize_surrogates(value) if isinstance(value, str) else value
+
+
+_PROVIDER_PAYLOAD_FULL = "full"
+_PROVIDER_PAYLOAD_DELTA_V1 = "delta-v1"
+
+
+def _provider_payload_json(value: Any) -> str:
+    """Serialize provider-capture data in the stable compact representation."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+
+
+def _provider_payload_delta(previous: Any, current: Any) -> Dict[str, Any]:
+    """Return a compact, exactly reversible structural delta.
+
+    Provider requests normally grow by appending one or two message records.
+    ``splice`` captures that common case without copying the system prompt,
+    tool schemas, or prior transcript. Dict and scalar changes remain generic
+    so context compression, middleware rewrites, and provider-mode changes do
+    not weaken payload fidelity.
+    """
+    operations: List[List[Any]] = []
+
+    def _diff(old: Any, new: Any, path: List[Any]) -> None:
+        if type(old) is not type(new):
+            operations.append(["set", path, new])
+            return
+        if isinstance(old, dict):
+            old_common = [key for key in old if key in new]
+            new_common = [key for key in new if key in old]
+            added = [key for key in new if key not in old]
+            # Python's JSON encoder preserves dict insertion order. A generic
+            # remove/set sequence can reproduce it only when retained keys keep
+            # their order and new keys are appended. Otherwise store this
+            # object as one replacement so payload_json_raw remains exact.
+            if old_common != new_common or list(new) != new_common + added:
+                operations.append(["set", path, new])
+                return
+            for key in old:
+                if key not in new:
+                    operations.append(["remove", [*path, key]])
+            for key in new:
+                if key not in old:
+                    operations.append(["set", [*path, key], new[key]])
+                else:
+                    _diff(old[key], new[key], [*path, key])
+            return
+        if isinstance(old, list):
+            prefix = 0
+            common = min(len(old), len(new))
+            while prefix < common and old[prefix] == new[prefix]:
+                prefix += 1
+            suffix = 0
+            while (
+                suffix < len(old) - prefix
+                and suffix < len(new) - prefix
+                and old[len(old) - 1 - suffix] == new[len(new) - 1 - suffix]
+            ):
+                suffix += 1
+            delete_count = len(old) - prefix - suffix
+            insert_end = len(new) - suffix if suffix else len(new)
+            inserted = new[prefix:insert_end]
+            if delete_count or inserted:
+                operations.append(
+                    ["splice", path, prefix, delete_count, inserted]
+                )
+            return
+        if old != new:
+            operations.append(["set", path, new])
+
+    _diff(previous, current, [])
+    return {"version": 1, "operations": operations}
+
+
+def _apply_provider_payload_delta(previous: Any, delta: Dict[str, Any]) -> Any:
+    """Apply a ``delta-v1`` record without mutating the prior request."""
+    if delta.get("version") != 1 or not isinstance(delta.get("operations"), list):
+        raise ValueError("invalid provider payload delta")
+    result = copy.deepcopy(previous)
+
+    def _parent(document: Any, path: List[Any]) -> Tuple[Any, Any]:
+        if not path:
+            return None, None
+        target = document
+        for component in path[:-1]:
+            target = target[component]
+        return target, path[-1]
+
+    for operation in delta["operations"]:
+        if not isinstance(operation, list) or len(operation) < 2:
+            raise ValueError("invalid provider payload delta operation")
+        kind, path = operation[0], operation[1]
+        if not isinstance(path, list):
+            raise ValueError("invalid provider payload delta path")
+        if kind == "set" and len(operation) == 3:
+            value = copy.deepcopy(operation[2])
+            if not path:
+                result = value
+            else:
+                parent, key = _parent(result, path)
+                parent[key] = value
+        elif kind == "remove" and len(operation) == 2 and path:
+            parent, key = _parent(result, path)
+            if isinstance(parent, list):
+                del parent[key]
+            else:
+                del parent[key]
+        elif kind == "splice" and len(operation) == 5:
+            target = result
+            for component in path:
+                target = target[component]
+            if not isinstance(target, list):
+                raise ValueError("provider payload splice target is not a list")
+            start, delete_count, inserted = operation[2:]
+            if (
+                not isinstance(start, int)
+                or not isinstance(delete_count, int)
+                or not isinstance(inserted, list)
+            ):
+                raise ValueError("invalid provider payload splice")
+            target[start:start + delete_count] = copy.deepcopy(inserted)
+        else:
+            raise ValueError(f"unknown provider payload delta operation: {kind!r}")
+    return result
 
 
 def workspace_key(row: Dict[str, Any]) -> Optional[str]:
@@ -284,7 +413,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
 # state_meta key ``fts_storage_version``. The main schema version advances
@@ -1331,7 +1460,9 @@ CREATE TABLE IF NOT EXISTS llm_provider_requests (
     api_mode TEXT,
     transport TEXT NOT NULL,
     payload_json TEXT NOT NULL,
-    payload_sha256 TEXT NOT NULL
+    payload_sha256 TEXT NOT NULL,
+    payload_encoding TEXT NOT NULL DEFAULT 'full',
+    base_request_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS session_model_usage (
@@ -2039,6 +2170,12 @@ class SessionDB:
         self._read_conns_closed = False
         self._wal_active = False
         self._write_count = 0
+        # Latest reconstructed provider request per recently active session.
+        # This avoids replaying a long delta chain on every append while
+        # keeping memory bounded for gateways that serve many thread IDs.
+        self._provider_payload_cache: OrderedDict[
+            str, Tuple[int, Dict[str, Any]]
+        ] = OrderedDict()
         # One-shot guard for the runtime FTS rebuild recovery on the write
         # path. A corrupt FTS shadow table makes EVERY message write raise
         # the malformed/corrupt error class via the sync triggers; we repair
@@ -7186,27 +7323,56 @@ class SessionDB:
         and transport-specific message conversion. ``payload`` deliberately
         excludes client-only options such as timeout objects and authentication
         headers; every provider-visible body field is retained without
-        truncation. Failures are handled by the caller so observability can
-        never prevent the provider request itself.
+        truncation.
+
+        The first request in a session is a full snapshot. Later requests use
+        an exact structural delta when it is smaller, so the normal tool loop
+        stores only newly appended assistant/tool records instead of copying
+        the system prompt, tool schemas, and prior transcript on every call.
+        Failures are handled by the caller so observability can never prevent
+        the provider request itself.
         """
-        payload_json = json.dumps(
-            payload,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-        )
-        payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        full_payload_json = _provider_payload_json(payload)
+        full_payload_bytes = full_payload_json.encode("utf-8")
+        payload_sha256 = hashlib.sha256(full_payload_bytes).hexdigest()
         request_timestamp = (
             float(captured_at) if captured_at is not None else time.time()
         )
 
         def _do(conn):
+            latest = conn.execute(
+                """SELECT id, payload_json, payload_encoding, base_request_id
+                   FROM llm_provider_requests
+                   WHERE session_id = ? ORDER BY id DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+            stored_payload_json = full_payload_json
+            payload_encoding = _PROVIDER_PAYLOAD_FULL
+            base_request_id = None
+            if latest is not None:
+                latest_id = int(latest["id"])
+                cached = self._provider_payload_cache.get(session_id)
+                if cached is not None and cached[0] == latest_id:
+                    previous_payload = cached[1]
+                else:
+                    previous_payload = self._load_provider_payload_at(
+                        conn, session_id, latest_id
+                    )
+                delta_json = _provider_payload_json(
+                    _provider_payload_delta(previous_payload, payload)
+                )
+                if len(delta_json.encode("utf-8")) < len(full_payload_bytes):
+                    stored_payload_json = delta_json
+                    payload_encoding = _PROVIDER_PAYLOAD_DELTA_V1
+                    base_request_id = latest_id
+
             cursor = conn.execute(
                 """INSERT INTO llm_provider_requests (
                        session_id, session_key, api_request_id, turn_id,
                        api_call_count, attempt, captured_at, provider, model,
-                       api_mode, transport, payload_json, payload_sha256
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       api_mode, transport, payload_json, payload_sha256,
+                       payload_encoding, base_request_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     session_key,
@@ -7219,13 +7385,86 @@ class SessionDB:
                     model,
                     api_mode,
                     transport,
-                    payload_json,
+                    stored_payload_json,
                     payload_sha256,
+                    payload_encoding,
+                    base_request_id,
                 ),
             )
             return int(cursor.lastrowid)
 
-        return self._execute_write(_do)
+        row_id = self._execute_write(_do)
+        with self._lock:
+            self._provider_payload_cache[session_id] = (
+                row_id,
+                copy.deepcopy(payload),
+            )
+            self._provider_payload_cache.move_to_end(session_id)
+            while len(self._provider_payload_cache) > 32:
+                self._provider_payload_cache.popitem(last=False)
+        return row_id
+
+    @staticmethod
+    def _decode_provider_payload(
+        raw: str,
+        encoding: Optional[str],
+        previous_payload: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        encoded = json.loads(raw)
+        if not encoding or encoding == _PROVIDER_PAYLOAD_FULL:
+            if not isinstance(encoded, dict):
+                raise ValueError("full provider payload is not an object")
+            return encoded
+        if encoding == _PROVIDER_PAYLOAD_DELTA_V1:
+            if previous_payload is None or not isinstance(encoded, dict):
+                raise ValueError("provider payload delta has no usable base")
+            payload = _apply_provider_payload_delta(previous_payload, encoded)
+            if not isinstance(payload, dict):
+                raise ValueError("reconstructed provider payload is not an object")
+            return payload
+        raise ValueError(f"unsupported provider payload encoding: {encoding!r}")
+
+    def _load_provider_payload_at(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        request_id: int,
+    ) -> Dict[str, Any]:
+        """Reconstruct one request by walking backward to its nearest full row."""
+        chain = []
+        cursor = conn.execute(
+            """SELECT id, payload_json, payload_encoding, base_request_id
+               FROM llm_provider_requests
+               WHERE session_id = ? AND id <= ?
+               ORDER BY id DESC""",
+            (session_id, request_id),
+        )
+        for row in cursor:
+            chain.append(row)
+            encoding = row["payload_encoding"] or _PROVIDER_PAYLOAD_FULL
+            if encoding == _PROVIDER_PAYLOAD_FULL:
+                break
+        if not chain or (
+            chain[-1]["payload_encoding"] or _PROVIDER_PAYLOAD_FULL
+        ) != _PROVIDER_PAYLOAD_FULL:
+            raise ValueError("provider payload delta chain has no full base")
+
+        payload: Optional[Dict[str, Any]] = None
+        previous_id: Optional[int] = None
+        for row in reversed(chain):
+            encoding = row["payload_encoding"] or _PROVIDER_PAYLOAD_FULL
+            if (
+                encoding == _PROVIDER_PAYLOAD_DELTA_V1
+                and row["base_request_id"] != previous_id
+            ):
+                raise ValueError("provider payload delta chain is discontinuous")
+            payload = self._decode_provider_payload(
+                row["payload_json"], encoding, payload
+            )
+            previous_id = int(row["id"])
+        if payload is None:
+            raise ValueError("provider payload reconstruction produced no body")
+        return payload
 
     def get_llm_provider_requests(
         self, session_id: str
@@ -7238,17 +7477,198 @@ class SessionDB:
                 (session_id,),
             ).fetchall()
         result: List[Dict[str, Any]] = []
+        payloads_by_id: Dict[int, Dict[str, Any]] = {}
         for row in rows:
             record = dict(row)
             raw = record.get("payload_json")
-            record["payload_json_raw"] = raw
             if isinstance(raw, str):
                 try:
-                    record["payload"] = json.loads(raw)
-                except json.JSONDecodeError:
-                    record["payload_parse_status"] = "INVALID_JSON"
+                    encoding = (
+                        record.get("payload_encoding") or _PROVIDER_PAYLOAD_FULL
+                    )
+                    base_id = record.get("base_request_id")
+                    previous = (
+                        payloads_by_id.get(int(base_id))
+                        if base_id is not None
+                        else None
+                    )
+                    payload = self._decode_provider_payload(
+                        raw, encoding, previous
+                    )
+                    payloads_by_id[int(record["id"])] = payload
+                    full_raw = (
+                        raw
+                        if encoding == _PROVIDER_PAYLOAD_FULL
+                        else _provider_payload_json(payload)
+                    )
+                    record["payload_storage_json_raw"] = raw
+                    record["payload_json_raw"] = full_raw
+                    record["payload"] = payload
+                    actual_sha = hashlib.sha256(
+                        full_raw.encode("utf-8")
+                    ).hexdigest()
+                    record["payload_integrity"] = (
+                        "verified"
+                        if actual_sha == record.get("payload_sha256")
+                        else "hash_mismatch"
+                    )
+                except (json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
+                    record["payload_parse_status"] = (
+                        f"INVALID_{type(exc).__name__}: {exc}"
+                    )
             result.append(record)
         return result
+
+    def compact_llm_provider_requests(
+        self,
+        *,
+        vacuum: bool = False,
+        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Rewrite historical full snapshots into exact delta chains.
+
+        This is deliberately foreground and opt-in: rewriting a large provider
+        log can create substantial transient WAL traffic, and ``VACUUM`` needs
+        free disk roughly equal to the database size. The operation is
+        idempotent and commits one session at a time.
+        """
+        if self.read_only:
+            raise RuntimeError("cannot compact provider requests in read-only mode")
+        with self._lock:
+            session_ids = [
+                row[0]
+                for row in self._conn.execute(
+                    """SELECT DISTINCT session_id FROM llm_provider_requests
+                       ORDER BY session_id"""
+                ).fetchall()
+            ]
+
+        totals = {
+            "sessions": len(session_ids),
+            "requests": 0,
+            "original_bytes": 0,
+            "stored_bytes": 0,
+            "delta_requests": 0,
+            "full_requests": 0,
+            "vacuumed": False,
+        }
+
+        for session_index, current_session_id in enumerate(session_ids, start=1):
+            def _compact_session(conn):
+                stats = {
+                    "requests": 0,
+                    "original_bytes": 0,
+                    "stored_bytes": 0,
+                    "delta_requests": 0,
+                    "full_requests": 0,
+                }
+                previous_payload: Optional[Dict[str, Any]] = None
+                previous_id: Optional[int] = None
+                last_id = 0
+                while True:
+                    rows = conn.execute(
+                        """SELECT id, payload_json, payload_encoding,
+                                  base_request_id, payload_sha256
+                           FROM llm_provider_requests
+                           WHERE session_id = ? AND id > ?
+                           ORDER BY id ASC LIMIT 50""",
+                        (current_session_id, last_id),
+                    ).fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        row_id = int(row["id"])
+                        raw = row["payload_json"]
+                        encoding = row["payload_encoding"] or _PROVIDER_PAYLOAD_FULL
+                        base_id = row["base_request_id"]
+                        if (
+                            encoding == _PROVIDER_PAYLOAD_DELTA_V1
+                            and base_id != previous_id
+                        ):
+                            raise ValueError(
+                                "provider payload delta chain is discontinuous "
+                                f"at row {row_id}"
+                            )
+                        payload = self._decode_provider_payload(
+                            raw, encoding, previous_payload
+                        )
+                        full_raw = (
+                            raw
+                            if encoding == _PROVIDER_PAYLOAD_FULL
+                            else _provider_payload_json(payload)
+                        )
+                        if hashlib.sha256(
+                            full_raw.encode("utf-8")
+                        ).hexdigest() != row["payload_sha256"]:
+                            raise ValueError(
+                                "provider payload hash mismatch at row "
+                                f"{row_id}; refusing to compact"
+                            )
+                        stored_raw = full_raw
+                        stored_encoding = _PROVIDER_PAYLOAD_FULL
+                        stored_base_id = None
+                        if previous_payload is not None:
+                            delta_raw = _provider_payload_json(
+                                _provider_payload_delta(
+                                    previous_payload, payload
+                                )
+                            )
+                            if len(delta_raw.encode("utf-8")) < len(
+                                full_raw.encode("utf-8")
+                            ):
+                                stored_raw = delta_raw
+                                stored_encoding = _PROVIDER_PAYLOAD_DELTA_V1
+                                stored_base_id = previous_id
+
+                        conn.execute(
+                            """UPDATE llm_provider_requests
+                               SET payload_json = ?, payload_encoding = ?,
+                                   base_request_id = ?
+                               WHERE id = ?""",
+                            (
+                                stored_raw,
+                                stored_encoding,
+                                stored_base_id,
+                                row_id,
+                            ),
+                        )
+                        stats["requests"] += 1
+                        stats["original_bytes"] += len(raw.encode("utf-8"))
+                        stats["stored_bytes"] += len(stored_raw.encode("utf-8"))
+                        stats[
+                            "delta_requests"
+                            if stored_encoding == _PROVIDER_PAYLOAD_DELTA_V1
+                            else "full_requests"
+                        ] += 1
+                        previous_payload = payload
+                        previous_id = row_id
+                        last_id = row_id
+                return stats
+
+            session_stats = self._execute_write(_compact_session)
+            for key in (
+                "requests",
+                "original_bytes",
+                "stored_bytes",
+                "delta_requests",
+                "full_requests",
+            ):
+                totals[key] += session_stats[key]
+            if progress_cb is not None:
+                progress_cb(
+                    {
+                        **totals,
+                        "session_index": session_index,
+                        "session_id": current_session_id,
+                    }
+                )
+
+        with self._lock:
+            self._provider_payload_cache.clear()
+            if vacuum:
+                self._conn.execute("VACUUM")
+                totals["vacuumed"] = True
+        return totals
 
     def set_latest_matching_message_display_kind(
         self, session_id: str, *, role: str, content: str, display_kind: str,

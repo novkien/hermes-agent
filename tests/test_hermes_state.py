@@ -2849,6 +2849,177 @@ class TestDeleteAndExport:
         assert len(records[0]["payload"]["messages"][0]["content"]) == 10_000
         assert len(records[0]["payload_sha256"]) == 64
 
+    def test_provider_request_payload_stores_only_incremental_messages(self, db):
+        db.create_session(session_id="provider-delta", source="telegram")
+        system_prompt = "SYSTEM-" + ("S" * 20_000)
+        tool_schema = "TOOL-" + ("T" * 10_000)
+        first = {
+            "model": "test-model",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "find it"},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": tool_schema,
+                    },
+                }
+            ],
+        }
+        second = {
+            **first,
+            "messages": [
+                *first["messages"],
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "c1", "name": "search"}],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "result"},
+            ],
+        }
+
+        first_id = db.append_llm_provider_request(
+            "provider-delta", payload=first, transport="test"
+        )
+        second_id = db.append_llm_provider_request(
+            "provider-delta", payload=second, transport="test"
+        )
+        stored = db._conn.execute(
+            """SELECT id, payload_json, payload_encoding, base_request_id
+               FROM llm_provider_requests
+               WHERE session_id = 'provider-delta' ORDER BY id"""
+        ).fetchall()
+
+        assert stored[0]["payload_encoding"] == "full"
+        assert stored[0]["base_request_id"] is None
+        assert stored[1]["payload_encoding"] == "delta-v1"
+        assert stored[1]["base_request_id"] == first_id
+        assert system_prompt not in stored[1]["payload_json"]
+        assert tool_schema not in stored[1]["payload_json"]
+        assert len(stored[1]["payload_json"]) < len(stored[0]["payload_json"]) / 10
+
+        delta = json.loads(stored[1]["payload_json"])
+        assert delta["operations"] == [
+            ["splice", ["messages"], 2, 0, second["messages"][2:]]
+        ]
+        records = db.get_llm_provider_requests("provider-delta")
+        assert [record["id"] for record in records] == [first_id, second_id]
+        assert records[0]["payload"] == first
+        assert records[1]["payload"] == second
+        assert records[1]["payload_integrity"] == "verified"
+
+    def test_provider_request_identical_retry_is_empty_delta(self, db):
+        db.create_session(session_id="provider-retry", source="cli")
+        payload = {
+            "model": "test-model",
+            "messages": [{"role": "system", "content": "same"}],
+        }
+        first_id = db.append_llm_provider_request(
+            "provider-retry", payload=payload, transport="test", attempt=1
+        )
+        db.append_llm_provider_request(
+            "provider-retry", payload=payload, transport="test", attempt=2
+        )
+        retry = db._conn.execute(
+            """SELECT payload_json, payload_encoding, base_request_id
+               FROM llm_provider_requests
+               WHERE session_id = 'provider-retry' ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+
+        assert retry["payload_encoding"] == "delta-v1"
+        assert retry["base_request_id"] == first_id
+        assert json.loads(retry["payload_json"]) == {
+            "version": 1,
+            "operations": [],
+        }
+        assert db.get_llm_provider_requests("provider-retry")[1]["payload"] == payload
+
+    def test_provider_request_delta_reconstructs_context_rewrite(self, db):
+        db.create_session(session_id="provider-rewrite", source="cli")
+        before = {
+            "model": "test-model",
+            "messages": [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+        }
+        after = {
+            "model": "test-model",
+            "messages": [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "compressed summary"},
+            ],
+        }
+        db.append_llm_provider_request(
+            "provider-rewrite", payload=before, transport="test"
+        )
+        db.append_llm_provider_request(
+            "provider-rewrite", payload=after, transport="test"
+        )
+
+        records = db.get_llm_provider_requests("provider-rewrite")
+        assert records[1]["payload"] == after
+        assert records[1]["payload_integrity"] == "verified"
+
+    def test_compact_provider_requests_rewrites_historical_full_rows(self, db):
+        db.create_session(session_id="provider-compact", source="cli")
+        first = {
+            "model": "test-model",
+            "messages": [{"role": "system", "content": "S" * 10_000}],
+        }
+        second = {
+            **first,
+            "messages": [
+                *first["messages"],
+                {"role": "user", "content": "new"},
+            ],
+        }
+        db.append_llm_provider_request(
+            "provider-compact", payload=first, transport="test"
+        )
+        second_id = db.append_llm_provider_request(
+            "provider-compact", payload=second, transport="test"
+        )
+        historical_full = json.dumps(
+            second, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        )
+        db._conn.execute(
+            """UPDATE llm_provider_requests
+               SET payload_json = ?, payload_encoding = 'full',
+                   base_request_id = NULL
+               WHERE id = ?""",
+            (historical_full, second_id),
+        )
+        before_bytes = db._conn.execute(
+            """SELECT SUM(length(payload_json)) FROM llm_provider_requests
+               WHERE session_id = 'provider-compact'"""
+        ).fetchone()[0]
+
+        report = db.compact_llm_provider_requests()
+
+        after_row = db._conn.execute(
+            """SELECT payload_encoding, base_request_id, payload_json
+               FROM llm_provider_requests WHERE id = ?""",
+            (second_id,),
+        ).fetchone()
+        after_bytes = db._conn.execute(
+            """SELECT SUM(length(payload_json)) FROM llm_provider_requests
+               WHERE session_id = 'provider-compact'"""
+        ).fetchone()[0]
+        assert report["requests"] == 2
+        assert report["delta_requests"] == 1
+        assert after_row["payload_encoding"] == "delta-v1"
+        assert after_row["base_request_id"] is not None
+        # The first request intentionally remains a full base, so two nearly
+        # identical requests settle just above 50% of their original bytes.
+        assert before_bytes - after_bytes > 9_000
+        assert db.get_llm_provider_requests("provider-compact")[1]["payload"] == second
+
     def test_delete_session_cascades_provider_request_payloads(self, db):
         db.create_session(session_id="provider-log", source="cli")
         db.append_llm_provider_request(
@@ -7971,5 +8142,3 @@ class TestDisplayMetadataReadPaths:
             }],
         )
         assert db.get_messages_as_conversation("s1")[0]["display_metadata"] == self.META
-
-
