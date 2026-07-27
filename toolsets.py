@@ -202,7 +202,7 @@ TOOLSETS = {
         "tools": ["read_file", "write_file", "patch", "search_files"],
         "includes": []
     },
-    
+
     "tts": {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
         "tools": ["text_to_speech"],
@@ -231,11 +231,6 @@ TOOLSETS = {
     "permit_request": {
         "description": "Read and request owner permits without unrelated state tools",
         "tools": ["permit_get", "permit_list", "permit_update"],
-        "includes": []
-    },
-    "room_coordination": {
-        "description": "Room admission and identity coordination via A2A controls",
-        "tools": ["agent2agent_message", "agent2agent_force_reset"],
         "includes": []
     },
     
