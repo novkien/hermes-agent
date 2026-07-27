@@ -631,6 +631,7 @@ class AIAgent:
                 model=self.model,
                 model_config=self._session_init_model_config,
                 system_prompt=self._cached_system_prompt,
+                session_key=getattr(self, "_gateway_session_key", None),
                 user_id=None,
                 parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source),
@@ -2702,6 +2703,180 @@ class AIAgent:
                 "body": body,
             }
         )
+
+    @classmethod
+    def _provider_payload_jsonable(cls, value: Any, _seen: Optional[set] = None) -> Any:
+        """Normalize one provider body losslessly enough for JSON persistence.
+
+        Unlike hook payloads this has no size, depth, or sequence truncation.
+        Provider request bodies are expected to be acyclic JSON structures;
+        SDK model objects are expanded using their public serialization APIs.
+        """
+        if _seen is None:
+            _seen = set()
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                return str(value)
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            return {
+                "_encoding": "base64",
+                "data": base64.b64encode(bytes(value)).decode("ascii"),
+            }
+
+        track_identity = isinstance(value, (dict, list, tuple, set)) or hasattr(
+            value, "__dict__"
+        )
+        value_id = id(value)
+        if track_identity:
+            if value_id in _seen:
+                raise ValueError("cyclic value in provider request payload")
+            _seen.add(value_id)
+        try:
+            if isinstance(value, dict):
+                return {
+                    str(key): cls._provider_payload_jsonable(item, _seen)
+                    for key, item in value.items()
+                }
+            if isinstance(value, (list, tuple)):
+                return [
+                    cls._provider_payload_jsonable(item, _seen) for item in value
+                ]
+            if isinstance(value, set):
+                return [
+                    cls._provider_payload_jsonable(item, _seen)
+                    for item in sorted(value, key=repr)
+                ]
+            if isinstance(value, Path):
+                return str(value)
+            if hasattr(value, "model_dump"):
+                try:
+                    dumped = value.model_dump(mode="json")
+                except TypeError:
+                    dumped = value.model_dump()
+                return cls._provider_payload_jsonable(dumped, _seen)
+            try:
+                from dataclasses import asdict, is_dataclass
+
+                if is_dataclass(value):
+                    return cls._provider_payload_jsonable(asdict(value), _seen)
+            except Exception:
+                pass
+            if isinstance(value, SimpleNamespace):
+                return cls._provider_payload_jsonable(vars(value), _seen)
+            if hasattr(value, "value") and isinstance(
+                getattr(value, "value"), (str, int, float, bool)
+            ):
+                return getattr(value, "value")
+            if hasattr(value, "__dict__"):
+                return cls._provider_payload_jsonable(
+                    {
+                        key: item
+                        for key, item in vars(value).items()
+                        if not str(key).startswith("_")
+                    },
+                    _seen,
+                )
+            return str(value)
+        finally:
+            if track_identity:
+                _seen.discard(value_id)
+
+    def _begin_provider_request_capture(
+        self,
+        *,
+        task_id: str,
+        turn_id: str,
+        api_request_id: str,
+        api_call_count: int,
+    ) -> Dict[str, Any]:
+        """Bind provider-bound transport attempts to one logical API request."""
+        context = {
+            "task_id": task_id,
+            "turn_id": turn_id,
+            "api_request_id": api_request_id,
+            "api_call_count": api_call_count,
+            "session_id": self.session_id or "",
+            "session_key": getattr(self, "_gateway_session_key", None),
+            "attempt": 0,
+        }
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if lock is None:
+            self._provider_request_log_lock = threading.Lock()
+            lock = self._provider_request_log_lock
+        with lock:
+            self._provider_request_log_context = context
+        return context
+
+    def _end_provider_request_capture(self, context: Dict[str, Any]) -> None:
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if lock is None:
+            return
+        with lock:
+            if getattr(self, "_provider_request_log_context", None) is context:
+                self._provider_request_log_context = None
+
+    def _record_provider_request_payload(
+        self, api_kwargs: Dict[str, Any], *, transport: str
+    ) -> Optional[int]:
+        """Best-effort durable capture immediately before an LLM SDK call."""
+        if getattr(self, "_persist_disabled", False):
+            return None
+        db = getattr(self, "_session_db", None)
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if db is None or lock is None:
+            return None
+        with lock:
+            context = getattr(self, "_provider_request_log_context", None)
+            if not isinstance(context, dict):
+                return None
+            context["attempt"] = int(context.get("attempt") or 0) + 1
+            metadata = dict(context)
+
+        # These are SDK/client controls, not fields in the provider JSON body.
+        # Private ``__*`` adapter markers are likewise consumed before dispatch.
+        body = {
+            key: value
+            for key, value in api_kwargs.items()
+            if key not in {"timeout", "http_client", "extra_headers", "extra_query"}
+            and not str(key).startswith("__")
+        }
+        # OpenAI/Anthropic SDKs treat ``extra_body`` as fields to merge into
+        # the JSON object, not as a literal ``extra_body`` property on wire.
+        # Flatten it before persistence so the snapshot matches the provider-
+        # visible body rather than the Python SDK call signature.
+        extra_body = body.pop("extra_body", None)
+        if isinstance(extra_body, dict):
+            body.update(extra_body)
+        try:
+            if not getattr(self, "_session_db_created", False):
+                self._ensure_db_session()
+            payload = self._provider_payload_jsonable(body)
+            return db.append_llm_provider_request(
+                metadata["session_id"],
+                payload=payload,
+                transport=transport,
+                session_key=metadata.get("session_key"),
+                api_request_id=metadata.get("api_request_id"),
+                turn_id=metadata.get("turn_id"),
+                api_call_count=metadata.get("api_call_count"),
+                attempt=metadata["attempt"],
+                provider=self.provider,
+                model=self.model,
+                api_mode=self.api_mode,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Provider request payload capture failed "
+                "(session=%s request=%s transport=%s): %s",
+                metadata.get("session_id"),
+                metadata.get("api_request_id"),
+                transport,
+                exc,
+            )
+            return None
 
     def _api_response_payload_for_hook(
         self,
@@ -5420,6 +5595,9 @@ class AIAgent:
             # parsed Message drops. No-ops on providers that don't send the
             # matching header families (x-ratelimit-* / x-nous-credits-*).
             on_response=self._capture_anthropic_response_headers,
+            on_request=lambda payload, transport: self._record_provider_request_payload(
+                payload, transport=transport
+            ),
         )
 
     def _rebuild_anthropic_client(self) -> None:

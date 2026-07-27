@@ -1544,6 +1544,11 @@ def init_agent(
     # marker is attached to each in-memory message dict, so its test-and-append
     # sequence must be serialized per agent rather than relying on SQLite alone.
     agent._session_persist_lock = threading.RLock()
+    # Provider-bound payload snapshots are written from request worker threads.
+    # Keep the current logical API-request identity and its transport-attempt
+    # counter synchronized without coupling it to transcript persistence.
+    agent._provider_request_log_lock = threading.Lock()
+    agent._provider_request_log_context = None
     # CLI retains its just-accepted user dict until turn setup can reuse it.
     # This preserves the message-local durable marker if close persistence wins
     # the race before the agent's normal early turn flush.

@@ -2276,6 +2276,12 @@ def run_conversation(
                 elif _model_request_active is not None:
                     _model_request_active.set()
                 _redirect_crossed_response = False
+                _provider_capture_context = agent._begin_provider_request_capture(
+                    task_id=effective_task_id,
+                    turn_id=turn_id,
+                    api_request_id=api_request_id,
+                    api_call_count=api_call_count,
+                )
                 try:
                     response = run_llm_execution_middleware(
                         api_kwargs,
@@ -2294,6 +2300,9 @@ def run_conversation(
                         middleware_trace=list(_llm_middleware_trace),
                     )
                 finally:
+                    agent._end_provider_request_capture(
+                        _provider_capture_context
+                    )
                     if _redirect_lock is not None:
                         with _redirect_lock:
                             if _model_request_active is not None:
