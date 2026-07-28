@@ -56,6 +56,17 @@ def _symlink_category(skills_dir: Path, linked_root: Path, category: str) -> Pat
     return external_category
 
 
+def test_skill_view_schema_prefers_canonical_unqualified_names():
+    description = (
+        skills_tool_module.SKILL_VIEW_SCHEMA["parameters"]["properties"]["name"][
+            "description"
+        ]
+    )
+    assert "unqualified frontmatter name" in description
+    assert "only to resolve an ambiguity" in description
+    assert "plugin:skill" in description
+
+
 # ---------------------------------------------------------------------------
 # _parse_frontmatter
 # ---------------------------------------------------------------------------

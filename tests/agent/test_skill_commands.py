@@ -729,6 +729,26 @@ Generate some audio.
         assert msg is not None
         assert 'file_path="<path>"' in msg
 
+    def test_supporting_file_hint_uses_canonical_name_for_categorized_skill(
+        self, tmp_path,
+    ):
+        """The footer must teach the frontmatter name, not its disk category."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = _make_skill(
+                tmp_path,
+                "daily-audit",
+                category="schedule",
+            )
+            references = skill_dir / "references"
+            references.mkdir()
+            (references / "checklist.md").write_text("reference")
+            scan_skill_commands()
+            msg = build_skill_invocation_message("/daily-audit", "run")
+
+        assert msg is not None
+        assert 'skill_view(name="daily-audit", file_path="<path>")' in msg
+        assert 'skill_view(name="schedule/daily-audit"' not in msg
+
 
 class TestSkillDirectoryHeader:
     """The activation message must expose the absolute skill directory and

@@ -287,8 +287,6 @@ def _build_skill_message(
     session_id: str | None = None,
 ) -> str:
     """Format a loaded skill into a user/system message payload."""
-    from tools.skills_tool import SKILLS_DIR
-
     content = str(loaded_skill.get("content") or "")
 
     # ── Template substitution and inline-shell expansion ──
@@ -355,17 +353,22 @@ def _build_skill_message(
                         supporting.append(rel)
 
     if supporting and skill_dir:
-        try:
-            skill_view_target = str(skill_dir.relative_to(SKILLS_DIR))
-        except ValueError:
-            # Skill is from an external dir — use the skill name instead
-            skill_view_target = skill_dir.name
+        # Teach the same canonical identifier returned by skill_view(), not
+        # the skill's categorized filesystem path. For example, a skill at
+        # schedule/daily-audit with frontmatter name "daily-audit" must emit
+        # skill_view(name="daily-audit"), matching skills_list and every other
+        # model-facing lookup surface.
+        skill_view_target = str(loaded_skill.get("name") or skill_dir.name)
+        skill_view_target_literal = json.dumps(
+            skill_view_target,
+            ensure_ascii=False,
+        )
         parts.append("")
         parts.append("[This skill has supporting files:]")
         for sf in supporting:
             parts.append(f"- {sf}  ->  {skill_dir / sf}")
         parts.append(
-            f'\nLoad any of these with skill_view(name="{skill_view_target}", '
+            f"\nLoad any of these with skill_view(name={skill_view_target_literal}, "
             f'file_path="<path>"), or run scripts directly by absolute path '
             f"(e.g. `node {skill_dir}/scripts/foo.js`)."
         )

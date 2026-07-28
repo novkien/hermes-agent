@@ -1741,7 +1741,16 @@ SKILL_VIEW_SCHEMA = {
         "properties": {
             "name": {
                 "type": "string",
-                "description": "The skill name (use skills_list to see available skills). For plugin-provided skills, use the qualified form 'plugin:skill' (e.g. 'superpowers:writing-plans').",
+                "description": (
+                    "The canonical skill identifier. For local or external "
+                    "skills, use the exact unqualified frontmatter name shown "
+                    "by skills_list (e.g. 'daily-audit'), not a filesystem "
+                    "path or category display label. Use 'category/name' only "
+                    "to resolve an ambiguity explicitly reported by "
+                    "skill_view. For plugin-provided skills, use the qualified "
+                    "form 'plugin:skill' (e.g. "
+                    "'superpowers:writing-plans')."
+                ),
             },
             "file_path": {
                 "type": "string",
