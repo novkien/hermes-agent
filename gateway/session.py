@@ -315,6 +315,10 @@ class SessionContext:
     session_id: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # Model and provider (resolved at runtime, set externally)
+    model: str = ""
+    provider: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -328,6 +332,8 @@ class SessionContext:
             "session_id": self.session_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "model": self.model,
+            "provider": self.provider,
         }
 
 
@@ -560,6 +566,19 @@ def build_session_context_prompt(
         if redact_pii:
             uid = _hash_sender_id(uid)
         lines.append(f"**User ID:** {_format_untrusted_prompt_value(uid)}")
+
+    # Session identity metadata — moved from volatile footer to cache-stable
+    # context block.  Thread_ID and Chat_ID are source-native fields; Model
+    # and Provider are resolved at runtime and set on the context by the
+    # gateway runner before the context prompt is built.
+    _chat_id = _hash_chat_id(context.source.chat_id) if redact_pii else context.source.chat_id
+    lines.append(f"**Thread_ID:** `{context.source.thread_id or ''}`")
+    lines.append(f"**Chat_ID:** `{_format_untrusted_prompt_value(_chat_id)}`")
+    lines.append(f"**Platform:** `{context.source.platform.value}`")
+    if context.model:
+        lines.append(f"**Model:** `{context.model}`")
+    if context.provider:
+        lines.append(f"**Provider:** `{context.provider}`")
 
     # Platform-specific behavioral notes
     if context.source.platform == Platform.SLACK:

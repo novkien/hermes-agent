@@ -14265,7 +14265,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         # Build session context
         context = build_session_context(source, self.config, session_entry)
-        
+
+        # Resolve the session's model and provider so they can be rendered
+        # in the session context block (moved from the volatile footer).
+        # We load user_config fresh rather than relying on a possibly-stale
+        # cached reference because model override / credential changes may
+        # have happened since the last message.
+        try:
+            _model_config = _load_gateway_config()
+            _session_model, _session_runtime = self._resolve_session_agent_runtime(
+                source=source,
+                session_key=session_key,
+                user_config=_model_config,
+            )
+            context.model = _session_model
+            context.provider = (_session_runtime or {}).get("provider", "") or ""
+        except Exception:
+            # Fallback: leave model/provider blank — the context block
+            # gated-renders them only when set.
+            pass
+
         # Set session context variables for tools (task-local, concurrency-safe)
         _session_env_tokens = self._set_session_env(context)
         
@@ -20717,6 +20736,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             ),
             bool(redact_pii),
             home_display,
+            # Model and provider are now rendered in the session context
+            # block — include them in the key so /model changes re-render.
+            str(context.model or ""),
+            str(context.provider or ""),
         )
         return hashlib.sha256(repr(key_tuple).encode("utf-8")).hexdigest()
 

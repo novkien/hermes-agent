@@ -546,18 +546,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y')}"
     if agent.pass_session_id and agent.session_id:
         timestamp_line += f"\nSession ID: {agent.session_id}"
-    if getattr(agent, '_thread_id', None):
-        timestamp_line += f"\nThread_ID: {agent._thread_id}"
-    if getattr(agent, '_chat_id', None):
-        timestamp_line += f"\nChat_ID: {agent._chat_id}"
-    if agent.platform:
-        timestamp_line += f"\nPlatform: {agent.platform}"
-    if agent.model:
-        timestamp_line += f"\nModel: {agent.model}"
-    if agent.provider:
-        timestamp_line += f"\nProvider: {agent.provider}"
-    if agent.platform:
-        timestamp_line += f"\nPlatform: {agent.platform}"
     volatile_parts.append(timestamp_line)
 
     return {
