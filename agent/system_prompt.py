@@ -34,7 +34,6 @@ from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
-    KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
     PLATFORM_HINTS,
@@ -45,6 +44,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
     drain_truncation_warnings,
+    resolve_kanban_guidance,
 )
 from agent.runtime_cwd import resolve_context_cwd
 from hermes_constants import get_hermes_home
@@ -241,16 +241,26 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(MEMORY_GUIDANCE)
     if "session_search" in agent.valid_tool_names:
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
-    # Kanban worker/orchestrator lifecycle — only present when the
-    # dispatcher spawned this process (kanban_show check_fn gates on
-    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
-    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
-    _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
+    # Kanban guidance is split by execution context. Dispatcher workers get
+    # worker lifecycle instructions; explicitly enabled interactive managers
+    # get orchestration guidance that forbids speculative/empty kanban_show.
+    # Older test/extension stubs may still expose _kanban_worker_guidance.
+    _missing_kanban_guidance = object()
+    _kanban_guidance = getattr(
+        agent, "_kanban_guidance", _missing_kanban_guidance,
+    )
+    if _kanban_guidance is _missing_kanban_guidance:
+        _kanban_guidance = getattr(
+            agent, "_kanban_worker_guidance", _missing_kanban_guidance,
+        )
+        if _kanban_guidance is None:
+            # Preserve the legacy fallback contract: None meant unresolved,
+            # while an empty string explicitly suppressed guidance.
+            _kanban_guidance = _missing_kanban_guidance
+    if _kanban_guidance is _missing_kanban_guidance:
+        _kanban_guidance = resolve_kanban_guidance(agent.valid_tool_names)
     if _kanban_guidance:
         tool_guidance.append(_kanban_guidance)
-    elif _kanban_guidance is None and "kanban_show" in agent.valid_tool_names:
-        # Fallback for code paths that bypass agent_init (rare).
-        tool_guidance.append(KANBAN_GUIDANCE)
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
 

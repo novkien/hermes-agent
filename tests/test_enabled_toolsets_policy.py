@@ -83,6 +83,46 @@ def test_gateway_helper_strict_replacement_and_legacy(monkeypatch):
     assert legacy is None and fingerprint == "legacy"
 
 
+def test_gateway_defaults_exclude_kanban_until_explicitly_enabled(monkeypatch):
+    import hermes_cli.tools_config as tools_config
+    from gateway.run import _resolve_gateway_enabled_toolsets
+
+    monkeypatch.setattr(
+        tools_config,
+        "_get_platform_tools",
+        lambda config, platform_key: {
+            "web", "todo", "kanban", "kanban_coordination",
+        },
+    )
+
+    defaults, fingerprint = _resolve_gateway_enabled_toolsets(
+        _source(999), _config(), "telegram",
+    )
+    assert defaults == ["todo", "web"]
+    assert fingerprint.startswith("gateway-default-no-kanban-v1:")
+
+    manager, manager_fingerprint = _resolve_gateway_enabled_toolsets(
+        _source(32857), _config(["skills_read", "kanban"]), "telegram",
+    )
+    assert manager == ["skills_read", "kanban"]
+    assert not manager_fingerprint.startswith("gateway-default-no-kanban-v1:")
+
+
+def test_gateway_explicit_empty_policy_stays_zero_tools(monkeypatch):
+    import hermes_cli.tools_config as tools_config
+    from gateway.run import _resolve_gateway_enabled_toolsets
+
+    monkeypatch.setattr(
+        tools_config,
+        "_get_platform_tools",
+        lambda config, platform_key: {"web", "kanban"},
+    )
+    enabled, _ = _resolve_gateway_enabled_toolsets(
+        _source(32857), _config([]), "telegram",
+    )
+    assert enabled == []
+
+
 def test_agent_cache_signature_distinguishes_empty_and_legacy():
     from gateway.run import GatewayRunner
     legacy = GatewayRunner._agent_config_signature("m", {}, [], "", enabled_toolsets_policy_fingerprint="legacy")

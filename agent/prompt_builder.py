@@ -14,7 +14,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
-from typing import Optional
+from typing import Iterable, Optional
 
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
@@ -191,14 +191,12 @@ SESSION_SEARCH_GUIDANCE = (
 )
 
 
-KANBAN_GUIDANCE = (
+KANBAN_WORKER_GUIDANCE = (
     "# Kanban task execution protocol\n"
-    "You have been assigned ONE task from "
-    "the shared board at `~/.hermes/kanban.db`. Your task id is in "
-    "`$HERMES_KANBAN_TASK`; your workspace is `$HERMES_KANBAN_WORKSPACE`. "
-    "The `kanban_*` tools in your schema are your primary coordination surface — "
-    "they write directly to the shared SQLite DB and work regardless of terminal "
-    "backend (local/docker/modal/ssh).\n"
+    "You have ONE assigned task on the shared board. Its id is "
+    "`$HERMES_KANBAN_TASK` and workspace is `$HERMES_KANBAN_WORKSPACE`. "
+    "Use the `kanban_*` tools as the primary coordination surface; they work "
+    "across terminal backends.\n"
     "\n"
     "## Lifecycle\n"
     "\n"
@@ -241,14 +239,11 @@ KANBAN_GUIDANCE = (
     "to spawn a child task for the appropriate specialist profile instead of "
     "scope-creeping into the next thing.\n"
     "\n"
-    "## Orchestrator mode\n"
+    "## Decomposition tasks\n"
     "\n"
-    "If your task is itself a decomposition task (e.g. a planner profile given "
-    "a high-level goal), use `kanban_create` to fan out into child tasks — one "
-    "per specialist, each with an explicit `assignee` and `parents=[...]` to "
-    "express dependencies. Then `kanban_complete` your own task with a summary "
-    "of the decomposition. Do NOT execute the work yourself; your job is "
-    "routing, not implementation.\n"
+    "For an assigned decomposition task, create one child per specialist with "
+    "an explicit `assignee` and `parents=[...]`, then complete your own task "
+    "with the decomposition summary. Route the work; do not implement it.\n"
     "\n"
     "## Reference details that change outcomes\n"
     "\n"
@@ -294,6 +289,41 @@ KANBAN_GUIDANCE = (
     "for short reasoning subtasks inside your own run; board tasks are for "
     "cross-agent handoffs that outlive one API loop."
 )
+
+KANBAN_ORCHESTRATOR_GUIDANCE = (
+    "# Kanban orchestration protocol\n"
+    "Kanban tools are available for deliberate board coordination in this "
+    "conversation, but this is not a dispatcher-assigned worker run. Do not "
+    "call `kanban_show` merely because a session or turn started, and never "
+    "call it without a concrete `task_id` obtained from the current request, "
+    "a Kanban notification, or a successful `kanban_create` response. Use "
+    "`kanban_list` only when board discovery is actually needed.\n"
+    "\n"
+    "Because `$HERMES_KANBAN_TASK` is absent, do not assume a current task or "
+    "workspace, and do not run worker lifecycle actions as session startup. "
+    "Every board mutation must target a concrete card from the active request "
+    "or notification and must be required by the active role."
+)
+
+# Backward-compatible name for code and extensions that imported the original
+# worker-only guidance constant before the worker/orchestrator split.
+KANBAN_GUIDANCE = KANBAN_WORKER_GUIDANCE
+
+
+def resolve_kanban_guidance(valid_tool_names: Iterable[str]) -> str:
+    """Return guidance matching the active Kanban execution context.
+
+    Tool visibility alone only proves that the caller was intentionally given
+    board capabilities. Dispatcher ownership is represented separately by
+    HERMES_KANBAN_TASK and is the only condition that enables worker lifecycle
+    instructions (including the no-argument initial kanban_show call).
+    """
+    if "kanban_show" not in valid_tool_names:
+        return ""
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        return KANBAN_WORKER_GUIDANCE
+    return KANBAN_ORCHESTRATOR_GUIDANCE
+
 
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"

@@ -2902,6 +2902,38 @@ def _resolve_source_enabled_toolsets(source: SessionSource, config: dict | None 
     return list(policy.toolsets), policy.fingerprint
 
 
+_GATEWAY_DEFAULT_OFF_TOOLSETS = frozenset({"kanban", "kanban_coordination"})
+
+
+def _resolve_gateway_enabled_toolsets(
+    source: SessionSource,
+    config: dict,
+    platform_key: str | None = None,
+) -> tuple[list[str], str]:
+    """Resolve a gateway agent's effective toolsets.
+
+    A topic ``enabled_toolsets`` entry is an explicit replacement allowlist and
+    is returned unchanged. Unconfigured gateway conversations inherit platform
+    defaults except for Kanban: board access must be explicitly granted to an
+    interactive manager. Dispatcher workers do not use this gateway-message
+    path and continue to receive the root Kanban profile plus worker guidance.
+    """
+    configured, fingerprint = _resolve_source_enabled_toolsets(source, config)
+    if configured is not None:
+        return configured, fingerprint
+
+    from hermes_cli.tools_config import _get_platform_tools
+
+    resolved_platform_key = platform_key or _platform_config_key(source.platform)
+    defaults = sorted(_get_platform_tools(config, resolved_platform_key))
+    filtered = [
+        toolset
+        for toolset in defaults
+        if toolset not in _GATEWAY_DEFAULT_OFF_TOOLSETS
+    ]
+    return filtered, f"gateway-default-no-kanban-v1:{fingerprint}"
+
+
 def _checkpoint_agent_kwargs(config: dict | None) -> dict:
     """Translate gateway checkpoint config into ``AIAgent`` constructor args.
 
@@ -17103,10 +17135,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             platform_key = _platform_config_key(source.platform)
 
-            from hermes_cli.tools_config import _get_platform_tools
-            _topic_toolsets, _toolset_policy_fingerprint = _resolve_source_enabled_toolsets(source, user_config)
-            enabled_toolsets = (_topic_toolsets if _topic_toolsets is not None
-                                else sorted(_get_platform_tools(user_config, platform_key)))
+            enabled_toolsets, _toolset_policy_fingerprint = (
+                _resolve_gateway_enabled_toolsets(
+                    source, user_config, platform_key,
+                )
+            )
             agent_cfg = user_config.get("agent") or {}
             disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
 
@@ -21593,10 +21626,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)
 
-        from hermes_cli.tools_config import _get_platform_tools
-        _topic_toolsets, _toolset_policy_fingerprint = _resolve_source_enabled_toolsets(source, user_config)
-        enabled_toolsets = (_topic_toolsets if _topic_toolsets is not None
-                            else sorted(_get_platform_tools(user_config, platform_key)))
+        enabled_toolsets, _toolset_policy_fingerprint = (
+            _resolve_gateway_enabled_toolsets(
+                source, user_config, platform_key,
+            )
+        )
         agent_cfg_local = user_config.get("agent") or {}
         disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
