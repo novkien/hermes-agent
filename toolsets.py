@@ -78,6 +78,11 @@ _HERMES_CORE_TOOLS = [
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Local plugins — never defer so they stay eagerly discoverable
+    "permit_get", "permit_list", "permit_update",
+    "issue_create", "issue_read", "issue_delete",
+    "agent2agent_message", "agent2agent_force_reset",
+    "routing_query",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
