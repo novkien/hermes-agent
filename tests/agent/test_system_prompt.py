@@ -177,7 +177,7 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         expected_profile,
         "SYSTEM_MESSAGE",
         "CONTEXT_FILES",
-        "Conversation started: Friday, January 02, 2026",
+        "Current date: Friday, January 02, 2026",
     ))
 
     with (
@@ -214,6 +214,12 @@ def test_volatile_timestamp_no_platform_in_volatile():
     agent = _make_agent(platform="discord")
     parts = _prompt_parts(agent)
     assert "Platform:" not in parts["volatile"]
+
+
+def test_volatile_date_does_not_claim_conversation_started():
+    parts = _prompt_parts(_make_agent())
+    assert "Current date:" in parts["volatile"]
+    assert "Conversation started:" not in parts["volatile"]
 
 
 class TestTelegramRichMessagesHint:

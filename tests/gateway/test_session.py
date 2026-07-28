@@ -194,10 +194,12 @@ class TestBuildSessionContextPrompt:
             chat_type="dm",
         )
         ctx = build_session_context(source, config)
+        ctx.session_id = "telegram-session-1"
         prompt = build_session_context_prompt(ctx)
 
         assert "Telegram" in prompt
         assert "Home Chat" in prompt
+        assert "**Session_ID:** `telegram-session-1`" in prompt
 
     def test_bluebubbles_prompt_mentions_short_conversational_i_message_format(self):
         config = GatewayConfig(

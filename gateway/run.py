@@ -20738,6 +20738,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             home_display,
             # Model and provider are now rendered in the session context
             # block — include them in the key so /model changes re-render.
+            # Session ID changes only at a real conversation boundary, but it
+            # still belongs here because the renderer emits it.
+            str(context.session_id or ""),
             str(context.model or ""),
             str(context.provider or ""),
         )

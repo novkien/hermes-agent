@@ -561,11 +561,13 @@ def build_session_context_prompt(
             uid = _hash_sender_id(uid)
         lines.append(f"**User ID:** {_format_untrusted_prompt_value(uid)}")
 
-    # Session identity metadata — moved from volatile footer to cache-stable
-    # context block.  Thread_ID and Chat_ID are source-native fields; Model
-    # and Provider are resolved at runtime and set on the context by the
-    # gateway runner before the context prompt is built.
+    # Session identity metadata lives in this cache-stable context block.
+    # Session_ID is the durable conversation identifier used by session tools;
+    # Thread_ID and Chat_ID are source-native routing fields. Model and Provider
+    # are resolved at runtime before this prompt is built.
     _chat_id = _hash_chat_id(context.source.chat_id) if redact_pii else context.source.chat_id
+    if context.session_id:
+        lines.append(f"**Session_ID:** `{context.session_id}`")
     lines.append(f"**Thread_ID:** `{context.source.thread_id or ''}`")
     lines.append(f"**Chat_ID:** `{_format_untrusted_prompt_value(_chat_id)}`")
     lines.append(f"**Platform:** `{context.source.platform.value}`")
