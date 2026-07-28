@@ -3876,6 +3876,41 @@ class TestHandleMaxIterations:
         assert len(result) > 0
         assert "summary" in result.lower()
 
+    def test_summary_does_not_duplicate_cached_ephemeral_prompt(self, agent):
+        """Channel instructions baked into the cached prompt are sent once."""
+        agent.client.chat.completions.create.return_value = _mock_response(content="Summary")
+        agent.ephemeral_system_prompt = "CHANNEL ROLE"
+        agent._cached_system_prompt = "CHANNEL ROLE\n\nBASE SYSTEM"
+
+        result = agent._handle_max_iterations(
+            [{"role": "user", "content": "do stuff"}],
+            60,
+        )
+
+        assert result == "Summary"
+        sent = agent.client.chat.completions.create.call_args.kwargs["messages"]
+        system_messages = [m for m in sent if m.get("role") == "system"]
+        assert system_messages == [
+            {"role": "system", "content": "CHANNEL ROLE\n\nBASE SYSTEM"}
+        ]
+        assert system_messages[0]["content"].count("CHANNEL ROLE") == 1
+
+    def test_summary_uses_ephemeral_prompt_when_cache_is_missing(self, agent):
+        """A direct helper call still carries channel instructions once."""
+        agent.client.chat.completions.create.return_value = _mock_response(content="Summary")
+        agent.ephemeral_system_prompt = "CHANNEL ROLE"
+        agent._cached_system_prompt = None
+
+        result = agent._handle_max_iterations(
+            [{"role": "user", "content": "do stuff"}],
+            60,
+        )
+
+        assert result == "Summary"
+        sent = agent.client.chat.completions.create.call_args.kwargs["messages"]
+        system_messages = [m for m in sent if m.get("role") == "system"]
+        assert system_messages == [{"role": "system", "content": "CHANNEL ROLE"}]
+
     def test_api_failure_returns_error(self, agent):
         agent.client.chat.completions.create.side_effect = Exception("API down")
         agent._cached_system_prompt = "You are helpful."

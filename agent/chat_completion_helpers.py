@@ -2087,9 +2087,15 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 agent._sanitize_tool_calls_for_strict_api(api_msg, model=_sanitize_model)
             api_messages.append(api_msg)
 
+        # The normal conversation path bakes ``ephemeral_system_prompt`` into
+        # ``_cached_system_prompt`` when the session prompt is first built.
+        # Re-appending it here duplicates channel/thread role instructions in
+        # the forced-summary request.  Keep a fallback for direct/helper calls
+        # that reach this path before a cached prompt exists, but include the
+        # ephemeral prompt at most once.
         effective_system = agent._cached_system_prompt or ""
-        if agent.ephemeral_system_prompt:
-            effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+        if not effective_system:
+            effective_system = (agent.ephemeral_system_prompt or "").strip()
         if effective_system:
             api_messages = [{"role": "system", "content": effective_system}] + api_messages
         if agent.prefill_messages:
