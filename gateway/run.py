@@ -7873,7 +7873,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Suspend sessions that have been active across too many restarts.
 
         Returns the number of sessions suspended.  Called on gateway startup
-        AFTER suspend_recently_active() to catch the stuck-loop pattern:
+        AFTER recover_interrupted_turns() to catch the stuck-loop pattern:
         session loads → agent gets stuck → gateway restarts → repeat.
         """
         import json
@@ -8253,7 +8253,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     # Drain-timeout reasons set by _stop_impl() when a still-running turn is
     # force-interrupted; "restart_interrupted" is set by
-    # SessionStore.suspend_recently_active() on crash recovery (no
+    # SessionStore.recover_interrupted_turns() on crash recovery (no
     # .clean_shutdown marker).  All three mean "the agent was mid-turn and
     # we killed it" — eligible for startup auto-resume.
     _AUTO_RESUME_REASONS = frozenset(
@@ -9045,29 +9045,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception as e:
             logger.warning("Process checkpoint recovery: %s", e)
 
-        # Suspend sessions that were active when the gateway last exited.
-        # This prevents stuck sessions from being blindly resumed on restart,
-        # which can create an unrecoverable loop (#7536).  Suspended sessions
-        # auto-reset on the next incoming message, giving the user a clean start.
+        # Recover only sessions whose durable marker proves a model turn was
+        # in flight when the prior process died.  Recency alone is not proof:
+        # selecting by updated_at can auto-resume an unrelated conversation.
         #
-        # SKIP suspension after a clean (graceful) shutdown — the previous
-        # process already drained active agents, so sessions aren't stuck.
-        # This prevents unwanted auto-resets after `hermes update`,
-        # `hermes gateway restart`, or `/restart`.
+        # Skip crash recovery after a clean shutdown because the previous
+        # process drained all active turns.
         _clean_marker = _hermes_home / ".clean_shutdown"
         if _clean_marker.exists():
-            logger.info("Previous gateway exited cleanly — skipping session suspension")
+            logger.info(
+                "Previous gateway exited cleanly — skipping interrupted-turn recovery"
+            )
             try:
                 _clean_marker.unlink()
             except Exception:
                 pass
         else:
             try:
-                suspended = await self.async_session_store.suspend_recently_active()
-                if suspended:
-                    logger.info("Marked %d in-flight session(s) as resumable from previous run", suspended)
+                recovered = await self.async_session_store.recover_interrupted_turns()
+                if recovered:
+                    logger.info(
+                        "Marked %d in-flight session(s) as resumable from previous run",
+                        recovered,
+                    )
             except Exception as e:
-                logger.warning("Session suspension on startup failed: %s", e)
+                logger.warning("Interrupted-turn recovery on startup failed: %s", e)
 
         # Stuck-loop detection (#7536): if a session has been active across
         # 3+ consecutive restarts, it's probably stuck in a loop (the same
@@ -10633,8 +10635,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # interrupting the agents.  This preserves each session's
                 # session_id + transcript so the next message on the same
                 # session_key auto-resumes from the existing conversation
-                # instead of getting routed through suspend_recently_active()
-                # and converted into a fresh session.  Terminal escalation
+                # instead of being converted into a fresh session.  Terminal escalation
                 # for genuinely stuck sessions still flows through the
                 # existing ``.restart_failure_counts`` stuck-loop counter
                 # (incremented below, threshold 3), which sets
@@ -10822,14 +10823,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             remove_pid_file()
             release_gateway_runtime_lock()
 
-            # Write a clean-shutdown marker so the next startup knows this
-            # wasn't a crash.  suspend_recently_active() only needs to run
-            # after unexpected exits.  However, if the drain timed out and
-            # agents were force-interrupted, their sessions may be in an
-            # incomplete state (trailing tool response, no final assistant
-            # message).  Skip the marker in that case so the next startup
-            # suspends those sessions — giving users a clean slate instead
-            # of resuming a half-finished tool loop.
+            # Write a clean-shutdown marker so the next startup knows exact
+            # interrupted-turn recovery is unnecessary.  If the drain timed
+            # out, the affected sessions were explicitly marked resume_pending
+            # above, so skip the marker and let startup recover any durable
+            # in-flight markers left by a hard interruption.
             if not timed_out:
                 try:
                     (_hermes_home / ".clean_shutdown").touch()
@@ -10838,8 +10836,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             else:
                 logger.info(
                     "Skipping .clean_shutdown marker — drain timed out with "
-                    "interrupted agents; next startup will suspend recently "
-                    "active sessions."
+                    "interrupted agents; next startup will resume explicitly "
+                    "marked interrupted sessions."
                 )
 
             # Track sessions that were active at shutdown for stuck-loop
@@ -23131,7 +23129,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _conversation_kwargs["moa_config"] = moa_config
                 if _persist_user_timestamp_override is not None:
                     _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
-                result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
+                _turn_marker_set = False
+                try:
+                    _turn_marker_set = self.session_store.mark_turn_in_flight(
+                        session_key
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist in-flight turn marker for %s",
+                        session_key,
+                        exc_info=True,
+                    )
+                try:
+                    result = agent.run_conversation(
+                        _api_run_message, **_conversation_kwargs
+                    )
+                finally:
+                    if _turn_marker_set:
+                        try:
+                            self.session_store.clear_turn_in_flight(session_key)
+                        except Exception:
+                            logger.warning(
+                                "Failed to clear in-flight turn marker for %s",
+                                session_key,
+                                exc_info=True,
+                            )
             finally:
                 unregister_gateway_notify(_approval_session_key)
                 # Cancel any pending clarify entries so blocked agent

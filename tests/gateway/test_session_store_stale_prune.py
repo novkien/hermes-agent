@@ -151,6 +151,25 @@ class TestPruneStaleSessionsLocked:
 
         assert key not in store._entries
 
+    def test_session_reset_never_repoints_to_an_older_live_session(self, tmp_path):
+        """An explicit reset is a boundary, not a recoverable parent."""
+        key = "agent:main:telegram:dm:5140768830"
+        db = _db_returning({
+            "sid_reset": {"end_reason": "session_reset", "id": "sid_reset"},
+        })
+        db.find_latest_gateway_session_for_peer.return_value = {
+            "id": "sid_old_live",
+            "started_at": 1782744974.0,
+        }
+        store = _make_store_with_db(tmp_path, db)
+        store._entries[key] = _make_entry_with_origin(key, "sid_reset")
+
+        store._prune_stale_sessions_locked()
+
+        assert key not in store._entries
+        db.find_latest_gateway_session_for_peer.assert_not_called()
+        db.reopen_session.assert_not_called()
+
     def test_keeps_stale_entry_when_recovery_lookup_raises(self, tmp_path):
         """Indeterminate recovery must not delete the only routing handle.
 

@@ -8,8 +8,7 @@ PRs #9850, #9934, #7536):
    the affected sessions are flagged ``resume_pending=True`` — not
    ``suspended`` — so the next user message on the same session_key
    auto-resumes from the existing transcript instead of getting routed
-   through ``suspend_recently_active()`` and converted into a fresh
-   session.
+   through a fresh session.
 
 2. ``suspended=True`` (from ``/stop`` or stuck-loop escalation) still
    wins over ``resume_pending`` — the forced-wipe path is preserved.
@@ -195,6 +194,8 @@ class TestSessionEntryResumeFields:
         assert entry.resume_pending is False
         assert entry.resume_reason is None
         assert entry.last_resume_marked_at is None
+        assert entry.turn_in_flight is False
+        assert entry.turn_in_flight_marked_at is None
 
     def test_roundtrip_with_resume_fields(self):
         now = datetime(2026, 4, 18, 12, 0, 0)
@@ -206,11 +207,15 @@ class TestSessionEntryResumeFields:
             resume_pending=True,
             resume_reason="restart_timeout",
             last_resume_marked_at=now,
+            turn_in_flight=True,
+            turn_in_flight_marked_at=now,
         )
         restored = SessionEntry.from_dict(entry.to_dict())
         assert restored.resume_pending is True
         assert restored.resume_reason == "restart_timeout"
         assert restored.last_resume_marked_at == now
+        assert restored.turn_in_flight is True
+        assert restored.turn_in_flight_marked_at == now
 
     def test_from_dict_legacy_without_resume_fields(self):
         """Old sessions.json without the new fields deserialize cleanly."""
@@ -226,6 +231,8 @@ class TestSessionEntryResumeFields:
         assert restored.resume_pending is False
         assert restored.resume_reason is None
         assert restored.last_resume_marked_at is None
+        assert restored.turn_in_flight is False
+        assert restored.turn_in_flight_marked_at is None
 
     def test_malformed_timestamp_is_tolerated(self):
         now = datetime.now()
@@ -326,6 +333,37 @@ class TestClearResumePending:
 
 
 # ---------------------------------------------------------------------------
+# Exact durable in-flight markers
+# ---------------------------------------------------------------------------
+
+
+class TestTurnInFlightMarkers:
+    def test_marker_round_trip_and_clear(self, tmp_path):
+        store = _make_store(tmp_path)
+        entry = store.get_or_create_session(_make_source())
+
+        assert store.mark_turn_in_flight(entry.session_key) is True
+        marked = store._entries[entry.session_key]
+        assert marked.turn_in_flight is True
+        assert marked.turn_in_flight_marked_at is not None
+
+        reloaded = _make_store(tmp_path)
+        reloaded._ensure_loaded()
+        persisted = reloaded._entries[entry.session_key]
+        assert persisted.turn_in_flight is True
+        assert persisted.turn_in_flight_marked_at is not None
+
+        assert reloaded.clear_turn_in_flight(entry.session_key) is True
+        assert persisted.turn_in_flight is False
+        assert persisted.turn_in_flight_marked_at is None
+
+    def test_unknown_session_is_not_marked(self, tmp_path):
+        store = _make_store(tmp_path)
+        assert store.mark_turn_in_flight("missing") is False
+        assert store.clear_turn_in_flight("missing") is False
+
+
+# ---------------------------------------------------------------------------
 # SessionStore.get_or_create_session resume_pending behaviour
 # ---------------------------------------------------------------------------
 
@@ -405,38 +443,51 @@ class TestGetOrCreateResumePending:
 
 
 # ---------------------------------------------------------------------------
-# SessionStore.suspend_recently_active skip behaviour
+# SessionStore exact crash recovery
 # ---------------------------------------------------------------------------
 
 
-class TestSuspendRecentlyActiveSkipsResumePending:
-    def test_resume_pending_entries_not_suspended(self, tmp_path):
+class TestRecoverInterruptedTurns:
+    def test_resume_pending_marker_is_not_replaced(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
         store.mark_resume_pending(entry.session_key)
+        store.mark_turn_in_flight(entry.session_key)
 
-        count = store.suspend_recently_active()
+        count = store.recover_interrupted_turns()
         assert count == 0
         e = store._entries[entry.session_key]
         assert e.suspended is False
         assert e.resume_pending is True
+        assert e.resume_reason == "restart_timeout"
+        assert e.turn_in_flight is False
 
-    def test_non_resume_pending_gets_resume_pending(self, tmp_path):
-        """Non-resume sessions are now marked resume_pending (not suspended)."""
+    def test_only_exact_in_flight_session_gets_resume_pending(self, tmp_path):
         store = _make_store(tmp_path)
         source_a = _make_source(chat_id="a")
         source_b = _make_source(chat_id="b")
         entry_a = store.get_or_create_session(source_a)
         entry_b = store.get_or_create_session(source_b)
-        store.mark_resume_pending(entry_a.session_key)
+        store.mark_turn_in_flight(entry_a.session_key)
 
-        count = store.suspend_recently_active()
-        # entry_a is already resume_pending → skipped. entry_b gets marked.
+        count = store.recover_interrupted_turns()
+
         assert count == 1
-        assert store._entries[entry_a.session_key].suspended is False
-        assert store._entries[entry_b.session_key].resume_pending is True
-        assert store._entries[entry_b.session_key].suspended is False
+        recovered = store._entries[entry_a.session_key]
+        idle = store._entries[entry_b.session_key]
+        assert recovered.resume_pending is True
+        assert recovered.resume_reason == "restart_interrupted"
+        assert recovered.turn_in_flight is False
+        assert idle.resume_pending is False
+
+    def test_recent_updated_at_without_marker_is_not_recovered(self, tmp_path):
+        store = _make_store(tmp_path)
+        entry = store.get_or_create_session(_make_source())
+        entry.updated_at = datetime.now()
+
+        assert store.suspend_recently_active(max_age_seconds=120) == 0
+        assert entry.resume_pending is False
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +983,7 @@ class TestFreshnessHelpers:
 async def test_drain_timeout_marks_resume_pending():
     """End-to-end: a drain timeout during gateway stop should flag every
     active session as resume_pending BEFORE the interrupt fires, so the
-    next startup's suspend_recently_active() does not destroy them."""
+    next startup can resume those exact sessions."""
     runner, adapter = make_restart_runner()
     adapter.disconnect = AsyncMock()
     runner._restart_drain_timeout = 0.05
@@ -1071,7 +1122,7 @@ async def test_startup_auto_resume_schedules_fresh_pending_sessions():
 async def test_startup_auto_resume_includes_crash_recovery():
     """Crash-recovered sessions (reason=restart_interrupted) are also auto-resumed.
 
-    suspend_recently_active() marks in-flight sessions with resume_reason
+    recover_interrupted_turns() marks in-flight sessions with resume_reason
     "restart_interrupted" when the previous gateway exit was not clean
     (crash/SIGKILL/OOM).  These should get the same magic continuation as
     drain-timeout interruptions.

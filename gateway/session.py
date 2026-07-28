@@ -823,6 +823,13 @@ class SessionEntry:
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
 
+    # Durable exact-turn marker. Set immediately before the gateway enters
+    # AIAgent.run_conversation() and cleared in that call's finally block.
+    # A hard process death leaves it behind so the next gateway boot can
+    # recover this specific session instead of guessing from updated_at.
+    turn_in_flight: bool = False
+    turn_in_flight_marked_at: Optional[datetime] = None
+
     # Session-scoped /model override (model/provider/base_url ONLY — never
     # credentials).  ``_session_model_overrides`` in the gateway runner is
     # in-memory, so before this field a gateway restart silently reverted
@@ -859,6 +866,12 @@ class SessionEntry:
                 if self.last_resume_marked_at
                 else None
             ),
+            "turn_in_flight": self.turn_in_flight,
+            "turn_in_flight_marked_at": (
+                self.turn_in_flight_marked_at.isoformat()
+                if self.turn_in_flight_marked_at
+                else None
+            ),
             "is_fresh_reset": self.is_fresh_reset,
             "was_auto_reset": self.was_auto_reset,
             "auto_reset_reason": self.auto_reset_reason,
@@ -893,6 +906,14 @@ class SessionEntry:
                 last_resume_marked_at = datetime.fromisoformat(_lrma)
             except (TypeError, ValueError):
                 last_resume_marked_at = None
+
+        turn_in_flight_marked_at = None
+        _tifma = data.get("turn_in_flight_marked_at")
+        if _tifma:
+            try:
+                turn_in_flight_marked_at = datetime.fromisoformat(_tifma)
+            except (TypeError, ValueError):
+                turn_in_flight_marked_at = None
 
         session_key = data["session_key"]
         session_id = data["session_id"]
@@ -936,6 +957,8 @@ class SessionEntry:
             resume_pending=data.get("resume_pending", False),
             resume_reason=data.get("resume_reason"),
             last_resume_marked_at=last_resume_marked_at,
+            turn_in_flight=data.get("turn_in_flight", False),
+            turn_in_flight_marked_at=turn_in_flight_marked_at,
             is_fresh_reset=data.get("is_fresh_reset", False),
             was_auto_reset=data.get("was_auto_reset", False),
             auto_reset_reason=data.get("auto_reset_reason"),
@@ -1360,7 +1383,14 @@ class SessionStore:
                 if row is not None and row.get("end_reason") is not None:
                     recovered_entry = None
                     recovery_lookup_failed = False
-                    if entry.origin is not None:
+                    # Only compression is a continuation boundary. Explicit
+                    # boundaries such as session_reset/new_command must prune
+                    # the stale route; searching past them can resurrect an
+                    # unrelated older live row for the same messaging peer.
+                    if (
+                        row.get("end_reason") == "compression"
+                        and entry.origin is not None
+                    ):
                         try:
                             recovered_entry = self._recover_session_from_db(
                                 session_key=key,
@@ -2635,6 +2665,59 @@ class SessionStore:
             self._save()
             return True
 
+    def mark_turn_in_flight(self, session_key: str) -> bool:
+        """Persist that *session_key* is executing a model turn right now."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None:
+                return False
+            entry.turn_in_flight = True
+            entry.turn_in_flight_marked_at = _now()
+            self._save()
+            return True
+
+    def clear_turn_in_flight(self, session_key: str) -> bool:
+        """Clear the durable model-turn marker after the turn unwinds."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None or not entry.turn_in_flight:
+                return False
+            entry.turn_in_flight = False
+            entry.turn_in_flight_marked_at = None
+            self._save()
+            return True
+
+    def recover_interrupted_turns(self) -> int:
+        """Convert exact crash-left turn markers into resume-pending sessions.
+
+        ``updated_at`` is routing activity: loading, repairing, or touching an
+        idle session can refresh it. It is not evidence that a model turn was
+        running when the previous gateway died. The durable
+        ``turn_in_flight`` marker is set only around ``run_conversation()`` and
+        is the sole crash-recovery selector here.
+        """
+        count = 0
+        changed = False
+        with self._lock:
+            self._ensure_loaded_locked()
+            for entry in self._entries.values():
+                if not entry.turn_in_flight:
+                    continue
+                entry.turn_in_flight = False
+                entry.turn_in_flight_marked_at = None
+                changed = True
+                if entry.resume_pending or entry.suspended:
+                    continue
+                entry.resume_pending = True
+                entry.resume_reason = "restart_interrupted"
+                entry.last_resume_marked_at = _now()
+                count += 1
+            if changed:
+                self._save()
+        return count
+
     def prune_old_entries(self, max_age_days: int) -> int:
         """Drop SessionEntry records older than max_age_days.
 
@@ -2686,40 +2769,13 @@ class SessionStore:
         return len(removed_keys)
 
     def suspend_recently_active(self, max_age_seconds: int = 120) -> int:
-        """Mark recently-active sessions as resumable after an unexpected exit.
+        """Backward-compatible alias for exact interrupted-turn recovery.
 
-        Called on gateway startup after a crash or fast restart to preserve
-        in-flight sessions instead of destroying their conversation history
-        (#7536).  Only marks sessions updated within *max_age_seconds* to
-        avoid touching long-idle sessions.  Sets ``resume_pending=True`` so
-        the next incoming message on the same session_key auto-resumes from
-        the existing transcript.
-
-        Entries already flagged ``resume_pending=True`` are skipped.  Entries
-        explicitly ``suspended=True`` (from /stop or stuck-loop escalation)
-        are also skipped.  Terminal escalation for genuinely stuck sessions
-        is still handled by the existing ``.restart_failure_counts`` counter
-        (threshold 3), which runs after this method and sets ``suspended=True``.
-
-        Returns the number of sessions marked resumable.
+        ``max_age_seconds`` is intentionally ignored. Recent routing activity
+        is not proof that a model turn was in flight.
         """
-        from datetime import timedelta
-
-        cutoff = _now() - timedelta(seconds=max_age_seconds)
-        count = 0
-        with self._lock:
-            self._ensure_loaded_locked()
-            for entry in self._entries.values():
-                if entry.resume_pending:
-                    continue
-                if not entry.suspended and entry.updated_at >= cutoff:
-                    entry.resume_pending = True
-                    entry.resume_reason = "restart_interrupted"
-                    entry.last_resume_marked_at = _now()
-                    count += 1
-            if count:
-                self._save()
-        return count
+        del max_age_seconds
+        return self.recover_interrupted_turns()
 
     def reset_session(self, session_key: str, display_name: Optional[str] = None) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""

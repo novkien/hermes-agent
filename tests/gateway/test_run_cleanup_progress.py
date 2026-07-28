@@ -207,6 +207,54 @@ def _install_fakes(
 
 
 @pytest.mark.asyncio
+async def test_run_agent_brackets_model_call_with_durable_turn_marker(
+    monkeypatch, tmp_path,
+):
+    events = []
+
+    class MarkerStore:
+        _entries = {}
+
+        def mark_turn_in_flight(self, session_key):
+            events.append(("mark", session_key))
+            return True
+
+        def clear_turn_in_flight(self, session_key):
+            events.append(("clear", session_key))
+            return True
+
+    class MarkerAssertingAgent:
+        def __init__(self, **kwargs):
+            self.tools = []
+
+        def run_conversation(self, message, conversation_history=None, task_id=None):
+            assert events == [("mark", session_key)]
+            return {"final_response": "done", "messages": [], "api_calls": 1}
+
+    adapter = CleanupCaptureAdapter()
+    runner = _make_runner(adapter)
+    runner.session_store = MarkerStore()
+    gateway_run = _install_fakes(
+        monkeypatch, MarkerAssertingAgent, cleanup_on=False,
+    )
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-1",
+        session_key=session_key,
+    )
+
+    assert result["final_response"] == "done"
+    assert events == [("mark", session_key), ("clear", session_key)]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_off_by_default_leaves_bubbles(monkeypatch, tmp_path):
     """Without ``cleanup_progress: true``, firing whatever callback is
     registered never reaches delete_message."""

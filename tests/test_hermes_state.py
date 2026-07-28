@@ -7448,6 +7448,35 @@ def test_gateway_session_recovery_reopens_legacy_agent_close_rows(db):
     ) is None
 
 
+def test_gateway_session_reset_blocks_older_live_peer_recovery(db):
+    """Recovery must not search behind the newest explicit boundary."""
+    session_key = "agent:main:telegram:group:chat-1:topic-1"
+    peer = {
+        "user_id": "user-1",
+        "session_key": session_key,
+        "chat_id": "chat-1",
+        "chat_type": "group",
+        "thread_id": "topic-1",
+    }
+    db.create_session("old-live-session", "telegram", **peer)
+    db.append_message("old-live-session", "user", "old task")
+
+    db.create_session("new-reset-session", "telegram", **peer)
+    db.append_message("new-reset-session", "user", "new task")
+    db.end_session("new-reset-session", "session_reset")
+
+    recovered = db.find_latest_gateway_session_for_peer(
+        source="telegram",
+        user_id="user-1",
+        session_key=session_key,
+        chat_id="chat-1",
+        chat_type="group",
+        thread_id="topic-1",
+    )
+
+    assert recovered is None
+
+
 def test_gateway_metadata_display_name_origin_round_trip(db):
     """record_gateway_session_peer persists display_name/origin_json (#9006)."""
     db.create_session("gw-meta", "telegram", user_id="u1")

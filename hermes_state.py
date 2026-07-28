@@ -4548,23 +4548,39 @@ class SessionDB:
         """
         if not session_key:
             return None
+
+        def _recoverable(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+            if row is None:
+                return None
+            result = dict(row)
+            if (
+                result.get("ended_at") is not None
+                and result.get("end_reason")
+                not in {"agent_close", "ws_orphan_reap"}
+            ):
+                return None
+            if not result.pop("_has_activity", 0):
+                return None
+            return result
+
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT * FROM sessions
+                SELECT sessions.*,
+                       (COALESCE(message_count, 0) > 0 OR EXISTS (
+                           SELECT 1 FROM messages
+                           WHERE messages.session_id = sessions.id LIMIT 1
+                       )) AS _has_activity
+                FROM sessions
                 WHERE session_key = ?
                   AND source = ?
-                  AND (ended_at IS NULL OR end_reason IN ('agent_close', 'ws_orphan_reap'))
-                  AND (COALESCE(message_count, 0) > 0 OR EXISTS (
-                      SELECT 1 FROM messages WHERE messages.session_id = sessions.id LIMIT 1
-                  ))
                 ORDER BY started_at DESC
                 LIMIT 1
                 """,
                 (session_key, source),
             ).fetchone()
             if row is not None:
-                return dict(row)
+                return _recoverable(row)
 
             # Conservative fallback for rows created by current code but with a
             # temporarily-missing exact key: still require the complete peer
@@ -4573,22 +4589,23 @@ class SessionDB:
                 return None
             row = self._conn.execute(
                 """
-                SELECT * FROM sessions
+                SELECT sessions.*,
+                       (COALESCE(message_count, 0) > 0 OR EXISTS (
+                           SELECT 1 FROM messages
+                           WHERE messages.session_id = sessions.id LIMIT 1
+                       )) AS _has_activity
+                FROM sessions
                 WHERE source = ?
                   AND COALESCE(user_id, '') = COALESCE(?, '')
                   AND COALESCE(chat_id, '') = COALESCE(?, '')
                   AND COALESCE(chat_type, '') = COALESCE(?, '')
                   AND COALESCE(thread_id, '') = COALESCE(?, '')
-                  AND (ended_at IS NULL OR end_reason IN ('agent_close', 'ws_orphan_reap'))
-                  AND (COALESCE(message_count, 0) > 0 OR EXISTS (
-                      SELECT 1 FROM messages WHERE messages.session_id = sessions.id LIMIT 1
-                  ))
                 ORDER BY started_at DESC
                 LIMIT 1
                 """,
                 (source, user_id, chat_id, chat_type, thread_id),
             ).fetchone()
-        return dict(row) if row else None
+        return _recoverable(row)
 
     def find_live_compression_child(
         self, parent_session_id: str
