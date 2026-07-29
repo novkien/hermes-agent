@@ -3143,6 +3143,17 @@ class AIAgent:
             self._interrupt_message = message
             self._pending_redirect = None
 
+        # A hard interrupt ends the current turn's steer delivery window.
+        # Close it under the same lock used by steer() so a concurrent caller
+        # either commits before this point (and is intentionally superseded by
+        # the hard stop) or observes the closed window and can queue its text as
+        # a new turn. It must never receive a false-success acknowledgment.
+        _steer_lock = getattr(self, "_pending_steer_lock", None)
+        if _steer_lock is not None:
+            with _steer_lock:
+                self._steer_window_open = False
+                self._pending_steer = None
+
         # Codex app-server owns its model/tool loop and watches a private
         # interrupt event rather than Hermes' per-thread flag.
         if getattr(self, "api_mode", None) == "codex_app_server":
@@ -3221,6 +3232,9 @@ class AIAgent:
             with _redirect_lock:
                 if preserve_redirect and not self._pending_redirect:
                     return False
+                _clearing_hard_interrupt = bool(
+                    self._interrupt_requested and not preserve_redirect
+                )
                 self._interrupt_requested = False
                 self._interrupt_message = None
                 if not preserve_redirect:
@@ -3228,6 +3242,10 @@ class AIAgent:
         else:
             if preserve_redirect and not getattr(self, "_pending_redirect", None):
                 return False
+            _clearing_hard_interrupt = bool(
+                getattr(self, "_interrupt_requested", False)
+                and not preserve_redirect
+            )
             self._interrupt_requested = False
             self._interrupt_message = None
             if not preserve_redirect:
@@ -3256,10 +3274,11 @@ class AIAgent:
         # meant for the agent's next tool-call iteration, which will no
         # longer happen. Drop it instead of surprising the user with a
         # late injection on the post-interrupt turn.
-        _steer_lock = getattr(self, "_pending_steer_lock", None)
-        if _steer_lock is not None:
-            with _steer_lock:
-                self._pending_steer = None
+        if _clearing_hard_interrupt:
+            _steer_lock = getattr(self, "_pending_steer_lock", None)
+            if _steer_lock is not None:
+                with _steer_lock:
+                    self._pending_steer = None
         return True
 
     def steer(self, text: str) -> bool:
@@ -3278,7 +3297,9 @@ class AIAgent:
             text: The user text to inject. Empty strings are ignored.
 
         Returns:
-            True if the steer was accepted, False if the text was empty.
+            True if the live turn accepted the steer. False if the text was
+            empty or the turn no longer has a delivery boundary; callers must
+            queue the text as a new turn in that case.
         """
         if not text or not text.strip():
             return False
@@ -3288,15 +3309,56 @@ class AIAgent:
             # Test stubs that built AIAgent via object.__new__ skip __init__.
             # Fall back to direct attribute set; no concurrent callers expected
             # in those stubs.
+            if not getattr(self, "_steer_window_open", False):
+                return False
             existing = getattr(self, "_pending_steer", None)
             self._pending_steer = (existing + "\n" + cleaned) if existing else cleaned
             return True
         with _lock:
+            if not getattr(self, "_steer_window_open", False):
+                return False
             if self._pending_steer:
                 self._pending_steer = self._pending_steer + "\n" + cleaned
             else:
                 self._pending_steer = cleaned
         return True
+
+    def _open_steer_window(self) -> None:
+        """Allow the active conversation turn to accept mid-run steers."""
+        _lock = getattr(self, "_pending_steer_lock", None)
+        if _lock is None:
+            self._steer_window_open = True
+            return
+        with _lock:
+            self._steer_window_open = True
+
+    def _close_steer_window(self, *, drain: bool = True) -> Optional[str]:
+        """Atomically stop accepting steers and optionally drain the last one.
+
+        Linearizing the state change with the final drain guarantees that a
+        concurrent steer has exactly two outcomes: it is returned here for
+        delivery, or it is rejected and the calling surface queues it. There
+        is no accepted-but-undeliverable state.
+
+        ``drain=False`` is reserved for exceptional unwinds. It closes the
+        window but preserves already-accepted text on the cached agent so a
+        later turn can recover it instead of silently deleting it.
+        """
+        _lock = getattr(self, "_pending_steer_lock", None)
+        if _lock is None:
+            self._steer_window_open = False
+            if not drain:
+                return None
+            text = getattr(self, "_pending_steer", None)
+            self._pending_steer = None
+            return text
+        with _lock:
+            self._steer_window_open = False
+            if not drain:
+                return None
+            text = self._pending_steer
+            self._pending_steer = None
+        return text
 
     def redirect(self, text: str) -> bool:
         """Redirect the active turn without converting it into a new task.
@@ -7269,20 +7331,51 @@ class AIAgent:
             # replaces the value with the live runtime after fallback restoration.
             # Keep the scope local instead of storing ContextVar tokens on the agent,
             # which may be observed from another thread.
-            with bind_subagent_parent(self), scoped_runtime_main({}):
-                result = run_conversation(
-                    self,
-                    user_message,
-                    system_message,
-                    conversation_history,
-                    effective_task_id,
-                    stream_callback,
-                    persist_user_message,
-                    persist_user_timestamp=persist_user_timestamp,
-                    persist_user_display_kind=persist_user_display_kind,
-                    persist_user_display_metadata=persist_user_display_metadata,
-                    moa_config=moa_config,
+            _open_steer_window = getattr(self, "_open_steer_window", None)
+            _close_steer_window = getattr(self, "_close_steer_window", None)
+            _owns_steer_window = (
+                callable(_open_steer_window)
+                and callable(_close_steer_window)
+            )
+            if _owns_steer_window:
+                _open_steer_window()
+            try:
+                with bind_subagent_parent(self), scoped_runtime_main({}):
+                    result = run_conversation(
+                        self,
+                        user_message,
+                        system_message,
+                        conversation_history,
+                        effective_task_id,
+                        stream_callback,
+                        persist_user_message,
+                        persist_user_timestamp=persist_user_timestamp,
+                        persist_user_display_kind=persist_user_display_kind,
+                        persist_user_display_metadata=persist_user_display_metadata,
+                        moa_config=moa_config,
+                    )
+            except BaseException:
+                # Preserve a steer accepted before an exceptional unwind. The
+                # cached agent can surface it on the next successful turn.
+                if _owns_steer_window:
+                    _close_steer_window(drain=False)
+                raise
+            else:
+                # Standard turns normally close in finalize_turn(). This
+                # second, idempotent close also covers early-return runtimes
+                # such as codex_app_server and any future sibling path.
+                _late_steer = (
+                    _close_steer_window()
+                    if _owns_steer_window
+                    else None
                 )
+                if _late_steer and isinstance(result, dict):
+                    _existing_steer = result.get("pending_steer")
+                    result["pending_steer"] = (
+                        f"{_existing_steer}\n{_late_steer}"
+                        if _existing_steer
+                        else _late_steer
+                    )
             terminal = result if isinstance(result, dict) else {}
             if terminal.get("interrupted") is True:
                 relay_outcome = "cancelled"

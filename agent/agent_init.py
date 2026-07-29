@@ -805,6 +805,12 @@ def init_agent(
     # existing tool message rather than inserting a new user turn).
     agent._pending_steer: Optional[str] = None
     agent._pending_steer_lock = threading.Lock()
+    # True only while run_conversation owns a live delivery path for steers.
+    # The flag and _pending_steer are always read/written under the same lock:
+    # closing the window and draining its final payload must be one atomic
+    # operation, otherwise a late steer can be accepted after the last drain
+    # and disappear during gateway response delivery.
+    agent._steer_window_open = False
 
     # Active-turn redirect mechanism. A regular follow-up sent while the model
     # is generating is different from a hard /stop: preserve the valid turn

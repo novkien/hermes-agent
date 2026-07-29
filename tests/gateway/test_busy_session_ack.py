@@ -4,6 +4,7 @@ Verifies that users get an immediate status response instead of total silence
 when the agent is working on a task. See PR fix for the @Lonely__MH report.
 """
 import time
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -505,6 +506,37 @@ class TestBusySessionAck:
         # Ack uses queue-mode wording (not steer, not interrupt)
         call_kwargs = adapter._send_with_retry.call_args
         content = call_kwargs.kwargs.get("content") or call_kwargs[1].get("content", "")
+        assert "Queued for the next turn" in content
+        assert "Steered" not in content
+
+    @pytest.mark.asyncio
+    async def test_late_steer_after_agent_loop_closed_is_queued(self):
+        """Regression: _running_agents outlives the actual conversation loop.
+
+        The real AIAgent must reject this late arrival so the gateway's FIFO
+        path owns it. Previously steer() returned True solely because the text
+        was non-empty, producing a false success ack and losing the message.
+        """
+        from run_agent import AIAgent
+
+        runner, _sentinel = _make_runner()
+        runner._busy_input_mode = "steer"
+        adapter = _make_adapter()
+        event = _make_event(text="correction after final response")
+        sk = build_session_key(event.source)
+        runner.adapters[event.source.platform] = adapter
+
+        agent = object.__new__(AIAgent)
+        agent._pending_steer = None
+        agent._pending_steer_lock = threading.Lock()
+        agent._steer_window_open = False
+        runner._running_agents[sk] = agent
+
+        await runner._handle_active_session_busy_message(event, sk)
+
+        assert agent._pending_steer is None
+        assert adapter._pending_messages.get(sk) is event
+        content = adapter._send_with_retry.call_args.kwargs["content"]
         assert "Queued for the next turn" in content
         assert "Steered" not in content
 
