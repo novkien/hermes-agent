@@ -80,7 +80,7 @@ _HERMES_CORE_TOOLS = [
     "computer_use",
     # Local plugins — never defer so they stay eagerly discoverable
     "permit_get", "permit_list", "permit_update",
-    "issue_create", "issue_read", "issue_delete",
+    "issue_list", "issue_read", "issue_create", "issue_update",
     "agent2agent_message", "agent2agent_force_reset",
     "routing_query",
 ]
