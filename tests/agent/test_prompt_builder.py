@@ -424,6 +424,10 @@ class TestBuildSkillsSystemPrompt:
         assert "python-debug" in result
         assert "Debug Python scripts" in result
         assert "available_skills" in result
+        assert "materially relevant procedure" in result
+        assert "Do not retrieve the exact same base payload or reference again" in result
+        assert "even partially relevant" not in result
+        assert "Err on the side of loading" not in result
 
     def test_deduplicates_skills(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
