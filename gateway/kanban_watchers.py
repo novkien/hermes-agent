@@ -307,11 +307,12 @@ class GatewayKanbanWatchersMixin:
                                     if owner_profile and owner_profile != notifier_profile:
                                         _owner_adapters = getattr(self, "_profile_adapters", {}).get(owner_profile)
                                         if not _owner_adapters:
-                                            logger.debug(
-                                                "kanban notifier: subscription for %s owned by profile %s; current profile %s has no adapter for it, skipping",
+                                            logger.info(
+                                                "kanban notifier: subscription for %s owned by profile %s differs "
+                                                "from gateway profile %s; no profile-specific adapter exists, "
+                                                "falling through to default adapter",
                                                 sub.get("task_id"), owner_profile, notifier_profile,
                                             )
-                                            continue
                                     platform = (sub.get("platform") or "").lower()
                                     if platform not in active_platforms:
                                         logger.debug(
@@ -379,7 +380,15 @@ class GatewayKanbanWatchersMixin:
                     # wrong bot (the cross-profile mis-delivery this whole change
                     # exists to fix). The helper returns None only when the profile
                     # (or default) genuinely has no adapter for the platform.
+                    #
+                    # Kanban notifier exception: worker profiles (executor,
+                    # researcher, analyst, etc.) rarely have their own adapter
+                    # registration. When _authorization_adapter returns None for a
+                    # non-default profile, fall back to the default profile's
+                    # adapter so workers' task notifications still deliver.
                     adapter = self._authorization_adapter(plat, sub_profile or None)
+                    if adapter is None and sub_profile:
+                        adapter = self._authorization_adapter(plat, None)
                     if adapter is None:
                         logger.debug(
                             "kanban notifier: adapter %s disconnected before delivery for %s; rewinding claim",

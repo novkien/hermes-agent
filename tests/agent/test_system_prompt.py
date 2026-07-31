@@ -130,6 +130,23 @@ def test_build_system_prompt_records_stable_prefix():
     assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
 
 
+def test_channel_override_is_baked_into_cached_system_prompt():
+    """A gateway channel override must be durable and cache-prefix stable."""
+    agent = _make_agent(ephemeral_system_prompt="CHANNEL ROLE")
+    with (
+        patch("run_agent.load_soul_md", return_value=""),
+        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_environment_hints", return_value=""),
+        patch("run_agent.build_context_files_prompt", return_value="context"),
+    ):
+        prompt = build_system_prompt(agent)
+
+    assert prompt.startswith("CHANNEL ROLE\n\n")
+    assert agent._cached_system_prompt_static.startswith("CHANNEL ROLE\n\n")
+    assert prompt.startswith(agent._cached_system_prompt_static)
+    assert prompt.count("CHANNEL ROLE") == 1
+
+
 def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
     """The cache split must not reorder the stored coding prompt."""
     import agent.system_prompt as system_prompt
@@ -160,7 +177,7 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         expected_profile,
         "SYSTEM_MESSAGE",
         "CONTEXT_FILES",
-        "Conversation started: Friday, January 02, 2026",
+        "Current date: Friday, January 02, 2026",
     ))
 
     with (
@@ -183,6 +200,26 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
 
     assert prompt == expected
     assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+
+
+def test_volatile_timestamp_no_chat_id_in_volatile():
+    """Chat_ID is no longer in volatile — it moved to session context block."""
+    agent = _make_agent(_chat_id="-1001234567890", platform="telegram")
+    parts = _prompt_parts(agent)
+    assert "Chat_ID:" not in parts["volatile"]
+
+
+def test_volatile_timestamp_no_platform_in_volatile():
+    """Platform is no longer in volatile — it moved to session context block."""
+    agent = _make_agent(platform="discord")
+    parts = _prompt_parts(agent)
+    assert "Platform:" not in parts["volatile"]
+
+
+def test_volatile_date_does_not_claim_conversation_started():
+    parts = _prompt_parts(_make_agent())
+    assert "Current date:" in parts["volatile"]
+    assert "Conversation started:" not in parts["volatile"]
 
 
 class TestTelegramRichMessagesHint:

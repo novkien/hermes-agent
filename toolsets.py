@@ -83,6 +83,11 @@ _HERMES_CORE_TOOLS = [
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Local plugins — never defer so they stay eagerly discoverable
+    "permit_get", "permit_list", "permit_update",
+    "issue_list", "issue_read", "issue_create", "issue_update",
+    "agent2agent_message", "agent2agent_force_reset",
+    "routing_query",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -195,6 +200,12 @@ TOOLSETS = {
         "tools": ["skills_list", "skill_view", "skill_manage"],
         "includes": []
     },
+
+    "skills_read": {
+        "description": "Read-only progressive skill discovery and inspection",
+        "tools": ["skills_list", "skill_view"],
+        "includes": []
+    },
     
     "browser": {
         "description": "Browser automation for web interaction (navigate, click, type, scroll, iframes, hold-click) with web search for finding URLs",
@@ -220,7 +231,7 @@ TOOLSETS = {
         "tools": ["read_file", "write_file", "patch", "search_files"],
         "includes": []
     },
-    
+
     "tts": {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
         "tools": ["text_to_speech"],
@@ -230,6 +241,25 @@ TOOLSETS = {
     "todo": {
         "description": "Task planning and tracking for multi-step work",
         "tools": ["todo"],
+        "includes": []
+    },
+
+    # Narrow reusable coordination capabilities.  Runtime/plugin registrations
+    # may contribute these schemas; they intentionally do not grant shell,
+    # filesystem, research, skill-management, or generic subagent execution.
+    "a2a_coordination": {
+        "description": "Inter-agent handoff and bounded session-reset coordination",
+        "tools": ["agent2agent_message", "agent2agent_force_reset"],
+        "includes": []
+    },
+    "kanban_coordination": {
+        "description": "Kanban work-item coordination without specialist execution tools",
+        "tools": ["kanban_show", "kanban_list", "kanban_create", "kanban_link", "kanban_unblock", "kanban_comment"],
+        "includes": []
+    },
+    "permit_request": {
+        "description": "Read and request owner permits without unrelated state tools",
+        "tools": ["permit_get", "permit_list", "permit_update"],
         "includes": []
     },
     

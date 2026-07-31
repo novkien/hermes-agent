@@ -18,15 +18,16 @@ from agent.prompt_builder import (
     build_skills_system_prompt,
     build_nous_subscription_prompt,
     build_context_files_prompt,
+    clear_skills_system_prompt_cache,
     CONTEXT_FILE_MAX_CHARS,
     _dynamic_context_file_max_chars,
     _get_context_file_max_chars,
     _CONTEXT_FILE_DYNAMIC_CEILING,
     DEFAULT_AGENT_IDENTITY,
     drain_truncation_warnings,
+    TASK_COMPLETION_GUIDANCE,
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
-    OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     MEMORY_GUIDANCE,
@@ -223,8 +224,8 @@ class TestParseSkillFile:
         long_desc = "A" * 100
         skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
         _, _, desc = _parse_skill_file(skill_file)
-        assert len(desc) <= 60
-        assert desc.endswith("...")
+        assert len(desc) == 100
+        assert desc == long_desc
 
 
     def test_logs_parse_failures_and_returns_defaults(self, tmp_path, monkeypatch, caplog):
@@ -281,6 +282,37 @@ class TestBuildSkillsSystemPrompt:
         clear_skills_system_prompt_cache(clear_snapshot=True)
 
 
+    def test_builds_index_with_skills(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "coding" / "python-debug"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\nname: python-debug\ndescription: Debug Python scripts\n---\n"
+        )
+        result = build_skills_system_prompt()
+        assert "python-debug" in result
+        assert "Debug Python scripts" in result
+        assert "available_skills" in result
+        assert "materially relevant procedure" in result
+        assert "Do not retrieve the exact same base payload or reference again" in result
+        assert "even partially relevant" not in result
+        assert "Err on the side of loading" not in result
+
+    def test_disk_snapshot_rebuilds_same_index(self, monkeypatch, tmp_path):
+        """A fresh process can render the persisted skills snapshot."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "coding" / "python-debug"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\nname: python-debug\ndescription: Debug Python scripts\n---\n"
+        )
+
+        cold_scan = build_skills_system_prompt()
+        clear_skills_system_prompt_cache()
+        snapshot_load = build_skills_system_prompt()
+
+        assert snapshot_load == cold_scan
+        assert snapshot_load.count("- python-debug: Debug Python scripts") == 1
 
     def test_deduplicates_skills(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -858,6 +890,129 @@ class TestBuildSkillsSystemPromptConditional:
 
 
 
+class TestBuildSkillsSystemPromptCompactThreads:
+    """Tests for per-skill compact_threads demotion (name-only per thread)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_skills_cache(self):
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        yield
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+
+    def test_compact_skill_hides_description_in_matching_thread(self, monkeypatch, tmp_path):
+        """Skill with metadata.hermes.compact_threads: [100] shows name-only when thread_id=100."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" not in result
+
+    def test_compact_skill_shows_description_in_non_matching_thread(self, monkeypatch, tmp_path):
+        """Same skill shows full entry when thread_id differs."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=200)
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" in result
+
+    def test_no_compact_threads_stays_normal(self, monkeypatch, tmp_path):
+        """Skill without compact_threads always shows full description."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "normal-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: normal-skill\ndescription: Normal stuff\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "normal-skill" in result
+        assert "Normal stuff" in result
+
+    def test_empty_compact_threads_stays_normal(self, monkeypatch, tmp_path):
+        """Skill with compact_threads: [] always shows full description."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "empty-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: empty-skill\ndescription: Empty list\n"
+            "metadata:\n  hermes:\n    compact_threads: []\n---\n"
+        )
+
+        result = build_skills_system_prompt(thread_id=100)
+
+        assert "empty-skill" in result
+        assert "Empty list" in result
+
+    def test_compact_threads_no_thread_id_shows_description(self, monkeypatch, tmp_path):
+        """When thread_id is None (not provided), compact_threads is ignored."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        result = build_skills_system_prompt()
+
+        assert "secret-skill" in result
+        assert "Does secret stuff" in result
+
+    def test_compact_threads_and_categories_compose(self, monkeypatch, tmp_path):
+        """Both compact modes: category-demoted skill in compact thread is still name-only."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "social-media" / "tweet-stuff"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: tweet-stuff\ndescription: Tweet automation\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        # compact_categories alone demotes the whole category to [names only]
+        result = build_skills_system_prompt(
+            compact_categories=frozenset({"social-media"}),
+            thread_id=100,
+        )
+
+        assert "tweet-stuff" in result
+        assert "Tweet automation" not in result
+        # Both mechanisms agree — still name-only via category demotion
+        assert "social-media [names only]" in result
+
+    def test_cache_key_differs_by_thread_id(self, monkeypatch, tmp_path):
+        """Different thread_id values produce different cache entries."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill_dir = tmp_path / "skills" / "tools" / "secret-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: secret-skill\ndescription: Does secret stuff\n"
+            "metadata:\n  hermes:\n    compact_threads: [100]\n---\n"
+        )
+
+        compact_result = build_skills_system_prompt(thread_id=100)
+        normal_result = build_skills_system_prompt(thread_id=200)
+
+        assert "Does secret stuff" not in compact_result
+        assert "Does secret stuff" in normal_result
+
+
 # =========================================================================
 # Tool-use enforcement guidance
 # =========================================================================
@@ -878,21 +1033,21 @@ class TestToolUseEnforcementGuidance:
 
 
 
-class TestOpenAIModelExecutionGuidance:
-    """Tests for GPT/Codex-specific execution discipline guidance."""
+class TestTaskCompletionGuidance:
+    """Tests for universal completion discipline guidance."""
 
 
 
     def test_guidance_covers_verification(self):
-        text = OPENAI_MODEL_EXECUTION_GUIDANCE.lower()
+        text = TASK_COMPLETION_GUIDANCE.lower()
         assert "verification" in text or "verify" in text
-        assert "correctness" in text
+        assert "complete" in text
 
 
 
     def test_guidance_is_string(self):
-        assert isinstance(OPENAI_MODEL_EXECUTION_GUIDANCE, str)
-        assert len(OPENAI_MODEL_EXECUTION_GUIDANCE) > 100
+        assert isinstance(TASK_COMPLETION_GUIDANCE, str)
+        assert len(TASK_COMPLETION_GUIDANCE) > 100
 
 
 class TestParallelToolCallGuidance:
@@ -919,5 +1074,3 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
-

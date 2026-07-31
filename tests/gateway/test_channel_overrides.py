@@ -68,6 +68,106 @@ class TestGetChannelOverride:
         assert result is not None
         assert result.model == "topic-model"
 
+    def test_parent_id_fallback_when_thread_has_no_entry(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.DISCORD: PlatformConfig(
+                    enabled=True,
+                    channel_overrides={
+                        "parent_chan": ChannelOverride(model="parent-model"),
+                    },
+                ),
+            },
+        )
+        result = _get_channel_override(
+            config,
+            Platform.DISCORD,
+            "thread_only",
+            parent_id="parent_chan",
+        )
+        assert result is not None
+        assert result.model == "parent-model"
+
+    def test_telegram_cross_thread_inherits_canonical_override(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.TELEGRAM: PlatformConfig(
+                    enabled=True,
+                    extra={
+                        "group_topics": [{
+                            "chat_id": "-100",
+                            "topics": [{
+                                "thread_id": 32857,
+                                "cross_thread": [70678],
+                            }],
+                        }],
+                    },
+                    channel_overrides={
+                        "32857": ChannelOverride(
+                            model="ceo/model",
+                            provider="9router",
+                            system_prompt="CEO prompt",
+                        ),
+                    },
+                ),
+            },
+        )
+
+        result = _get_channel_override(
+            config, Platform.TELEGRAM, "-100", thread_id="70678"
+        )
+
+        assert result is not None
+        assert result.model == "ceo/model"
+        assert result.provider == "9router"
+        assert result.system_prompt == "CEO prompt"
+
+    def test_exact_thread_overrides_cross_thread_canonical_override(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.TELEGRAM: PlatformConfig(
+                    enabled=True,
+                    extra={
+                        "group_topics": [{
+                            "chat_id": "-100",
+                            "topics": [{
+                                "thread_id": 32857,
+                                "cross_thread": [70678],
+                            }],
+                        }],
+                    },
+                    channel_overrides={
+                        "32857": ChannelOverride(model="canonical/model"),
+                        "70678": ChannelOverride(model="child/model"),
+                    },
+                ),
+            },
+        )
+
+        result = _get_channel_override(
+            config, Platform.TELEGRAM, "-100", thread_id="70678"
+        )
+
+        assert result is not None
+        assert result.model == "child/model"
+
+    def test_exact_thread_overrides_parent(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.DISCORD: PlatformConfig(
+                    enabled=True,
+                    channel_overrides={
+                        "thread_1": ChannelOverride(model="thread-model"),
+                        "parent_chan": ChannelOverride(model="parent-model"),
+                    },
+                ),
+            },
+        )
+        result = _get_channel_override(
+            config, Platform.DISCORD, "thread_1", parent_id="parent_chan"
+        )
+        assert result.model == "thread-model"
+
 
 class TestResolveModelForChannel:
     def test_uses_channel_override_when_present(self):
@@ -153,4 +253,90 @@ class TestResolveSessionAgentRuntimePriority:
         assert model == "channel/model"
         assert runtime["provider"] == "openrouter"
 
+    def test_locked_channel_override_beats_session_model(self):
+        runner = object.__new__(GatewayRunner)
+        session_key = "agent:main:telegram:group:-100:70678"
+        runner._session_model_overrides = {
+            session_key: {"model": "session/model", "provider": "anthropic"},
+        }
+        runner._rehydrate_session_model_override = lambda session_key: None
+        runner._last_resolved_model = {}
+        runner.config = GatewayConfig(
+            platforms={
+                Platform.TELEGRAM: PlatformConfig(
+                    enabled=True,
+                    extra={
+                        "group_topics": [{
+                            "chat_id": "-100",
+                            "topics": [{
+                                "thread_id": 32857,
+                                "cross_thread": [70678],
+                            }],
+                        }],
+                    },
+                    channel_overrides={
+                        "32857": ChannelOverride(
+                            model="ceo/model", provider="9router", locked=True
+                        ),
+                    },
+                ),
+            },
+        )
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="-100",
+            chat_type="group",
+            thread_id="70678",
+        )
+        with patch("gateway.run._resolve_gateway_model", return_value="global/model"), \
+             patch("gateway.run._resolve_runtime_agent_kwargs", return_value={
+                 "provider": "anthropic", "api_key": "k", "base_url": "x", "api_mode": "x"
+             }), \
+             patch("gateway.run._resolve_runtime_agent_kwargs_for_provider", return_value={
+                 "provider": "9router", "api_key": "k2", "base_url": "y", "api_mode": "x"
+             }):
+            model, runtime = runner._resolve_session_agent_runtime(
+                source=source, session_key=session_key
+            )
+        assert model == "ceo/model"
+        assert runtime["provider"] == "9router"
+
+    def test_session_model_beats_channel_override(self):
+        runner = object.__new__(GatewayRunner)
+        runner.config = GatewayConfig(
+            platforms={
+                Platform.DISCORD: PlatformConfig(
+                    enabled=True,
+                    channel_overrides={
+                        "chan_1": ChannelOverride(model="channel/model"),
+                    },
+                ),
+            },
+        )
+        session_key = "agent:main:discord:channel:chan_1"
+        runner._session_model_overrides = {
+            session_key: {
+                "model": "session/model",
+                "provider": "anthropic",
+            },
+        }
+        source = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="chan_1",
+            chat_type="channel",
+            user_id="u1",
+        )
+        with patch("gateway.run._resolve_gateway_model", return_value="global/model"), \
+             patch("gateway.run._resolve_runtime_agent_kwargs", return_value={
+                 "provider": "openrouter",
+                 "api_key": "k",
+                 "base_url": "https://openrouter.ai/api/v1",
+                 "api_mode": "chat_completions",
+             }):
+            model, runtime = runner._resolve_session_agent_runtime(
+                source=source,
+                session_key=session_key,
+            )
+        assert model == "session/model"
+        assert runtime["provider"] == "anthropic"
 

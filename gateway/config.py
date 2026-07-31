@@ -552,6 +552,7 @@ class ChannelOverride:
     model: Optional[str] = None
     provider: Optional[str] = None
     system_prompt: Optional[str] = None
+    locked: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -561,6 +562,8 @@ class ChannelOverride:
             out["provider"] = self.provider
         if self.system_prompt is not None:
             out["system_prompt"] = self.system_prompt
+        if self.locked:
+            out["locked"] = True
         return out
 
     @classmethod
@@ -571,6 +574,7 @@ class ChannelOverride:
             model=data.get("model"),
             provider=data.get("provider"),
             system_prompt=data.get("system_prompt"),
+            locked=_coerce_bool(data.get("locked"), False),
         )
 
 
@@ -1621,11 +1625,23 @@ def load_gateway_config() -> GatewayConfig:
                         plat_data, _extra = _ensure_platform_extra_dict(
                             platforms_data, plat.value
                         )
-                        plat_data["channel_overrides"] = {
+                        # ``platforms.<name>.channel_overrides`` is already in
+                        # ``plat_data`` at this point.  A legacy top-level
+                        # ``<name>.channel_overrides`` block has higher
+                        # precedence, but it must only replace colliding
+                        # channel IDs — replacing the whole mapping silently
+                        # drops unrelated per-channel role prompts.
+                        merged_overrides = plat_data.get("channel_overrides")
+                        if not isinstance(merged_overrides, dict):
+                            merged_overrides = {}
+                        else:
+                            merged_overrides = dict(merged_overrides)
+                        merged_overrides.update({
                             str(cid): ov_data
                             for cid, ov_data in raw_overrides.items()
                             if isinstance(ov_data, dict)
-                        }
+                        })
+                        plat_data["channel_overrides"] = merged_overrides
                 enabled_was_explicit = _cfg_toplevel and "enabled" in platform_cfg
                 if not bridged and not enabled_was_explicit and not has_channel_overrides:
                     continue

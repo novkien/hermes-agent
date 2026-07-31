@@ -120,13 +120,15 @@ def _setup_monkeypatches(monkeypatch, tmp_path):
     monkeypatch.setattr(tools_config, "_get_platform_tools", lambda user_config, platform_key: {"core"})
 
 
-def test_run_agent_voice_turn_no_name_error(monkeypatch, tmp_path):
-    """A voice-input turn must complete without a _streaming_tts_consumer NameError.
+@pytest.mark.parametrize("message_type", [MessageType.TEXT, MessageType.VOICE])
+def test_run_agent_turn_no_streaming_tts_name_error(
+    monkeypatch, tmp_path, message_type
+):
+    """Text and voice turns must complete without a streaming-TTS NameError.
 
-    The streaming-TTS consumer setup is entered (voice input + auto-TTS),
-    but since no adapter is configured the consumer setup is skipped.  The
-    outer finalisation path still runs and must not raise NameError when
-    reading ``streaming_tts_consumer_holder``.
+    The message type must remain in scope even when the streaming-TTS consumer
+    setup is skipped because no adapter is configured. The outer finalisation
+    path still runs with ``streaming_tts_consumer_holder[0]`` unset.
     """
     _setup_monkeypatches(monkeypatch, tmp_path)
     runner = _make_runner()
@@ -147,11 +149,10 @@ def test_run_agent_voice_turn_no_name_error(monkeypatch, tmp_path):
             source=_make_voice_source(),
             session_id="session-1",
             session_key="agent:main:telegram:dm:12345",
-            message_type=MessageType.VOICE,
+            message_type=message_type,
         )
         return result
 
     result = asyncio.new_event_loop().run_until_complete(_run())
     assert result["final_response"] == "Hello from the agent."
-
 

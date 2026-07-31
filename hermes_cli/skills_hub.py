@@ -10,7 +10,9 @@ All logic lives in shared do_* functions. The CLI entry point and slash command
 handler are thin wrappers that parse args and delegate.
 """
 
+import io
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -1290,6 +1292,153 @@ def do_diff(name: str, console: Optional[Console] = None) -> None:
     c.print(f"[dim]Revert with: hermes skills reset {name} --restore[/]\n")
 
 
+# ── Compact/unhide skill description for a thread ─────────────────────────
+
+
+def do_compact(
+    name: str,
+    thread_id: str = "",
+    unhide: bool = False,
+    status: bool = False,
+    console: Optional[Console] = None,
+) -> None:
+    """Set or unset compact (name-only) display for a skill at a thread.
+
+    ``thread_id`` is resolved from the argument, then
+    ``HERMES_SESSION_THREAD_ID``, then ``HERMES_THREAD_ID``.
+
+    When ``unhide=True`` the thread is removed from the compact list.
+    When ``status=True`` the current compact list is printed (no mutation).
+    """
+    from ruamel.yaml import YAML
+    from ruamel.yaml.comments import CommentedMap, CommentedSeq
+    from hermes_constants import get_skills_dir
+    from agent.skill_utils import iter_skill_index_files, parse_frontmatter
+
+    c = console or _console
+
+    # Resolve thread_id
+    if not thread_id and not status:
+        thread_id = (
+            os.environ.get("HERMES_SESSION_THREAD_ID")
+            or os.environ.get("HERMES_THREAD_ID")
+            or ""
+        )
+        if not thread_id:
+            c.print(
+                "[bold red]Error:[/] No thread ID specified. Pass --thread <id> or set "
+                "HERMES_SESSION_THREAD_ID or HERMES_THREAD_ID env var.\n"
+            )
+            return
+
+    # Find the skill file
+    skills_dir = get_skills_dir()
+    skill_path: Optional[Path] = None
+    try:
+        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+            fm, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8"))
+            if fm.get("name") == name:
+                skill_path = skill_md
+                break
+    except FileNotFoundError:
+        pass
+
+    if not skill_path:
+        c.print(
+            f"[bold red]Error:[/] No installed skill named '{name}' found at "
+            f"{display_hermes_home()}/skills/.\n"
+        )
+        return
+
+    content = skill_path.read_text(encoding="utf-8")
+    raw_fm_dict, body = parse_frontmatter(content)
+
+    # Extract the raw YAML string for ruamel.yaml roundtrip
+    # The frontmatter is content between the first `---\n` and `\n---\n`
+    after_opener = content[3:]  # skip first '---'
+    end_match = re.search(r"\n---\s*\n", after_opener)
+    if not end_match:
+        c.print("[bold red]Error:[/] Malformed frontmatter — cannot parse.\n")
+        return
+    yaml_raw = after_opener[:end_match.start()]  # raw YAML string without fences
+
+    # Status mode: just display
+    if status:
+        conditions = raw_fm_dict.get("metadata", {})
+        if isinstance(conditions, dict):
+            hermes = conditions.get("hermes", {})
+            if isinstance(hermes, dict):
+                threads = hermes.get("compact_threads", [])
+            else:
+                threads = []
+        else:
+            threads = []
+        if threads:
+            thread_list = ", ".join(str(t) for t in threads)
+            c.print(
+                f"[bold]{name}[/]: compact at threads [cyan]{thread_list}[/]\n"
+            )
+        else:
+            c.print(
+                f"[bold]{name}[/]: showing description on all threads\n"
+            )
+        return
+
+    # Use ruamel.yaml to preserve formatting
+    yaml_rt = YAML(typ="rt")
+    yaml_rt.preserve_quotes = True
+    yaml_rt.allow_unicode = True
+    yaml_rt.default_flow_style = False
+    yaml_rt.indent(mapping=2, sequence=4, offset=2)
+
+    parsed = yaml_rt.load(yaml_raw)
+
+    if parsed is None:
+        parsed = CommentedMap()
+
+    # Navigate / create metadata.hermes.compact_threads
+    if "metadata" not in parsed or parsed["metadata"] is None:
+        parsed["metadata"] = CommentedMap()
+    if "hermes" not in parsed["metadata"] or parsed["metadata"]["hermes"] is None:
+        parsed["metadata"]["hermes"] = CommentedMap()
+
+    if unhide:
+        current = parsed["metadata"]["hermes"].get("compact_threads")
+        if current is not None and isinstance(current, list):
+            filtered = [t for t in current if str(t) != str(thread_id)]
+            if filtered:
+                parsed["metadata"]["hermes"]["compact_threads"] = CommentedSeq(filtered)
+            else:
+                del parsed["metadata"]["hermes"]["compact_threads"]
+                # Clean up empty parents
+                if not parsed["metadata"]["hermes"]:
+                    del parsed["metadata"]["hermes"]
+                if not parsed["metadata"]:
+                    del parsed["metadata"]
+        c.print(
+            f"[bold]{name}[/]: description [green]restored[/] for thread {thread_id}\n"
+        )
+    else:
+        current = parsed["metadata"]["hermes"].get("compact_threads")
+        if current is not None and isinstance(current, list):
+            if str(thread_id) not in [str(t) for t in current]:
+                current.append(thread_id)
+        else:
+            parsed["metadata"]["hermes"]["compact_threads"] = CommentedSeq([thread_id])
+        c.print(
+            f"[bold]{name}[/]: description [yellow]hidden[/] at thread {thread_id}\n"
+        )
+
+    # Reconstruct the file
+    fm_buf = io.StringIO()
+    yaml_rt.dump(parsed, fm_buf)
+    new_fm = fm_buf.getvalue().rstrip()
+
+    new_content = f"---\n{new_fm}\n---\n{body}"
+    skill_path.write_text(new_content, encoding="utf-8")
+    c.print(f"[dim]Updated {skill_path}[/]\n")
+
+
 def do_opt_out(remove: bool = False,
                console: Optional[Console] = None,
                skip_confirm: bool = False,
@@ -1770,6 +1919,13 @@ def skills_command(args) -> None:
         do_list_modified(as_json=getattr(args, "json", False))
     elif action == "diff":
         do_diff(args.name)
+    elif action == "compact":
+        do_compact(
+            name=args.name,
+            thread_id=getattr(args, "thread", ""),
+            unhide=getattr(args, "unhide", False),
+            status=getattr(args, "status", False),
+        )
     elif action == "opt-out":
         do_opt_out(remove=getattr(args, "remove", False),
                    skip_confirm=getattr(args, "yes", False))
@@ -1800,7 +1956,7 @@ def skills_command(args) -> None:
             return
         do_tap(tap_action, repo=repo)
     else:
-        _console.print("Usage: hermes skills [browse|search|install|inspect|list|list-modified|diff|check|update|audit|uninstall|reset|opt-out|opt-in|publish|snapshot|tap]\n")
+        _console.print("Usage: hermes skills [browse|search|install|inspect|list|list-modified|diff|compact|check|update|audit|uninstall|reset|opt-out|opt-in|publish|snapshot|tap]\n")
         _console.print("Run 'hermes skills <command> --help' for details.\n")
 
 
@@ -2019,6 +2175,25 @@ def handle_skills_slash(cmd: str, console: Optional[Console] = None) -> None:
     elif action in {"help", "--help", "-h"}:
         _print_skills_help(c)
 
+    elif action == "compact":
+        if not args or args[0].startswith("--"):
+            c.print("[bold red]Usage:[/] /skills compact <name> [--unhide] [--thread <id>] [--status]\n")
+            return
+        skill_name = args[0]
+        thread_id = ""
+        unhide = "--unhide" in args
+        status = "--status" in args
+        for i, a in enumerate(args):
+            if a == "--thread" and i + 1 < len(args):
+                thread_id = args[i + 1]
+        do_compact(
+            name=skill_name,
+            thread_id=thread_id,
+            unhide=unhide,
+            status=status,
+            console=c,
+        )
+
     else:
         c.print(f"[bold red]Unknown action:[/] {action}")
         _print_skills_help(c)
@@ -2040,6 +2215,8 @@ def _print_skills_help(console: Console) -> None:
         "  [cyan]uninstall[/] <name>            Remove a hub-installed skill\n"
         "  [cyan]list-modified[/]               List bundled skills you've edited (kept by update)\n"
         "  [cyan]diff[/] <name>                 Diff your copy of a bundled skill vs the stock version\n"
+        "  [cyan]compact[/] <name> [--unhide] [--thread <id>] [--status]\n"
+        "       Compact (hide) or unhide a skill's description at the current thread\n"
         "  [cyan]reset[/] <name> [--restore]    Reset bundled-skill tracking (fix 'user-modified' flag)\n"
         "  [cyan]publish[/] <path> --repo <r>   Publish a skill to GitHub via PR\n"
         "  [cyan]snapshot[/] export|import      Export/import skill configurations\n"

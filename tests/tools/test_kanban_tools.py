@@ -550,6 +550,141 @@ def test_worker_lifecycle_through_tools(worker_env):
 # System-prompt guidance injection
 # ---------------------------------------------------------------------------
 
+def test_kanban_guidance_not_in_normal_prompt(monkeypatch, tmp_path):
+    """A normal chat session (no HERMES_KANBAN_TASK) must NOT have
+    KANBAN_GUIDANCE in its system prompt."""
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    from pathlib import Path as _P
+    monkeypatch.setattr(_P, "home", lambda: tmp_path)
+
+    from tools.registry import invalidate_check_fn_cache
+    from model_tools import _clear_tool_defs_cache
+    invalidate_check_fn_cache()
+    _clear_tool_defs_cache()
+
+    from run_agent import AIAgent
+    a = AIAgent(
+        api_key="test",
+        base_url="https://openrouter.ai/api/v1",
+        quiet_mode=True,
+        skip_context_files=True,
+        skip_memory=True,
+    )
+    prompt = a._build_system_prompt()
+    assert "You are a Kanban worker" not in prompt
+    assert "kanban_show()" not in prompt
+
+
+def test_kanban_guidance_in_worker_prompt(monkeypatch, tmp_path):
+    """A worker session (HERMES_KANBAN_TASK set) MUST have the full
+    lifecycle guidance in its system prompt."""
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_fake")
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    from pathlib import Path as _P
+    monkeypatch.setattr(_P, "home", lambda: tmp_path)
+
+    from tools.registry import invalidate_check_fn_cache
+    from model_tools import _clear_tool_defs_cache
+    invalidate_check_fn_cache()
+    _clear_tool_defs_cache()
+
+    from run_agent import AIAgent
+    a = AIAgent(
+        api_key="test",
+        base_url="https://openrouter.ai/api/v1",
+        quiet_mode=True,
+        skip_context_files=True,
+        skip_memory=True,
+    )
+    prompt = a._build_system_prompt()
+    # Header phrase (identity-free — SOUL.md owns identity, layer 3 is protocol)
+    assert "Kanban task execution protocol" in prompt
+    # Lifecycle signals
+    assert "kanban_show()" in prompt
+    assert "kanban_complete" in prompt
+    assert "kanban_block" in prompt
+    assert "kanban_create" in prompt
+    # Anti-shell guidance
+    assert "Do not shell out" in prompt or "tools — they work" in prompt
+
+
+def test_kanban_guidance_in_orchestrator_prompt_never_bootstraps_empty_show(
+    monkeypatch, tmp_path,
+):
+    """Explicit board access gets safe orchestration guidance, not worker
+    startup instructions."""
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "toolsets:\n  - kanban\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    from pathlib import Path as _P
+    monkeypatch.setattr(_P, "home", lambda: tmp_path)
+
+    from tools.registry import invalidate_check_fn_cache
+    from model_tools import _clear_tool_defs_cache
+    invalidate_check_fn_cache()
+    _clear_tool_defs_cache()
+
+    from run_agent import AIAgent
+    a = AIAgent(
+        api_key="test",
+        base_url="https://openrouter.ai/api/v1",
+        enabled_toolsets=["kanban"],
+        quiet_mode=True,
+        skip_context_files=True,
+        skip_memory=True,
+    )
+    prompt = a._build_system_prompt()
+    assert "kanban_show" in a.valid_tool_names
+    assert "Kanban orchestration protocol" in prompt
+    assert "not a dispatcher-assigned worker run" in prompt
+    assert "Call `kanban_show()` first" not in prompt
+    assert "without a concrete `task_id`" in prompt
+    assert "You have been assigned ONE task" not in prompt
+
+
+def test_kanban_guidance_prompt_size_bounded(monkeypatch, tmp_path):
+    """Sanity: the guidance block stays lean so it doesn't blow up the
+    cached prompt.
+
+    The ceiling guards against unbounded growth, not against any growth.
+    The block absorbed the load-bearing worker/orchestrator reference
+    details (workspace kinds, deliverable artifacts, created-card claims,
+    profile discovery) when the standalone kanban-worker / kanban-orchestrator
+    skills were removed and folded into this always-injected guidance, so the
+    ceiling is sized to fit that content with a little headroom.
+    """
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_fake")
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    from pathlib import Path as _P
+    monkeypatch.setattr(_P, "home", lambda: tmp_path)
+
+    from agent.prompt_builder import (
+        KANBAN_GUIDANCE,
+        KANBAN_ORCHESTRATOR_GUIDANCE,
+        KANBAN_WORKER_GUIDANCE,
+    )
+    assert KANBAN_GUIDANCE == KANBAN_WORKER_GUIDANCE
+    assert 1_500 < len(KANBAN_WORKER_GUIDANCE) < 5_500, (
+        "KANBAN_WORKER_GUIDANCE is "
+        f"{len(KANBAN_WORKER_GUIDANCE)} chars — too short (missing?) or too long"
+    )
+    assert 300 < len(KANBAN_ORCHESTRATOR_GUIDANCE) < 1_500, (
+        "KANBAN_ORCHESTRATOR_GUIDANCE is "
+        f"{len(KANBAN_ORCHESTRATOR_GUIDANCE)} chars — too short or too long"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Worker task-ownership enforcement (regression tests for #19534)

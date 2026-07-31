@@ -255,6 +255,7 @@ def build_bundle_invocation_message(
     user_instruction: str = "",
     task_id: str | None = None,
     platform: str | None = None,
+    enabled_skills: set[str] | list[str] | None = None,
 ) -> Optional[Tuple[str, List[str], List[str]]]:
     """Build the user message content for a bundle slash command invocation.
 
@@ -290,6 +291,17 @@ def build_bundle_invocation_message(
         disabled_names = get_disabled_skill_names(platform=platform)
     except Exception:
         disabled_names = set()
+
+    # Whole-bundle rejection is intentional: a configured topic must never
+    # inject a subset after a blocked member has been examined or loaded.
+    if enabled_skills is not None:
+        from gateway.skill_policy import canonical_skill_identity
+        try:
+            blocked = [str(skill) for skill in info["skills"] if canonical_skill_identity(skill) not in set(enabled_skills)]
+        except ValueError:
+            blocked = [str(skill) for skill in info["skills"]]
+        if blocked:
+            return None
 
     loaded_names: List[str] = []
     missing: List[str] = []

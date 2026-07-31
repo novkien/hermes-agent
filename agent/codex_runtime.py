@@ -1271,6 +1271,12 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
         def _open_codex_stream(next_api_kwargs: dict[str, Any]):
             stream_kwargs = dict(next_api_kwargs)
             stream_kwargs["stream"] = True
+            recorder = getattr(agent, "_record_provider_request_payload", None)
+            if callable(recorder):
+                recorder(
+                    stream_kwargs,
+                    transport="openai.responses.create",
+                )
             return active_client.responses.create(**stream_kwargs)
 
         def _codex_stream_created(_raw_stream: Any) -> None:

@@ -306,7 +306,7 @@ def decompose_task(
     user_msg = _USER_TEMPLATE.format(
         task_id=task.id,
         title=_truncate(task.title or "", 400),
-        body=_truncate(task.body or "(no body)", 4000),
+        body=_truncate(task.body or "(no body)", 50000),
         roster=_format_roster(roster),
         default_assignee=default_assignee,
     )

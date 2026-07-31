@@ -623,6 +623,29 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
     return None
 
 
+_SKILL_MD_GUARD_MSG = (
+    "Editing skill files with write_file/patch is blocked. "
+    "Use skill_manage (action='patch'|'edit'|'create'|'delete') instead. "
+    "only skill_manager accepted for skill edit"
+)
+
+
+def _check_skill_file_guard(filepath: str, task_id: str = "default") -> str | None:
+    """Return error message if path targets a skill SKILL.md or references/*.md file."""
+    try:
+        resolved = str(_resolve_path_for_task(filepath, task_id))
+    except (OSError, ValueError):
+        resolved = filepath
+    normalized = os.path.normpath(_expand_tilde(filepath))
+
+    # Check both resolved and normalized paths
+    for p in (resolved, normalized):
+        if "/skills/" in p:
+            if p.endswith("SKILL.md") or ("/references/" in p and p.endswith(".md")):
+                return _SKILL_MD_GUARD_MSG
+    return None
+
+
 def _get_container_mirror_prefix_for_task(task_id: str = "default") -> str | None:
     """Return the container-side Hermes mirror prefix for Docker file tools."""
     try:
@@ -1576,6 +1599,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
+    skill_err = _check_skill_file_guard(path, task_id)
+    if skill_err:
+        return tool_error(skill_err)
     if not cross_profile:
         cross_warning = _check_cross_profile_path(path, task_id)
         if cross_warning:
@@ -1704,6 +1730,9 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
+        skill_err = _check_skill_file_guard(_p, task_id)
+        if skill_err:
+            return tool_error(skill_err)
         if not cross_profile:
             cross_warning = _check_cross_profile_path(_p, task_id)
             if cross_warning:

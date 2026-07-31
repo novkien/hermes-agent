@@ -4678,10 +4678,38 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         gateway_fleet_restart_incomplete = False
 
+        class _SkipGatewayRestart(Exception):
+            """Internal control flow for the active-session safety gate."""
+
         # Auto-restart ALL gateways after update.
         # The code update (git pull) is shared across all profiles, so every
         # running gateway needs restarting to pick up the new code.
         try:
+            # Restarting a gateway with live sessions kills their in-flight
+            # turns. Keep the updated files in place, surface an incomplete
+            # fleet result, and let the operator restart once the sessions end.
+            try:
+                from hermes_cli.active_sessions import (
+                    active_session_registry_snapshot,
+                )
+
+                active_sessions = active_session_registry_snapshot()
+            except Exception:
+                active_sessions = []
+            if active_sessions:
+                print()
+                print(f"⚠ {len(active_sessions)} active Hermes session(s) detected")
+                print(
+                    "  Gateway restart skipped — existing sessions would be "
+                    "interrupted."
+                )
+                print(
+                    "  Restart manually after sessions complete: "
+                    "hermes gateway restart"
+                )
+                gateway_fleet_restart_incomplete = True
+                raise _SkipGatewayRestart
+
             from hermes_cli.gateway import (
                 is_macos,
                 supports_systemd_services,
@@ -5353,6 +5381,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
             except Exception as _sweep_exc:
                 logger.debug("Post-restart survivor sweep failed: %s", _sweep_exc)
 
+        except _SkipGatewayRestart:
+            pass
         except Exception as e:
             logger.debug("Gateway restart during update failed: %s", e)
 

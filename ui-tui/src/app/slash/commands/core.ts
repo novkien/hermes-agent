@@ -711,11 +711,17 @@ export const coreCommands: SlashCommand[] = [
                 `steer queued — arrives after next tool call: "${payload.slice(0, 50)}${payload.length > 50 ? '…' : ''}"`
               )
             } else {
-              ctx.transcript.sys('steer rejected')
+              ctx.composer.enqueue(payload)
+              ctx.transcript.sys('steer rejected — message queued for next turn')
             }
           })
         )
-        .catch(ctx.guardedErr)
+        .catch(
+          ctx.guarded(() => {
+            ctx.composer.enqueue(payload)
+            ctx.transcript.sys('steer failed — message queued for next turn')
+          })
+        )
     }
   },
 

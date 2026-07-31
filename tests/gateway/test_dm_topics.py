@@ -475,6 +475,256 @@ def test_group_topic_skill_binding_second_topic():
     assert event.source.chat_topic == "Sales"
 
 
+def test_group_topic_no_skill_binding():
+    """Group topic without a skill key should have auto_skill=None but set chat_topic."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": -1001234567890,
+            "topics": [
+                {"name": "General", "thread_id": 1},
+            ],
+        }
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=1,
+        text="hey",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic == "General"
+
+
+def test_group_topic_unmapped_thread_id():
+    """Thread ID not in config should fall through — no skill, no topic name."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": -1001234567890,
+            "topics": [
+                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
+            ],
+        }
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=999,
+        text="random",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic is None
+
+
+def test_group_topic_cross_thread_inherits_canonical_skill_without_aliasing_source():
+    """A Room child borrows config while retaining its physical thread ID."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": -1001234567890,
+            "topics": [
+                {
+                    "name": "CEO",
+                    "thread_id": 32857,
+                    "skills": ["agent2agent-ceo-operation"],
+                    "cross_thread": [70678, "70680"],
+                },
+            ],
+        }
+    ])
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=70678,
+        text="room task",
+        is_topic_message=True,
+        is_forum=True,
+    )
+
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill == ["agent2agent-ceo-operation"]
+    assert event.source.chat_topic == "CEO"
+    assert event.source.thread_id == "70678"
+
+
+def test_group_topic_unmapped_chat_id():
+    """Chat ID not in group_topics config should fall through silently."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": -1001234567890,
+            "topics": [
+                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
+            ],
+        }
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1009999999999,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=5,
+        text="wrong group",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic is None
+
+
+def test_group_topic_no_config():
+    """No group_topics config at all should be fine — no skill, no topic."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter()  # no group_topics_config
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890, chat_type=_ChatType.GROUP, thread_id=5, text="hi"
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic is None
+
+
+def test_group_topic_chat_id_int_string_coercion():
+    """chat_id as string in config should match integer chat.id via str() coercion."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {
+            "chat_id": "-1001234567890",  # string, not int
+            "topics": [
+                {"name": "Dev", "thread_id": "7", "skill": "hermes-agent-dev"},
+            ],
+        }
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=7,
+        text="test",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill == "hermes-agent-dev"
+    assert event.source.chat_topic == "Dev"
+
+
+def test_group_topic_mapping_shape_config():
+    """Operator-edited mapping shape {chat_id: [topics]} must resolve like the list shape."""
+    from gateway.platforms.base import MessageType
+
+    # Dict/mapping shape instead of the canonical list-of-entries shape.
+    adapter = _make_adapter(group_topics_config={
+        "-1001234567890": [
+            {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
+            {"name": "Sales", "thread_id": 12, "skill": "sales-framework"},
+        ],
+    })
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=12,
+        text="deal update",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill == "sales-framework"
+    assert event.source.chat_topic == "Sales"
+
+
+def test_group_topic_malformed_config_does_not_crash():
+    """Non-dict entries / non-list topics must be skipped, not raise AttributeError."""
+    from gateway.platforms.base import MessageType
+
+    # Junk list entries (str) are filtered out; a matching entry with a good
+    # topic still resolves; non-dict topic entries within it are skipped.
+    adapter = _make_adapter(group_topics_config=[
+        "not-a-dict",
+        {"chat_id": -1001234567890, "topics": ["also-not-a-dict",
+                                               {"name": "Good", "thread_id": 5}]},
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=5,
+        text="hi",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic == "Good"
+
+
+def test_group_topic_non_list_topics_does_not_crash():
+    """A matched entry whose topics is not a list must fall through, not raise."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=[
+        {"chat_id": -1001234567890, "topics": "oops-not-a-list"},
+    ])
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=5,
+        text="hi",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic is None
+
+
+def test_group_topic_scalar_config_falls_through():
+    """A scalar (int/str) group_topics value must fall through cleanly, not raise."""
+    from gateway.platforms.base import MessageType
+
+    adapter = _make_adapter(group_topics_config=42)
+
+    msg = _make_mock_message(
+        chat_id=-1001234567890,
+        chat_type=_ChatType.SUPERGROUP,
+        thread_id=5,
+        text="hi",
+        is_topic_message=True,
+        is_forum=True,
+    )
+    event = adapter._build_message_event(msg, MessageType.TEXT)
+
+    assert event.auto_skill is None
+    assert event.source.chat_topic is None
+
+
 # ── _build_message_event: from_user=None fallback in DMs ──
 
 

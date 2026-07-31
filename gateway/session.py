@@ -315,6 +315,10 @@ class SessionContext:
     session_id: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # Model and provider (resolved at runtime, set externally)
+    model: str = ""
+    provider: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -328,6 +332,8 @@ class SessionContext:
             "session_id": self.session_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "model": self.model,
+            "provider": self.provider,
         }
 
 
@@ -561,6 +567,21 @@ def build_session_context_prompt(
             uid = _hash_sender_id(uid)
         lines.append(f"**User ID:** {_format_untrusted_prompt_value(uid)}")
 
+    # Session identity metadata lives in this cache-stable context block.
+    # Session_ID is the durable conversation identifier used by session tools;
+    # Thread_ID and Chat_ID are source-native routing fields. Model and Provider
+    # are resolved at runtime before this prompt is built.
+    _chat_id = _hash_chat_id(context.source.chat_id) if redact_pii else context.source.chat_id
+    if context.session_id:
+        lines.append(f"**Session_ID:** `{context.session_id}`")
+    lines.append(f"**Thread_ID:** `{context.source.thread_id or ''}`")
+    lines.append(f"**Chat_ID:** `{_format_untrusted_prompt_value(_chat_id)}`")
+    lines.append(f"**Platform:** `{context.source.platform.value}`")
+    if context.model:
+        lines.append(f"**Model:** `{context.model}`")
+    if context.provider:
+        lines.append(f"**Provider:** `{context.provider}`")
+
     # Platform-specific behavioral notes
     if context.source.platform == Platform.SLACK:
         # Inject the Slack capability note only when the agent actually has
@@ -672,16 +693,6 @@ def build_session_context_prompt(
             platforms_list.append(f"{p.value}: Connected ✓")
 
     lines.append(f"**Connected Platforms:** {', '.join(platforms_list)}")
-
-    # Home channels
-    if context.home_channels:
-        lines.append("")
-        lines.append("**Home Channels (default destinations):**")
-        for platform, home in context.home_channels.items():
-            hc_id = _hash_chat_id(home.chat_id) if redact_pii else home.chat_id
-            safe_name = _format_untrusted_prompt_value(home.name)
-            safe_id = _format_untrusted_prompt_value(hc_id)
-            lines.append(f"  - {platform.value}: {safe_name} (ID: {safe_id})")
 
     # Delivery options for scheduled tasks
     lines.append("")
@@ -823,6 +834,13 @@ class SessionEntry:
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
 
+    # Durable exact-turn marker. Set immediately before the gateway enters
+    # AIAgent.run_conversation() and cleared in that call's finally block.
+    # A hard process death leaves it behind so the next gateway boot can
+    # recover this specific session instead of guessing from updated_at.
+    turn_in_flight: bool = False
+    turn_in_flight_marked_at: Optional[datetime] = None
+
     # Session-scoped /model override (model/provider/base_url ONLY — never
     # credentials).  ``_session_model_overrides`` in the gateway runner is
     # in-memory, so before this field a gateway restart silently reverted
@@ -859,6 +877,12 @@ class SessionEntry:
                 if self.last_resume_marked_at
                 else None
             ),
+            "turn_in_flight": self.turn_in_flight,
+            "turn_in_flight_marked_at": (
+                self.turn_in_flight_marked_at.isoformat()
+                if self.turn_in_flight_marked_at
+                else None
+            ),
             "is_fresh_reset": self.is_fresh_reset,
             "was_auto_reset": self.was_auto_reset,
             "auto_reset_reason": self.auto_reset_reason,
@@ -893,6 +917,14 @@ class SessionEntry:
                 last_resume_marked_at = datetime.fromisoformat(_lrma)
             except (TypeError, ValueError):
                 last_resume_marked_at = None
+
+        turn_in_flight_marked_at = None
+        _tifma = data.get("turn_in_flight_marked_at")
+        if _tifma:
+            try:
+                turn_in_flight_marked_at = datetime.fromisoformat(_tifma)
+            except (TypeError, ValueError):
+                turn_in_flight_marked_at = None
 
         session_key = data["session_key"]
         session_id = data["session_id"]
@@ -936,6 +968,8 @@ class SessionEntry:
             resume_pending=data.get("resume_pending", False),
             resume_reason=data.get("resume_reason"),
             last_resume_marked_at=last_resume_marked_at,
+            turn_in_flight=data.get("turn_in_flight", False),
+            turn_in_flight_marked_at=turn_in_flight_marked_at,
             is_fresh_reset=data.get("is_fresh_reset", False),
             was_auto_reset=data.get("was_auto_reset", False),
             auto_reset_reason=data.get("auto_reset_reason"),
@@ -1360,7 +1394,14 @@ class SessionStore:
                 if row is not None and row.get("end_reason") is not None:
                     recovered_entry = None
                     recovery_lookup_failed = False
-                    if entry.origin is not None:
+                    # Only compression is a continuation boundary. Explicit
+                    # boundaries such as session_reset/new_command must prune
+                    # the stale route; searching past them can resurrect an
+                    # unrelated older live row for the same messaging peer.
+                    if (
+                        row.get("end_reason") == "compression"
+                        and entry.origin is not None
+                    ):
                         try:
                             recovered_entry = self._recover_session_from_db(
                                 session_key=key,
@@ -2029,6 +2070,26 @@ class SessionStore:
         Sessions with active background processes are never reset.
         """
         session_key = self._generate_session_key(source)
+
+        # Fast-path: force-reset marker file (agent2agent_force_reset tool)
+        force_reset_file = self.sessions_dir / "force_reset.json"
+        if force_reset_file.exists():
+            try:
+                markers = json.loads(force_reset_file.read_text())
+                if isinstance(markers, dict) and session_key in markers:
+                    del markers[session_key]
+                    if markers:
+                        force_reset_file.write_text(json.dumps(markers))
+                    else:
+                        force_reset_file.unlink(missing_ok=True)
+                    logger.info(
+                        "gateway.session: force reset for %s via force_reset.json",
+                        session_key,
+                    )
+                    return "idle"
+            except Exception:
+                pass
+
         if self._has_active_processes_safe(session_key, context="reset"):
             logger.debug(
                 "Session reset skipped for %s — active background processes",
@@ -2617,6 +2678,59 @@ class SessionStore:
             self._save()
             return True
 
+    def mark_turn_in_flight(self, session_key: str) -> bool:
+        """Persist that *session_key* is executing a model turn right now."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None:
+                return False
+            entry.turn_in_flight = True
+            entry.turn_in_flight_marked_at = _now()
+            self._save()
+            return True
+
+    def clear_turn_in_flight(self, session_key: str) -> bool:
+        """Clear the durable model-turn marker after the turn unwinds."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None or not entry.turn_in_flight:
+                return False
+            entry.turn_in_flight = False
+            entry.turn_in_flight_marked_at = None
+            self._save()
+            return True
+
+    def recover_interrupted_turns(self) -> int:
+        """Convert exact crash-left turn markers into resume-pending sessions.
+
+        ``updated_at`` is routing activity: loading, repairing, or touching an
+        idle session can refresh it. It is not evidence that a model turn was
+        running when the previous gateway died. The durable
+        ``turn_in_flight`` marker is set only around ``run_conversation()`` and
+        is the sole crash-recovery selector here.
+        """
+        count = 0
+        changed = False
+        with self._lock:
+            self._ensure_loaded_locked()
+            for entry in self._entries.values():
+                if not entry.turn_in_flight:
+                    continue
+                entry.turn_in_flight = False
+                entry.turn_in_flight_marked_at = None
+                changed = True
+                if entry.resume_pending or entry.suspended:
+                    continue
+                entry.resume_pending = True
+                entry.resume_reason = "restart_interrupted"
+                entry.last_resume_marked_at = _now()
+                count += 1
+            if changed:
+                self._save()
+        return count
+
     def prune_old_entries(self, max_age_days: int) -> int:
         """Drop SessionEntry records older than max_age_days.
 
@@ -2668,40 +2782,13 @@ class SessionStore:
         return len(removed_keys)
 
     def suspend_recently_active(self, max_age_seconds: int = 120) -> int:
-        """Mark recently-active sessions as resumable after an unexpected exit.
+        """Backward-compatible alias for exact interrupted-turn recovery.
 
-        Called on gateway startup after a crash or fast restart to preserve
-        in-flight sessions instead of destroying their conversation history
-        (#7536).  Only marks sessions updated within *max_age_seconds* to
-        avoid touching long-idle sessions.  Sets ``resume_pending=True`` so
-        the next incoming message on the same session_key auto-resumes from
-        the existing transcript.
-
-        Entries already flagged ``resume_pending=True`` are skipped.  Entries
-        explicitly ``suspended=True`` (from /stop or stuck-loop escalation)
-        are also skipped.  Terminal escalation for genuinely stuck sessions
-        is still handled by the existing ``.restart_failure_counts`` counter
-        (threshold 3), which runs after this method and sets ``suspended=True``.
-
-        Returns the number of sessions marked resumable.
+        ``max_age_seconds`` is intentionally ignored. Recent routing activity
+        is not proof that a model turn was in flight.
         """
-        from datetime import timedelta
-
-        cutoff = _now() - timedelta(seconds=max_age_seconds)
-        count = 0
-        with self._lock:
-            self._ensure_loaded_locked()
-            for entry in self._entries.values():
-                if entry.resume_pending:
-                    continue
-                if not entry.suspended and entry.updated_at >= cutoff:
-                    entry.resume_pending = True
-                    entry.resume_reason = "restart_interrupted"
-                    entry.last_resume_marked_at = _now()
-                    count += 1
-            if count:
-                self._save()
-        return count
+        del max_age_seconds
+        return self.recover_interrupted_turns()
 
     def reset_session(self, session_key: str, display_name: Optional[str] = None) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""

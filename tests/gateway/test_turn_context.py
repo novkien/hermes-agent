@@ -9,7 +9,10 @@ itself (that's covered by test_run_progress_topics.py et al.).
 """
 
 import asyncio
+import ast
+import inspect
 import queue as queue_mod
+import textwrap
 
 import pytest
 
@@ -54,6 +57,32 @@ class TestTurnRunner:
         assert callable(runner.progress_callback)
         assert asyncio.iscoroutinefunction(TurnRunner.send_progress_messages)
         assert runner._ctx is ctx
+
+    def test_run_agent_inner_does_not_shadow_extracted_run_sync(self):
+        """The extracted runner must remain the sole main-turn run_sync."""
+        from gateway.run import GatewayRunner
+
+        source = textwrap.dedent(inspect.getsource(GatewayRunner._run_agent_inner))
+        tree = ast.parse(source)
+        nested_run_sync = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "run_sync"
+        ]
+        assert nested_run_sync == []
+
+        delegates = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "run_sync"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "run_sync"
+        ]
+        assert len(delegates) == 1
 
     def test_send_progress_messages_no_queue_returns(self):
         ctx = TurnContext(progress_queue=None)

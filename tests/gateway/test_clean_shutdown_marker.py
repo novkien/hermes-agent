@@ -1,10 +1,11 @@
-"""Tests for the clean shutdown marker that prevents unwanted session auto-resets.
+"""Tests for clean-shutdown and exact interrupted-turn recovery.
 
 When the gateway shuts down gracefully (hermes update, gateway restart, /restart),
 it writes a .clean_shutdown marker.  On the next startup, if the marker exists,
-suspend_recently_active() is skipped so users don't lose their sessions.
+interrupted-turn recovery is skipped because all model calls drained cleanly.
 
-After a crash (no marker), suspension still fires as a safety net for stuck sessions.
+After a crash (no marker), only sessions with a durable in-flight turn marker
+are recovered.  Merely recent sessions must never be auto-resumed.
 """
 
 from datetime import datetime, timedelta
@@ -31,25 +32,53 @@ def _make_store(tmp_path, policy=None):
 
 
 # ---------------------------------------------------------------------------
-# SessionStore.suspend_recently_active
+# SessionStore.recover_interrupted_turns
 # ---------------------------------------------------------------------------
 
-class TestSuspendRecentlyActive:
-    """Verify suspend_recently_active only marks recent sessions."""
+class TestRecoverInterruptedTurns:
+    """Verify recovery marks only sessions whose model turn was interrupted."""
 
-    def test_suspends_recently_active_sessions(self, tmp_path):
+    def test_recovers_marked_in_flight_session(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
         assert not entry.suspended
+        assert store.mark_turn_in_flight(entry.session_key)
 
-        count = store.suspend_recently_active()
+        count = store.recover_interrupted_turns()
         assert count == 1
 
-        # Re-fetch — should be resume_pending (preserved, not wiped)
+        # Re-fetch — should be resume_pending (preserved, not wiped).
         refreshed = store.get_or_create_session(source)
         assert refreshed.resume_pending
-        assert refreshed.session_id == entry.session_id  # same session preserved
+        assert not refreshed.turn_in_flight
+        assert refreshed.session_id == entry.session_id
+
+    def test_does_not_recover_recent_idle_session(self, tmp_path):
+        store = _make_store(tmp_path)
+        source = _make_source()
+        store.get_or_create_session(source)
+
+        count = store.recover_interrupted_turns()
+        assert count == 0
+
+    def test_already_resume_pending_not_double_counted(self, tmp_path):
+        store = _make_store(tmp_path)
+        source = _make_source()
+        entry = store.get_or_create_session(source)
+        assert store.mark_turn_in_flight(entry.session_key)
+
+        # Recover once.
+        count1 = store.recover_interrupted_turns()
+        assert count1 == 1
+
+        # Re-fetch returns the same session (preserved, not reset).
+        entry2 = store.get_or_create_session(source)
+        assert entry2.session_id == entry.session_id
+
+        # The durable in-flight marker was consumed by the first recovery.
+        count2 = store.recover_interrupted_turns()
+        assert count2 == 0
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +86,7 @@ class TestSuspendRecentlyActive:
 # ---------------------------------------------------------------------------
 
 class TestCleanShutdownMarker:
-    """Test that the marker file controls session suspension on startup."""
+    """Test that the marker controls interrupted-turn recovery on startup."""
 
     def test_marker_written_on_graceful_stop(self, tmp_path, monkeypatch):
         """stop() should write .clean_shutdown marker."""
@@ -101,25 +130,56 @@ class TestCleanShutdownMarker:
 
         assert marker.exists(), ".clean_shutdown marker should exist after graceful stop"
 
+    def test_marker_skips_recovery_on_startup(self, tmp_path, monkeypatch):
+        """If .clean_shutdown exists, interrupted-turn recovery is skipped."""
+        monkeypatch.setattr("gateway.run._hermes_home", tmp_path)
 
-    def test_no_marker_triggers_suspension(self, tmp_path, monkeypatch):
-        """Without .clean_shutdown marker (crash), suspension should fire."""
+        # Create the marker
+        marker = tmp_path / ".clean_shutdown"
+        marker.touch()
+
+        # A stale marker would be harmless on clean shutdown because startup
+        # trusts the marker and does not run crash recovery.
+        store = _make_store(tmp_path)
+        source = _make_source()
+        entry = store.get_or_create_session(source)
+        assert store.mark_turn_in_flight(entry.session_key)
+        assert not entry.suspended
+
+        # Simulate what start() does:
+        if marker.exists():
+            marker.unlink()
+            # Should NOT call recover_interrupted_turns.
+        else:
+            store.recover_interrupted_turns()
+
+        # Session should not be selected for auto-resume.
+        with store._lock:
+            store._ensure_loaded_locked()
+            for e in store._entries.values():
+                assert not e.resume_pending
+
+        assert not marker.exists(), "Marker should be cleaned up"
+
+    def test_no_marker_recovers_exact_in_flight_session(self, tmp_path, monkeypatch):
+        """Without a clean marker, a durable in-flight turn is recovered."""
         monkeypatch.setattr("gateway.run._hermes_home", tmp_path)
 
         marker = tmp_path / ".clean_shutdown"
         assert not marker.exists()
 
-        # Create a store with a recently active session
+        # Simulate a process crash after the model turn marker was persisted.
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
+        assert store.mark_turn_in_flight(entry.session_key)
         assert not entry.suspended
 
         # Simulate what start() does:
         if marker.exists():
             marker.unlink()
         else:
-            store.suspend_recently_active()
+            store.recover_interrupted_turns()
 
         # Session SHOULD be resume_pending (crash recovery preserves history)
         with store._lock:
@@ -146,8 +206,9 @@ class TestResumePendingFreshnessGate:
 
     def _mark_resume_pending(self, store, source):
         """Put the session into resume_pending and return the entry."""
-        store.get_or_create_session(source)
-        count = store.suspend_recently_active()
+        entry = store.get_or_create_session(source)
+        assert store.mark_turn_in_flight(entry.session_key)
+        count = store.recover_interrupted_turns()
         assert count == 1
         with store._lock:
             entry = store._entries[store._generate_session_key(source)]

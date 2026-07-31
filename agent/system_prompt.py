@@ -34,19 +34,17 @@ from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
-    KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
-    OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
     PLATFORM_HINTS,
     SESSION_SEARCH_GUIDANCE,
-    SKILLS_GUIDANCE,
     STEER_CHANNEL_NOTE,
     TASK_COMPLETION_GUIDANCE,
     TELEGRAM_RICH_MESSAGES_HINT,
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
     drain_truncation_warnings,
+    resolve_kanban_guidance,
 )
 from agent.runtime_cwd import resolve_context_cwd
 from hermes_constants import get_hermes_home
@@ -186,6 +184,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts: List[str] = []
 
+    # Channel/thread role instructions must be part of the cached snapshot,
+    # not a request-only overlay. This makes the effective system prompt
+    # auditable in session logs and preserves the same bytes across normal,
+    # failover, restore, and compression paths.
+    _ephemeral = (getattr(agent, "ephemeral_system_prompt", None) or "").strip()
+    if _ephemeral:
+        stable_parts.append(_ephemeral)
+
     # Try SOUL.md as primary identity unless the caller explicitly skipped it.
     # Some execution modes (cron) still want HERMES_HOME persona while keeping
     # cwd project instructions disabled.
@@ -199,6 +205,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if not _soul_loaded:
         # Fallback to hardcoded identity
         stable_parts.append(DEFAULT_AGENT_IDENTITY)
+
+    # Auto-loaded skill payloads (from gateway channel/topic bindings).
+    # Rendered once when the AIAgent is constructed; stored on the agent.
+    _auto = getattr(agent, "_auto_loaded_skill_prompt", None)
+    if _auto:
+        stable_parts.append(_auto)
 
     # Pointer to the hermes-agent skill + docs for user questions about Hermes itself.
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
@@ -229,18 +241,26 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(MEMORY_GUIDANCE)
     if "session_search" in agent.valid_tool_names:
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
-    if "skill_manage" in agent.valid_tool_names:
-        tool_guidance.append(SKILLS_GUIDANCE)
-    # Kanban worker/orchestrator lifecycle — only present when the
-    # dispatcher spawned this process (kanban_show check_fn gates on
-    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
-    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
-    _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
+    # Kanban guidance is split by execution context. Dispatcher workers get
+    # worker lifecycle instructions; explicitly enabled interactive managers
+    # get orchestration guidance that forbids speculative/empty kanban_show.
+    # Older test/extension stubs may still expose _kanban_worker_guidance.
+    _missing_kanban_guidance = object()
+    _kanban_guidance = getattr(
+        agent, "_kanban_guidance", _missing_kanban_guidance,
+    )
+    if _kanban_guidance is _missing_kanban_guidance:
+        _kanban_guidance = getattr(
+            agent, "_kanban_worker_guidance", _missing_kanban_guidance,
+        )
+        if _kanban_guidance is None:
+            # Preserve the legacy fallback contract: None meant unresolved,
+            # while an empty string explicitly suppressed guidance.
+            _kanban_guidance = _missing_kanban_guidance
+    if _kanban_guidance is _missing_kanban_guidance:
+        _kanban_guidance = resolve_kanban_guidance(agent.valid_tool_names)
     if _kanban_guidance:
         tool_guidance.append(_kanban_guidance)
-    elif _kanban_guidance is None and "kanban_show" in agent.valid_tool_names:
-        # Fallback for code paths that bypass agent_init (rare).
-        tool_guidance.append(KANBAN_GUIDANCE)
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
 
@@ -288,13 +308,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             # paths, parallel tool calls, verify-before-edit, etc.)
             if "gemini" in _model_lower or "gemma" in _model_lower:
                 stable_parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
-            # OpenAI GPT/Codex execution discipline (tool persistence,
-            # prerequisite checks, verification, anti-hallucination).
-            # Also applied to xAI Grok — same failure modes (claims completion
-            # without tool calls, suggests workarounds instead of using
-            # existing tools, replies with plans instead of executing).
-            if "gpt" in _model_lower or "codex" in _model_lower or "grok" in _model_lower:
-                stable_parts.append(OPENAI_MODEL_EXECUTION_GUIDANCE)
 
     has_skills_tools = any(name in agent.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
     if has_skills_tools:
@@ -322,6 +335,8 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             available_tools=agent.valid_tool_names,
             available_toolsets=avail_toolsets,
             compact_categories=_compact_cats or None,
+            thread_id=getattr(agent, '_thread_id', None),
+            enabled_skills=getattr(agent, '_enabled_skills', None),
         )
     else:
         skills_prompt = ""
@@ -528,15 +543,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # session resume without a stored prompt).  The model can still query the
     # exact wall-clock time via tools when it actually needs it.
     # Credit: @iamfoz (PR #20451).
-    timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y')}"
+    timestamp_line = f"Current date: {now.strftime('%A, %B %d, %Y')}"
     if agent.pass_session_id and agent.session_id:
         timestamp_line += f"\nSession ID: {agent.session_id}"
-    if agent.model:
-        timestamp_line += f"\nModel: {agent.model}"
-    if agent.provider:
-        timestamp_line += f"\nProvider: {agent.provider}"
-    if agent.platform:
-        timestamp_line += f"\nPlatform: {agent.platform}"
     volatile_parts.append(timestamp_line)
 
     return {
@@ -567,8 +576,12 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
 
     # Surface context-file truncation warnings through the normal agent status
     # channel so gateway/CLI users see them in chat instead of only in logs.
+    emit_status = getattr(agent, "_emit_status", None)
     for warning in drain_truncation_warnings():
-        agent._emit_status(warning)
+        if callable(emit_status):
+            emit_status(warning)
+        else:
+            logger.warning("%s", warning)
 
     return joined
 

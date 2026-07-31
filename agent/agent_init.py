@@ -517,6 +517,8 @@ def init_agent(
     checkpoint_max_file_size_mb: int = 10,
     pass_session_id: bool = False,
     requested_provider: str = None,
+    auto_loaded_skill_prompt: str = "",
+    enabled_skills: List[str] = None,
 ):
     """
     Initialize the AI Agent.
@@ -598,6 +600,26 @@ def init_agent(
     agent.skip_context_files = skip_context_files
     agent.load_soul_identity = load_soul_identity
     agent.pass_session_id = pass_session_id
+    agent._auto_loaded_skill_prompt = auto_loaded_skill_prompt
+    agent._enabled_skills = (
+        frozenset(str(name).strip() for name in enabled_skills if str(name).strip())
+        if enabled_skills is not None
+        else None
+    )
+    if agent._enabled_skills is not None:
+        from tools.skills_tool import _find_all_skills
+
+        discovered_skill_names = {
+            str(skill.get("name") or "").strip()
+            for skill in _find_all_skills()
+            if str(skill.get("name") or "").strip()
+        }
+        unknown_enabled_skills = sorted(agent._enabled_skills - discovered_skill_names)
+        if unknown_enabled_skills:
+            raise ValueError(
+                "Thread context policy error: unknown enabled_skills: "
+                + ", ".join(unknown_enabled_skills)
+            )
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""
     # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
@@ -780,6 +802,12 @@ def init_agent(
     # existing tool message rather than inserting a new user turn).
     agent._pending_steer: Optional[str] = None
     agent._pending_steer_lock = threading.Lock()
+    # True only while run_conversation owns a live delivery path for steers.
+    # The flag and _pending_steer are always read/written under the same lock:
+    # closing the window and draining its final payload must be one atomic
+    # operation, otherwise a late steer can be accepted after the last drain
+    # and disappear during gateway response delivery.
+    agent._steer_window_open = False
 
     # Active-turn redirect mechanism. A regular follow-up sent while the model
     # is generating is different from a hard /stop: preserve the valid turn
@@ -1430,16 +1458,12 @@ def init_agent(
     elif not agent.quiet_mode:
         print("🛠️  No tools loaded (all tools filtered out or unavailable)")
 
-    # Kanban worker/orchestrator lifecycle guidance is session-static:
-    # the dispatcher decides at spawn time whether this process is a kanban
-    # worker (kanban_show tool is present iff HERMES_KANBAN_TASK is set).
-    # Resolving the ~835-token block once here avoids re-running the
-    # membership test + reference on every system-prompt rebuild
-    # (init + each context compression).
-    from agent.prompt_builder import KANBAN_GUIDANCE
-    agent._kanban_worker_guidance = (
-        KANBAN_GUIDANCE if "kanban_show" in agent.valid_tool_names else ""
-    )
+    # Kanban guidance is session-static. Tool visibility means the caller was
+    # intentionally granted board capabilities; dispatcher ownership is a
+    # separate HERMES_KANBAN_TASK signal and receives worker-only lifecycle
+    # instructions. Resolving once here keeps prompt rebuilds byte-stable.
+    from agent.prompt_builder import resolve_kanban_guidance
+    agent._kanban_guidance = resolve_kanban_guidance(agent.valid_tool_names)
 
     # Check tool requirements
     if agent.tools and not agent.quiet_mode:
@@ -1551,6 +1575,11 @@ def init_agent(
     # marker is attached to each in-memory message dict, so its test-and-append
     # sequence must be serialized per agent rather than relying on SQLite alone.
     agent._session_persist_lock = threading.RLock()
+    # Provider-bound payload snapshots are written from request worker threads.
+    # Keep the current logical API-request identity and its transport-attempt
+    # counter synchronized without coupling it to transcript persistence.
+    agent._provider_request_log_lock = threading.Lock()
+    agent._provider_request_log_context = None
     # CLI retains its just-accepted user dict until turn setup can reuse it.
     # This preserves the message-local durable marker if close persistence wins
     # the race before the agent's normal early turn flush.

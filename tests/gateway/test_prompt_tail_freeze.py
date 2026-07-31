@@ -66,6 +66,7 @@ def _make_context(
     guild_id: str | None = "777888999",
     message_id: str | None = "1357",
     shared_multi_user: bool = False,
+    session_id: str = "session-1",
     connected: list[Platform] | None = None,
     home_channels: dict | None = None,
 ) -> SessionContext:
@@ -94,6 +95,7 @@ def _make_context(
         connected_platforms=connected,
         home_channels=home_channels,
         shared_multi_user_session=shared_multi_user,
+        session_id=session_id,
     )
 
 
@@ -131,6 +133,7 @@ class TestEphemeralChangeKeyParity:
         ("user_name_cleared", dict(user_name=None)),
         ("user_id", dict(user_name=None, user_id="1234")),
         ("shared_multi_user", dict(shared_multi_user=True)),
+        ("session_id", dict(session_id="session-2")),
         ("guild_id", dict(guild_id="123123123")),
         ("parent_chat_id", dict(parent_chat_id="999000111")),
         ("chat_id", dict(chat_id="999999999", parent_chat_id="999999999")),

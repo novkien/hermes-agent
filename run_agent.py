@@ -503,6 +503,8 @@ class AIAgent:
         checkpoint_max_file_size_mb: int = 10,
         pass_session_id: bool = False,
         requested_provider: str = None,
+        auto_loaded_skill_prompt: str = "",
+        enabled_skills: List[str] = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:
@@ -586,6 +588,8 @@ class AIAgent:
             checkpoint_max_total_size_mb=checkpoint_max_total_size_mb,
             checkpoint_max_file_size_mb=checkpoint_max_file_size_mb,
             pass_session_id=pass_session_id,
+            auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+            enabled_skills=enabled_skills,
         )
 
     def _get_session_db_for_recall(self):
@@ -634,6 +638,7 @@ class AIAgent:
                 model=self.model,
                 model_config=self._session_init_model_config,
                 system_prompt=self._cached_system_prompt,
+                session_key=getattr(self, "_gateway_session_key", None),
                 user_id=None,
                 parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source),
@@ -2748,6 +2753,180 @@ class AIAgent:
             }
         )
 
+    @classmethod
+    def _provider_payload_jsonable(cls, value: Any, _seen: Optional[set] = None) -> Any:
+        """Normalize one provider body losslessly enough for JSON persistence.
+
+        Unlike hook payloads this has no size, depth, or sequence truncation.
+        Provider request bodies are expected to be acyclic JSON structures;
+        SDK model objects are expanded using their public serialization APIs.
+        """
+        if _seen is None:
+            _seen = set()
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                return str(value)
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            return {
+                "_encoding": "base64",
+                "data": base64.b64encode(bytes(value)).decode("ascii"),
+            }
+
+        track_identity = isinstance(value, (dict, list, tuple, set)) or hasattr(
+            value, "__dict__"
+        )
+        value_id = id(value)
+        if track_identity:
+            if value_id in _seen:
+                raise ValueError("cyclic value in provider request payload")
+            _seen.add(value_id)
+        try:
+            if isinstance(value, dict):
+                return {
+                    str(key): cls._provider_payload_jsonable(item, _seen)
+                    for key, item in value.items()
+                }
+            if isinstance(value, (list, tuple)):
+                return [
+                    cls._provider_payload_jsonable(item, _seen) for item in value
+                ]
+            if isinstance(value, set):
+                return [
+                    cls._provider_payload_jsonable(item, _seen)
+                    for item in sorted(value, key=repr)
+                ]
+            if isinstance(value, Path):
+                return str(value)
+            if hasattr(value, "model_dump"):
+                try:
+                    dumped = value.model_dump(mode="json")
+                except TypeError:
+                    dumped = value.model_dump()
+                return cls._provider_payload_jsonable(dumped, _seen)
+            try:
+                from dataclasses import asdict, is_dataclass
+
+                if is_dataclass(value):
+                    return cls._provider_payload_jsonable(asdict(value), _seen)
+            except Exception:
+                pass
+            if isinstance(value, SimpleNamespace):
+                return cls._provider_payload_jsonable(vars(value), _seen)
+            if hasattr(value, "value") and isinstance(
+                getattr(value, "value"), (str, int, float, bool)
+            ):
+                return getattr(value, "value")
+            if hasattr(value, "__dict__"):
+                return cls._provider_payload_jsonable(
+                    {
+                        key: item
+                        for key, item in vars(value).items()
+                        if not str(key).startswith("_")
+                    },
+                    _seen,
+                )
+            return str(value)
+        finally:
+            if track_identity:
+                _seen.discard(value_id)
+
+    def _begin_provider_request_capture(
+        self,
+        *,
+        task_id: str,
+        turn_id: str,
+        api_request_id: str,
+        api_call_count: int,
+    ) -> Dict[str, Any]:
+        """Bind provider-bound transport attempts to one logical API request."""
+        context = {
+            "task_id": task_id,
+            "turn_id": turn_id,
+            "api_request_id": api_request_id,
+            "api_call_count": api_call_count,
+            "session_id": self.session_id or "",
+            "session_key": getattr(self, "_gateway_session_key", None),
+            "attempt": 0,
+        }
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if lock is None:
+            self._provider_request_log_lock = threading.Lock()
+            lock = self._provider_request_log_lock
+        with lock:
+            self._provider_request_log_context = context
+        return context
+
+    def _end_provider_request_capture(self, context: Dict[str, Any]) -> None:
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if lock is None:
+            return
+        with lock:
+            if getattr(self, "_provider_request_log_context", None) is context:
+                self._provider_request_log_context = None
+
+    def _record_provider_request_payload(
+        self, api_kwargs: Dict[str, Any], *, transport: str
+    ) -> Optional[int]:
+        """Best-effort durable capture immediately before an LLM SDK call."""
+        if getattr(self, "_persist_disabled", False):
+            return None
+        db = getattr(self, "_session_db", None)
+        lock = getattr(self, "_provider_request_log_lock", None)
+        if db is None or lock is None:
+            return None
+        with lock:
+            context = getattr(self, "_provider_request_log_context", None)
+            if not isinstance(context, dict):
+                return None
+            context["attempt"] = int(context.get("attempt") or 0) + 1
+            metadata = dict(context)
+
+        # These are SDK/client controls, not fields in the provider JSON body.
+        # Private ``__*`` adapter markers are likewise consumed before dispatch.
+        body = {
+            key: value
+            for key, value in api_kwargs.items()
+            if key not in {"timeout", "http_client", "extra_headers", "extra_query"}
+            and not str(key).startswith("__")
+        }
+        # OpenAI/Anthropic SDKs treat ``extra_body`` as fields to merge into
+        # the JSON object, not as a literal ``extra_body`` property on wire.
+        # Flatten it before persistence so the snapshot matches the provider-
+        # visible body rather than the Python SDK call signature.
+        extra_body = body.pop("extra_body", None)
+        if isinstance(extra_body, dict):
+            body.update(extra_body)
+        try:
+            if not getattr(self, "_session_db_created", False):
+                self._ensure_db_session()
+            payload = self._provider_payload_jsonable(body)
+            return db.append_llm_provider_request(
+                metadata["session_id"],
+                payload=payload,
+                transport=transport,
+                session_key=metadata.get("session_key"),
+                api_request_id=metadata.get("api_request_id"),
+                turn_id=metadata.get("turn_id"),
+                api_call_count=metadata.get("api_call_count"),
+                attempt=metadata["attempt"],
+                provider=self.provider,
+                model=self.model,
+                api_mode=self.api_mode,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Provider request payload capture failed "
+                "(session=%s request=%s transport=%s): %s",
+                metadata.get("session_id"),
+                metadata.get("api_request_id"),
+                transport,
+                exc,
+            )
+            return None
+
     def _api_response_payload_for_hook(
         self,
         response: Any,
@@ -3013,6 +3192,17 @@ class AIAgent:
             self._interrupt_message = message
             self._pending_redirect = None
 
+        # A hard interrupt ends the current turn's steer delivery window.
+        # Close it under the same lock used by steer() so a concurrent caller
+        # either commits before this point (and is intentionally superseded by
+        # the hard stop) or observes the closed window and can queue its text as
+        # a new turn. It must never receive a false-success acknowledgment.
+        _steer_lock = getattr(self, "_pending_steer_lock", None)
+        if _steer_lock is not None:
+            with _steer_lock:
+                self._steer_window_open = False
+                self._pending_steer = None
+
         # Codex app-server owns its model/tool loop and watches a private
         # interrupt event rather than Hermes' per-thread flag.
         if getattr(self, "api_mode", None) == "codex_app_server":
@@ -3091,6 +3281,9 @@ class AIAgent:
             with _redirect_lock:
                 if preserve_redirect and not self._pending_redirect:
                     return False
+                _clearing_hard_interrupt = bool(
+                    self._interrupt_requested and not preserve_redirect
+                )
                 self._interrupt_requested = False
                 self._interrupt_message = None
                 if not preserve_redirect:
@@ -3098,6 +3291,10 @@ class AIAgent:
         else:
             if preserve_redirect and not getattr(self, "_pending_redirect", None):
                 return False
+            _clearing_hard_interrupt = bool(
+                getattr(self, "_interrupt_requested", False)
+                and not preserve_redirect
+            )
             self._interrupt_requested = False
             self._interrupt_message = None
             if not preserve_redirect:
@@ -3126,10 +3323,11 @@ class AIAgent:
         # meant for the agent's next tool-call iteration, which will no
         # longer happen. Drop it instead of surprising the user with a
         # late injection on the post-interrupt turn.
-        _steer_lock = getattr(self, "_pending_steer_lock", None)
-        if _steer_lock is not None:
-            with _steer_lock:
-                self._pending_steer = None
+        if _clearing_hard_interrupt:
+            _steer_lock = getattr(self, "_pending_steer_lock", None)
+            if _steer_lock is not None:
+                with _steer_lock:
+                    self._pending_steer = None
         return True
 
     def steer(self, text: str) -> bool:
@@ -3148,7 +3346,9 @@ class AIAgent:
             text: The user text to inject. Empty strings are ignored.
 
         Returns:
-            True if the steer was accepted, False if the text was empty.
+            True if the live turn accepted the steer. False if the text was
+            empty or the turn no longer has a delivery boundary; callers must
+            queue the text as a new turn in that case.
         """
         if not text or not text.strip():
             return False
@@ -3158,15 +3358,56 @@ class AIAgent:
             # Test stubs that built AIAgent via object.__new__ skip __init__.
             # Fall back to direct attribute set; no concurrent callers expected
             # in those stubs.
+            if not getattr(self, "_steer_window_open", False):
+                return False
             existing = getattr(self, "_pending_steer", None)
             self._pending_steer = (existing + "\n" + cleaned) if existing else cleaned
             return True
         with _lock:
+            if not getattr(self, "_steer_window_open", False):
+                return False
             if self._pending_steer:
                 self._pending_steer = self._pending_steer + "\n" + cleaned
             else:
                 self._pending_steer = cleaned
         return True
+
+    def _open_steer_window(self) -> None:
+        """Allow the active conversation turn to accept mid-run steers."""
+        _lock = getattr(self, "_pending_steer_lock", None)
+        if _lock is None:
+            self._steer_window_open = True
+            return
+        with _lock:
+            self._steer_window_open = True
+
+    def _close_steer_window(self, *, drain: bool = True) -> Optional[str]:
+        """Atomically stop accepting steers and optionally drain the last one.
+
+        Linearizing the state change with the final drain guarantees that a
+        concurrent steer has exactly two outcomes: it is returned here for
+        delivery, or it is rejected and the calling surface queues it. There
+        is no accepted-but-undeliverable state.
+
+        ``drain=False`` is reserved for exceptional unwinds. It closes the
+        window but preserves already-accepted text on the cached agent so a
+        later turn can recover it instead of silently deleting it.
+        """
+        _lock = getattr(self, "_pending_steer_lock", None)
+        if _lock is None:
+            self._steer_window_open = False
+            if not drain:
+                return None
+            text = getattr(self, "_pending_steer", None)
+            self._pending_steer = None
+            return text
+        with _lock:
+            self._steer_window_open = False
+            if not drain:
+                return None
+            text = self._pending_steer
+            self._pending_steer = None
+        return text
 
     def redirect(self, text: str) -> bool:
         """Redirect the active turn without converting it into a new task.
@@ -5567,6 +5808,9 @@ class AIAgent:
             # parsed Message drops. No-ops on providers that don't send the
             # matching header families (x-ratelimit-* / x-nous-credits-*).
             on_response=self._capture_anthropic_response_headers,
+            on_request=lambda payload, transport: self._record_provider_request_payload(
+                payload, transport=transport
+            ),
         )
 
     def _rebuild_anthropic_client(self) -> None:
@@ -7240,20 +7484,51 @@ class AIAgent:
             # replaces the value with the live runtime after fallback restoration.
             # Keep the scope local instead of storing ContextVar tokens on the agent,
             # which may be observed from another thread.
-            with bind_subagent_parent(self), scoped_runtime_main({}):
-                result = run_conversation(
-                    self,
-                    user_message,
-                    system_message,
-                    conversation_history,
-                    effective_task_id,
-                    stream_callback,
-                    persist_user_message,
-                    persist_user_timestamp=persist_user_timestamp,
-                    persist_user_display_kind=persist_user_display_kind,
-                    persist_user_display_metadata=persist_user_display_metadata,
-                    moa_config=moa_config,
+            _open_steer_window = getattr(self, "_open_steer_window", None)
+            _close_steer_window = getattr(self, "_close_steer_window", None)
+            _owns_steer_window = (
+                callable(_open_steer_window)
+                and callable(_close_steer_window)
+            )
+            if _owns_steer_window:
+                _open_steer_window()
+            try:
+                with bind_subagent_parent(self), scoped_runtime_main({}):
+                    result = run_conversation(
+                        self,
+                        user_message,
+                        system_message,
+                        conversation_history,
+                        effective_task_id,
+                        stream_callback,
+                        persist_user_message,
+                        persist_user_timestamp=persist_user_timestamp,
+                        persist_user_display_kind=persist_user_display_kind,
+                        persist_user_display_metadata=persist_user_display_metadata,
+                        moa_config=moa_config,
+                    )
+            except BaseException:
+                # Preserve a steer accepted before an exceptional unwind. The
+                # cached agent can surface it on the next successful turn.
+                if _owns_steer_window:
+                    _close_steer_window(drain=False)
+                raise
+            else:
+                # Standard turns normally close in finalize_turn(). This
+                # second, idempotent close also covers early-return runtimes
+                # such as codex_app_server and any future sibling path.
+                _late_steer = (
+                    _close_steer_window()
+                    if _owns_steer_window
+                    else None
                 )
+                if _late_steer and isinstance(result, dict):
+                    _existing_steer = result.get("pending_steer")
+                    result["pending_steer"] = (
+                        f"{_existing_steer}\n{_late_steer}"
+                        if _existing_steer
+                        else _late_steer
+                    )
             terminal = result if isinstance(result, dict) else {}
             if terminal.get("interrupted") is True:
                 relay_outcome = "cancelled"

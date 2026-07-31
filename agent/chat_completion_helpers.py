@@ -75,6 +75,13 @@ def _ra():
     return run_agent
 
 
+def _record_provider_request(agent, payload: dict, transport: str) -> None:
+    """Capture one physical provider dispatch when the agent supports it."""
+    recorder = getattr(agent, "_record_provider_request_payload", None)
+    if callable(recorder):
+        recorder(payload, transport=transport)
+
+
 def estimate_request_context_tokens(api_payload: Any) -> int:
     """Estimate context/load tokens from an API payload, dict or messages list.
 
@@ -494,6 +501,7 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
         api_kwargs.pop("__bedrock_converse__", None)
         client = _get_bedrock_runtime_client(region)
         try:
+            _record_provider_request(agent, api_kwargs, "bedrock.converse")
             raw_response = client.converse(**api_kwargs)
         except Exception as _bedrock_exc:
             # Evict the cached client on stale-connection failures
@@ -506,8 +514,14 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
         # MoA is a virtual chat-completions provider backed by the
         # in-process MoAClient facade. Do not rebuild a request-local
         # OpenAI client from the virtual runtime metadata.
+        _record_provider_request(
+            agent, api_kwargs, "moa.chat.completions.create"
+        )
         return agent.client.chat.completions.create(**api_kwargs)
     request_client = make_client("chat_completion_request")
+    _record_provider_request(
+        agent, api_kwargs, "openai.chat.completions.create"
+    )
     return request_client.chat.completions.create(**api_kwargs)
 
 
@@ -2570,6 +2584,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     final_kwargs.pop("__bedrock_converse__", None)
                     client = _get_bedrock_runtime_client(region)
                     try:
+                        _record_provider_request(
+                            agent, final_kwargs, "bedrock.converse_stream"
+                        )
                         raw_response = client.converse_stream(**final_kwargs)
                     except Exception as _bedrock_exc:
                         # InvokeModel-only policies cannot open a stream. Keep
@@ -2587,6 +2604,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                                 "bedrock: converse_stream denied by IAM (%s) — "
                                 "using non-streaming converse() for this session.",
                                 type(_bedrock_exc).__name__,
+                            )
+                            _record_provider_request(
+                                agent, final_kwargs, "bedrock.converse"
                             )
                             return normalize_converse_response(
                                 client.converse(**final_kwargs)
@@ -3053,6 +3073,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             attempt_request_client["value"] = request_client
             last_chunk_time["t"] = time.time()
             agent._touch_activity("waiting for provider response (streaming)")
+            _record_provider_request(
+                agent, stream_kwargs, "openai.chat.completions.create"
+            )
             return request_client.chat.completions.create(**stream_kwargs)
 
         def _stream_created(raw_stream: Any) -> None:
@@ -3536,6 +3559,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             sanitize_anthropic_kwargs(
                 final_kwargs,
                 log_prefix=getattr(agent, "log_prefix", ""),
+            )
+            _record_provider_request(
+                agent,
+                {**final_kwargs, "stream": True},
+                "anthropic.messages.stream",
             )
             manager = request_client.messages.stream(**final_kwargs)
             _stream_context["manager"] = manager

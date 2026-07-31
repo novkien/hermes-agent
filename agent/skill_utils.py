@@ -676,6 +676,7 @@ def extract_skill_conditions(frontmatter: Dict[str, Any]) -> Dict[str, List]:
         "requires_toolsets": hermes.get("requires_toolsets", []),
         "fallback_for_tools": hermes.get("fallback_for_tools", []),
         "requires_tools": hermes.get("requires_tools", []),
+        "compact_threads": hermes.get("compact_threads", []),
     }
 
 
@@ -840,13 +841,9 @@ def _normalize_skill_description(frontmatter: Dict[str, Any]) -> str:
 
 
 def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
-    """Extract a system-prompt-length description from parsed frontmatter."""
+    """Extract full description from parsed frontmatter (no truncation)."""
     desc = _normalize_skill_description(frontmatter)
-    if not desc:
-        return ""
-    if len(desc) > SKILL_PROMPT_DESC_LIMIT:
-        return desc[:SKILL_PROMPT_DESC_LIMIT - 3] + "..."
-    return desc
+    return desc  # Return full description, truncation removed
 
 
 def is_skill_description_truncated_for_prompt(frontmatter: Dict[str, Any]) -> bool:

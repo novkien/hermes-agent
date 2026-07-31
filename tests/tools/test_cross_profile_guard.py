@@ -9,6 +9,11 @@ This file tests that the tool surfaces:
   3. Continue to accept in-profile writes normally.
   4. skill_manage's "not found" error names other profiles where the
      skill exists.
+
+Note: SKILL.md and references/*.md files under /skills/ are now blocked by
+the skill-file guard (_check_skill_file_guard), which fires BEFORE the
+cross-profile guard.  Cross-profile tests that target SKILL.md now assert
+the skill-guard error instead of the cross-profile error.
 """
 from __future__ import annotations
 
@@ -27,6 +32,10 @@ def fake_hermes(tmp_path, monkeypatch):
     (root / "skills" / "shared-skill").mkdir(parents=True)
     (root / "skills" / "shared-skill" / "SKILL.md").write_text(
         "---\nname: shared-skill\ndescription: default copy.\n---\n"
+    )
+    # Non-protected file for cross-profile testing (not SKILL.md under skills/)
+    (root / "skills" / "shared-skill" / "config.json").write_text(
+        '{"version": 1}\n'
     )
 
     sec_home = root / "profiles" / "hermes-security"
@@ -59,21 +68,31 @@ def fake_hermes(tmp_path, monkeypatch):
 class TestWriteFileCrossProfileGuard:
     def test_in_profile_write_allowed(self, fake_hermes):
         from tools.file_tools import write_file_tool
+        target = fake_hermes["sec_home"] / "skills" / "new-skill" / "config.json"
+        target.parent.mkdir(parents=True)
+        result_json = write_file_tool(str(target), '{"version": 1}')
+        result = json.loads(result_json)
+        assert not result.get("error"), f"In-profile write should succeed: {result}"
+        assert target.exists()
+        assert target.read_text() == '{"version": 1}'
+
+    def test_in_profile_skill_md_now_blocked_by_skill_guard(self, fake_hermes):
+        """SKILL.md under /skills/ is now blocked by skill guard, even in-profile."""
+        from tools.file_tools import write_file_tool
         target = fake_hermes["sec_home"] / "skills" / "new-skill" / "SKILL.md"
         target.parent.mkdir(parents=True)
         result_json = write_file_tool(str(target), "in-profile content")
         result = json.loads(result_json)
-        assert not result.get("error"), f"In-profile write should succeed: {result}"
-        assert target.exists()
-        assert target.read_text() == "in-profile content"
+        assert result.get("error"), "In-profile SKILL.md write should be blocked"
+        assert "only skill_manager accepted for skill edit" in result["error"]
 
     def test_cross_profile_write_blocked_by_default(self, fake_hermes):
         """The May 2026 incident — security-profile session edits default
         profile's skill. Must be blocked."""
         from tools.file_tools import write_file_tool
-        target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "config.json"
         original = target.read_text()
-        result_json = write_file_tool(str(target), "OVERWRITTEN")
+        result_json = write_file_tool(str(target), '{"version": 2}')
         result = json.loads(result_json)
         assert result.get("error"), "Cross-profile write should be refused"
         assert "cross-profile" in result["error"].lower()
@@ -82,6 +101,40 @@ class TestWriteFileCrossProfileGuard:
         # File untouched.
         assert target.read_text() == original
 
+    def test_cross_profile_skill_md_blocked_by_skill_guard(self, fake_hermes):
+        """Cross-profile SKILL.md write is now blocked by skill guard first."""
+        from tools.file_tools import write_file_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
+        original = target.read_text()
+        result_json = write_file_tool(str(target), "OVERWRITTEN")
+        result = json.loads(result_json)
+        assert result.get("error"), "Cross-profile SKILL.md write should be blocked"
+        assert "only skill_manager accepted for skill edit" in result["error"]
+        assert target.read_text() == original
+
+    def test_cross_profile_True_bypass(self, fake_hermes):
+        """Explicit override after user direction must succeed (on non-protected path)."""
+        from tools.file_tools import write_file_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "config.json"
+        result_json = write_file_tool(
+            str(target), '{"version": 2}', cross_profile=True
+        )
+        result = json.loads(result_json)
+        assert not result.get("error"), f"cross_profile=True must succeed: {result}"
+        assert target.read_text() == '{"version": 2}'
+
+    def test_cross_profile_True_does_not_bypass_skill_guard(self, fake_hermes):
+        """Even cross_profile=True cannot bypass the skill-file guard."""
+        from tools.file_tools import write_file_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
+        original = target.read_text()
+        result_json = write_file_tool(
+            str(target), "user-directed override", cross_profile=True
+        )
+        result = json.loads(result_json)
+        assert result.get("error"), "cross_profile=True should NOT bypass skill guard"
+        assert "only skill_manager accepted for skill edit" in result["error"]
+        assert target.read_text() == original
 
     def test_non_hermes_path_unaffected(self, fake_hermes, tmp_path):
         from tools.file_tools import write_file_tool
@@ -101,6 +154,36 @@ class TestWriteFileCrossProfileGuard:
 class TestPatchCrossProfileGuard:
     def test_cross_profile_patch_blocked(self, fake_hermes):
         from tools.file_tools import patch_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "config.json"
+        original = target.read_text()
+        result_json = patch_tool(
+            mode="replace",
+            path=str(target),
+            old_string='"version": 1',
+            new_string='"version": 2',
+        )
+        result = json.loads(result_json)
+        assert result.get("error")
+        assert "cross-profile" in result["error"].lower()
+        assert target.read_text() == original
+
+    def test_cross_profile_patch_bypass(self, fake_hermes):
+        from tools.file_tools import patch_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "config.json"
+        result_json = patch_tool(
+            mode="replace",
+            path=str(target),
+            old_string='"version": 1',
+            new_string='"version": 999',
+            cross_profile=True,
+        )
+        result = json.loads(result_json)
+        assert not result.get("error"), f"cross_profile=True bypass: {result}"
+        assert target.read_text() == '{"version": 999}\n'
+
+    def test_skill_md_patch_blocked_by_skill_guard(self, fake_hermes):
+        """SKILL.md patching is blocked by skill guard, even with cross_profile=True."""
+        from tools.file_tools import patch_tool
         target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
         original = target.read_text()
         result_json = patch_tool(
@@ -111,10 +194,11 @@ class TestPatchCrossProfileGuard:
         )
         result = json.loads(result_json)
         assert result.get("error")
-        assert "cross-profile" in result["error"].lower()
+        assert "only skill_manager accepted for skill edit" in result["error"]
         assert target.read_text() == original
 
-    def test_cross_profile_patch_bypass(self, fake_hermes):
+    def test_skill_md_patch_bypass_blocked_by_skill_guard(self, fake_hermes):
+        """Even cross_profile=True cannot bypass skill guard for SKILL.md."""
         from tools.file_tools import patch_tool
         target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
         result_json = patch_tool(
@@ -125,12 +209,31 @@ class TestPatchCrossProfileGuard:
             cross_profile=True,
         )
         result = json.loads(result_json)
-        assert not result.get("error"), f"cross_profile=True bypass: {result}"
-        assert "user-directed update." in target.read_text()
+        assert result.get("error")
+        assert "only skill_manager accepted for skill edit" in result["error"]
 
     def test_v4a_patch_extracts_path_for_guard(self, fake_hermes):
         """V4A patches embed the target paths in the patch body, not in
         a ``path`` kwarg. The guard must still apply."""
+        from tools.file_tools import patch_tool
+        target = fake_hermes["root"] / "skills" / "shared-skill" / "config.json"
+        original = target.read_text()
+        v4a = (
+            "*** Begin Patch\n"
+            f"*** Update File: {target}\n"
+            "@@\n"
+            '-"version": 1\n'
+            '+"version": 2\n'
+            "*** End Patch"
+        )
+        result_json = patch_tool(mode="patch", patch=v4a)
+        result = json.loads(result_json)
+        assert result.get("error"), f"V4A cross-profile must block: {result}"
+        assert "cross-profile" in result["error"].lower()
+        assert target.read_text() == original
+
+    def test_v4a_skill_md_patch_blocked_by_skill_guard(self, fake_hermes):
+        """V4A patches targeting SKILL.md are blocked by the skill guard."""
         from tools.file_tools import patch_tool
         target = fake_hermes["root"] / "skills" / "shared-skill" / "SKILL.md"
         original = target.read_text()
@@ -144,8 +247,8 @@ class TestPatchCrossProfileGuard:
         )
         result_json = patch_tool(mode="patch", patch=v4a)
         result = json.loads(result_json)
-        assert result.get("error"), f"V4A cross-profile must block: {result}"
-        assert "cross-profile" in result["error"].lower()
+        assert result.get("error"), f"V4A skill-file must block: {result}"
+        assert "only skill_manager accepted for skill edit" in result["error"]
         assert target.read_text() == original
 
 

@@ -102,7 +102,7 @@ def _ephemeral_child_sql(alias: str = "s") -> str:
     )
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 25
 
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
@@ -215,6 +215,25 @@ CREATE TABLE IF NOT EXISTS messages (
     display_metadata TEXT
 );
 
+CREATE TABLE IF NOT EXISTS llm_provider_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    session_key TEXT,
+    api_request_id TEXT,
+    turn_id TEXT,
+    api_call_count INTEGER,
+    attempt INTEGER NOT NULL,
+    captured_at REAL NOT NULL,
+    provider TEXT,
+    model TEXT,
+    api_mode TEXT,
+    transport TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    payload_encoding TEXT NOT NULL DEFAULT 'full',
+    base_request_id INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS session_model_usage (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     model TEXT NOT NULL,
@@ -283,6 +302,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_llm_provider_requests_session
+    ON llm_provider_requests(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_llm_provider_requests_session_key
+    ON llm_provider_requests(session_key, id);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);

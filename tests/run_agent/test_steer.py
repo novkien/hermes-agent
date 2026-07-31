@@ -23,6 +23,7 @@ def _bare_agent() -> AIAgent:
     agent = object.__new__(AIAgent)
     agent._pending_steer = None
     agent._pending_steer_lock = threading.Lock()
+    agent._steer_window_open = True
     agent._pending_redirect = None
     agent._pending_redirect_lock = threading.Lock()
     agent._model_request_active = threading.Event()
@@ -54,6 +55,85 @@ class TestSteerAcceptance:
 
 
 
+    def test_rejects_non_empty_text_when_turn_window_is_closed(self):
+        agent = _bare_agent()
+        agent._close_steer_window()
+
+        assert agent.steer("too late") is False
+        assert agent._pending_steer is None
+
+
+class TestSteerTurnWindow:
+    def test_accepted_before_close_is_returned_for_next_turn(self):
+        agent = _bare_agent()
+
+        assert agent.steer("late correction") is True
+        assert agent._close_steer_window() == "late correction"
+        assert agent.steer("after close") is False
+
+    def test_close_and_steer_race_has_no_false_success_loss(self):
+        """A racing steer is either drained or rejected, never accepted-lost."""
+        for _ in range(100):
+            agent = _bare_agent()
+            start = threading.Barrier(3)
+            outcome = {}
+
+            def steer() -> None:
+                start.wait()
+                outcome["accepted"] = agent.steer("correction")
+
+            def close() -> None:
+                start.wait()
+                outcome["drained"] = agent._close_steer_window()
+
+            steer_thread = threading.Thread(target=steer)
+            close_thread = threading.Thread(target=close)
+            steer_thread.start()
+            close_thread.start()
+            start.wait()
+            steer_thread.join(timeout=1)
+            close_thread.join(timeout=1)
+
+            assert steer_thread.is_alive() is False
+            assert close_thread.is_alive() is False
+            assert (
+                outcome == {"accepted": True, "drained": "correction"}
+                or outcome == {"accepted": False, "drained": None}
+            )
+            assert agent._pending_steer is None
+
+    def test_exceptional_close_preserves_accepted_text_but_rejects_more(self):
+        agent = _bare_agent()
+        assert agent.steer("accepted before failure") is True
+
+        assert agent._close_steer_window(drain=False) is None
+        assert agent.steer("too late") is False
+        assert agent._pending_steer == "accepted before failure"
+
+        agent._open_steer_window()
+        assert agent._close_steer_window() == "accepted before failure"
+
+    def test_public_run_boundary_drains_early_return_runtime(self, monkeypatch):
+        """The AIAgent wrapper closes paths that bypass finalize_turn."""
+        agent = _bare_agent()
+        agent._steer_window_open = False
+
+        def early_return(active_agent, *_args, **_kwargs):
+            assert active_agent is agent
+            assert agent._steer_window_open is True
+            assert agent.steer("arrived during early-return runtime") is True
+            return {"final_response": "done"}
+
+        monkeypatch.setattr(
+            "agent.conversation_loop.run_conversation",
+            early_return,
+        )
+
+        result = agent.run_conversation("start")
+
+        assert result["pending_steer"] == "arrived during early-return runtime"
+        assert agent._steer_window_open is False
+        assert agent.steer("after return") is False
 
 class TestSteerDrain:
     def test_drain_returns_and_clears(self):
@@ -404,6 +484,15 @@ class TestSteerThreadSafety:
 
 
 class TestSteerClearedOnInterrupt:
+    def test_hard_interrupt_closes_window_before_later_steer(self):
+        agent = _bare_agent()
+
+        agent.interrupt("stop current turn")
+
+        assert agent._steer_window_open is False
+        assert agent.steer("arrived after stop") is False
+        assert agent._pending_steer is None
+
     def test_clear_interrupt_drops_pending_steer(self):
         """A hard interrupt supersedes any pending steer — the agent's
         next tool iteration won't happen, so delivering the steer later
@@ -424,6 +513,17 @@ class TestSteerClearedOnInterrupt:
         agent.clear_interrupt()
         assert agent._pending_steer is None
         assert agent._pending_redirect is None
+
+    def test_routine_preturn_clear_preserves_exceptional_leftover(self):
+        """A clear with no hard interrupt must not erase recovery text."""
+        agent = _bare_agent()
+        agent.steer("preserve after failed turn")
+        agent._close_steer_window(drain=False)
+        agent._interrupt_requested = False
+
+        agent.clear_interrupt()
+
+        assert agent._pending_steer == "preserve after failed turn"
 
 
 class TestPreApiCallSteerDrain:

@@ -1678,20 +1678,17 @@ class TelegramAdapter(BasePlatformAdapter):
     def _rich_eligible(self, content: str) -> bool:
         """Capability/content eligibility for rich, ignoring ``expect_edits``.
 
-        Shared core of :meth:`_should_attempt_rich` minus the per-call
-        ``expect_edits`` metadata gate.  The rich EDIT-finalize path
-        (:meth:`_try_edit_rich`) needs this: a streamed preview is sent with
-        ``expect_edits=True`` to stay on the editable path mid-stream, but the
-        FINAL edit should still upgrade to rich when the content warrants it.
+        Overridden for Jarvis: always uses rich path (removed the restrictive
+        ``_needs_rich_rendering`` and ``_has_telegram_desktop_cjk_rich_garble_shape``
+        gates so every message goes through sendRichMessage for clean rendering).
+        Crash guard for details+math is kept.
         """
         return bool(
             self._rich_delivery_enabled()
             and not getattr(self, "_rich_send_disabled", False)
             and content
             and content.strip()
-            and self._needs_rich_rendering(content)
             and not self._has_telegram_desktop_details_math_crash_shape(content)
-            and not self._has_telegram_desktop_cjk_rich_garble_shape(content)
             and self._content_fits_rich_limits(content)
             and self._bot_supports_rich()
         )
@@ -2039,7 +2036,6 @@ class TelegramAdapter(BasePlatformAdapter):
             and content
             and content.strip()
             and not self._has_telegram_desktop_details_math_crash_shape(content)
-            and not self._has_telegram_desktop_cjk_rich_garble_shape(content)
             and self._content_fits_rich_limits(content)
             and self._bot_supports_rich()
         )
@@ -9636,12 +9632,13 @@ class TelegramAdapter(BasePlatformAdapter):
         thread_id_str = self._effective_message_thread_id(message)
         chat_topic = None
         topic_skill = None
+        enabled_skills = None
 
         if chat_type == "dm" and thread_id_str:
             topic_info = self._get_dm_topic_info(str(chat.id), thread_id_str)
             if topic_info:
                 chat_topic = topic_info.get("name")
-                topic_skill = topic_info.get("skill")
+                topic_skill = topic_info.get("skills") or topic_info.get("skill")
 
             # Also check forum_topic_created service message for topic discovery
             if hasattr(message, "forum_topic_created") and message.forum_topic_created:
@@ -9657,32 +9654,25 @@ class TelegramAdapter(BasePlatformAdapter):
             #   [{"chat_id": "-100...", "topics": [...]}]
             # and legacy/operator-edited mapping shape:
             #   {"-100...": [{"thread_id": 12, ...}]}
-            group_topics_config = self.config.extra.get("group_topics", [])
-            if isinstance(group_topics_config, dict):
-                group_topics_iter = [
-                    {"chat_id": cfg_chat_id, "topics": topics}
-                    for cfg_chat_id, topics in group_topics_config.items()
-                ]
-            elif isinstance(group_topics_config, list):
-                group_topics_iter = [
-                    entry for entry in group_topics_config if isinstance(entry, dict)
-                ]
-            else:
-                group_topics_iter = []
-            for chat_entry in group_topics_iter:
-                if str(chat_entry.get("chat_id", "")) == str(chat.id):
-                    topics = chat_entry.get("topics", [])
-                    if not isinstance(topics, list):
-                        topics = []
-                    for topic in topics:
-                        if not isinstance(topic, dict):
-                            continue
-                        tid = topic.get("thread_id")
-                        if tid is not None and str(tid) == thread_id_str:
-                            chat_topic = topic.get("name")
-                            topic_skill = topic.get("skill")
-                            break
-                    break
+            from gateway.platforms.base import resolve_group_topic
+
+            topic = resolve_group_topic(
+                self.config.extra, str(chat.id), thread_id_str
+            )
+            if topic:
+                chat_topic = topic.get("name")
+                topic_skill = topic.get("skills") or topic.get("skill")
+                if "enabled_skills" in topic:
+                    raw_enabled_skills = topic.get("enabled_skills")
+                    if not isinstance(raw_enabled_skills, list) or not raw_enabled_skills or not all(
+                        isinstance(item, str) and item.strip()
+                        for item in raw_enabled_skills
+                    ):
+                        raise ValueError(
+                            "Invalid Telegram group topic enabled_skills policy: "
+                            "expected a non-empty list of skill names"
+                        )
+                    enabled_skills = [item.strip() for item in raw_enabled_skills]
 
         # Build source
         source = self.build_source(
@@ -9764,6 +9754,7 @@ class TelegramAdapter(BasePlatformAdapter):
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
             auto_skill=topic_skill,
+            enabled_skills=enabled_skills,
             channel_prompt=_channel_prompt,
             timestamp=message.date,
         )
@@ -10079,7 +10070,7 @@ def _apply_yaml_config(yaml_cfg: dict, telegram_cfg: dict) -> dict | None:
     _GENERIC_MERGE_KEYS = {
         "reply_prefix", "reply_in_thread", "reply_to_mode",
         "unauthorized_dm_behavior", "notice_delivery", "require_mention",
-        "channel_skill_bindings", "channel_prompts", "gateway_restart_notification",
+        "channel_skill_bindings", "gateway_restart_notification",
         "allow_from", "allow_admin_from", "dm_policy", "group_policy",
     }
     for _k, _v in _telegram_extra.items():
