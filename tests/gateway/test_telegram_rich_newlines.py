@@ -65,6 +65,12 @@ class TestRichMessageNewlineNormalization:
         # Single newlines converted to hard breaks
         assert "`/new` -- Start  \n`/model` -- Switch  \n`/reset` -- Reset" in md
 
+    def test_thematic_break_between_body_and_footer_is_preserved(self, adapter):
+        """The runtime-footer divider must reach Telegram as raw Markdown."""
+        content = "Body\n\n---\n\nnormal · 30.19K / 1M"
+
+        assert adapter._rich_message_payload(content)["markdown"] == content
+
 
 class TestRichMessageTableProtection:
     """Hard-break injection must not corrupt GFM tables (rendered natively)."""
@@ -75,4 +81,3 @@ class TestRichMessageTableProtection:
         md = adapter._rich_message_payload(content)["markdown"]
         assert "  \n" not in md
         assert md == content
-

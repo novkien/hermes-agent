@@ -18,7 +18,8 @@ and any gateway platform.
 The footer is appended to the final response text in ``gateway/run.py`` right
 before returning the response to the adapter send path — so it only lands on
 the final message a user sees, not on tool-progress updates or streaming
-partials.  When streaming is on and the final text has already been delivered
+partials.  Telegram uses a Markdown thematic break before same-message
+footers.  When streaming is on and the final text has already been delivered
 piecemeal, the footer is sent as a separate trailing message via
 ``send_trailing_footer()``.
 """
@@ -30,6 +31,16 @@ from typing import Any, Iterable, Optional
 
 _DEFAULT_FIELDS: tuple[str, ...] = ("model", "context_pct", "cwd")
 _SEP = " · "
+
+
+def append_runtime_footer(
+    response: str,
+    footer_line: str,
+    platform_key: str | None,
+) -> str:
+    """Append *footer_line* using the platform's same-message separator."""
+    separator = "\n\n---\n\n" if platform_key == "telegram" else "\n\n"
+    return f"{response}{separator}{footer_line}"
 
 
 def _home_relative_cwd(cwd: str) -> str:
@@ -145,8 +156,7 @@ def build_footer_line(
     """Top-level entry point used by gateway/run.py.
 
     Returns the footer text (empty string when disabled or no data).  Callers
-    append this to the final response themselves, preserving a single blank
-    line of separation.
+    append this to the final response with :func:`append_runtime_footer`.
     """
     cfg = resolve_footer_config(user_config, platform_key)
     if not cfg.get("enabled"):

@@ -17060,11 +17060,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # streaming already delivered the body, we can't mutate the sent
             # text, so we fire a separate trailing send below.
             _footer_line = ""
+            _footer_platform_key = _platform_config_key(source.platform)
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
                 _footer_line = _bfl(
                     user_config=_load_gateway_config(),
-                    platform_key=_platform_config_key(source.platform),
+                    platform_key=_footer_platform_key,
                     model=agent_result.get("model"),
                     context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
                     context_length=agent_result.get("context_length") or None,
@@ -17074,7 +17075,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("runtime_footer build failed: %s", _footer_err)
                 _footer_line = ""
             if _footer_line and response and not agent_result.get("already_sent") and not _intentional_silence:
-                response = f"{response}\n\n{_footer_line}"
+                from gateway.runtime_footer import append_runtime_footer as _append_footer
+                response = _append_footer(response, _footer_line, _footer_platform_key)
 
             # Emit agent:end hook
             await self.hooks.emit("agent:end", {

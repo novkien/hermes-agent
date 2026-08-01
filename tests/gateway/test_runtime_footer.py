@@ -10,6 +10,7 @@ import pytest
 from gateway.runtime_footer import (
     _home_relative_cwd,
     _model_short,
+    append_runtime_footer,
     build_footer_line,
     format_runtime_footer,
     resolve_footer_config,
@@ -40,6 +41,26 @@ def test_home_relative_cwd_collapses_home(tmp_path, monkeypatch):
     sub.mkdir(parents=True)
     result = _home_relative_cwd(str(sub))
     assert result == "~/projects/hermes"
+
+
+# ---------------------------------------------------------------------------
+# append_runtime_footer
+# ---------------------------------------------------------------------------
+
+
+def test_append_footer_uses_markdown_divider_for_telegram():
+    response = "Đang trực, Ông Chủ. Sẵn sàng nhận handoff .md để thực thi."
+    footer = "normal · 30.19K / 1M"
+
+    assert append_runtime_footer(response, footer, "telegram") == (
+        f"{response}\n\n---\n\n{footer}"
+    )
+
+
+def test_append_footer_preserves_blank_line_for_other_platforms():
+    assert append_runtime_footer("Reply", "normal · 30.19K / 1M", "discord") == (
+        "Reply\n\nnormal · 30.19K / 1M"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,5 +152,4 @@ def test_build_footer_per_platform_off_suppresses():
         cwd="/tmp",
     )
     assert out == ""
-
 
