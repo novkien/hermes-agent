@@ -3930,9 +3930,40 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 text=True, encoding="utf-8", errors="replace",
             )
             if pull_result.returncode != 0:
-                # ff-only failed — local and remote have diverged (e.g. upstream
-                # force-pushed or rebase).  Since local changes are already
-                # stashed, reset to match the remote exactly.
+                # ff-only failed — distinguish a remote rewrite from committed
+                # local divergence before considering the legacy reset fallback.
+                # The automatic stash above protects only uncommitted files;
+                # resetting a local-only commit would silently discard it.
+                local_only_result = subprocess.run(
+                    git_cmd + ["rev-list", "--count", f"origin/{branch}..HEAD"],
+                    cwd=_m().PROJECT_ROOT,
+                    capture_output=True,
+                    text=True, encoding="utf-8", errors="replace",
+                )
+                try:
+                    local_only_count = (
+                        int(local_only_result.stdout.strip())
+                        if local_only_result.returncode == 0
+                        else None
+                    )
+                except ValueError:
+                    local_only_count = None
+
+                if local_only_count is None:
+                    print(
+                        "✗ Fast-forward failed and committed local divergence could not "
+                        "be determined; refusing to reset the checkout."
+                    )
+                    sys.exit(1)
+                if local_only_count:
+                    print(
+                        "✗ Fast-forward failed: committed local divergence was preserved; "
+                        f"refusing to reset {local_only_count} local commit(s)."
+                    )
+                    sys.exit(1)
+
+                # No local-only commits exist, so this is the existing
+                # upstream-rewrite recovery path.
                 print(
                     "  ⚠ Fast-forward not possible (history diverged), resetting to match remote..."
                 )

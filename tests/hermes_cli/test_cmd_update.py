@@ -504,6 +504,119 @@ class TestCmdUpdateBranchFlag:
         assert "nonexistent" in out
 
 
+class TestCmdUpdateCommittedDivergence:
+    @staticmethod
+    def _git(cwd, *args):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        )
+
+    def test_failed_fast_forward_preserves_committed_local_divergence(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        """A failed ff-only merge must never reset local-only commits."""
+        from hermes_cli import main as hm
+        from hermes_cli import update_cmd
+
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setattr(hm, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(hm, "_run_pre_update_backup", lambda _args: None)
+        monkeypatch.setattr(hm, "_pause_windows_gateways_for_update", lambda: None)
+        monkeypatch.setattr(hm, "_get_origin_url", lambda *_args: "https://example.invalid/repo.git")
+        monkeypatch.setattr(hm, "_resolve_update_branch", lambda _args: "main")
+        monkeypatch.setattr(hm, "_stash_local_changes_if_needed", lambda *_args: None)
+        monkeypatch.setattr(update_cmd, "_discard_lockfile_churn", lambda *_args: None)
+        monkeypatch.setattr(update_cmd, "_normalize_managed_eol", lambda *_args: None)
+        monkeypatch.setattr(update_cmd, "_capture_head_sha", lambda *_args: "before-update")
+
+        commands = []
+
+        def fake_run(cmd, **_kwargs):
+            commands.append(cmd)
+            if cmd[-3:] == ["fetch", "origin", "main"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if cmd[-2:] == ["--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+            if cmd[-2:] == ["HEAD..origin/main", "--count"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+            if cmd[-3:] == ["merge", "--ff-only", "origin/main"]:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="not ff")
+            if cmd[-2:] == ["--count", "origin/main..HEAD"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+            raise AssertionError(f"unexpected subprocess invocation: {cmd}")
+
+        monkeypatch.setattr(update_cmd.subprocess, "run", fake_run)
+
+        with pytest.raises(SystemExit) as exc_info:
+            update_cmd._cmd_update_impl(SimpleNamespace(), gateway_mode=False)
+
+        assert exc_info.value.code == 1
+        assert any(
+            cmd[-2:] == ["--count", "origin/main..HEAD"]
+            for cmd in commands
+        )
+        assert not any(
+            cmd[-3:] == ["reset", "--hard", "origin/main"] for cmd in commands
+        )
+        assert "committed local divergence was preserved" in capsys.readouterr().out
+
+    def test_real_diverged_git_fixture_preserves_local_commit(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        """The exact update path leaves a real divergent fixture untouched."""
+        from hermes_cli import main as hm
+        from hermes_cli import update_cmd
+
+        origin = tmp_path / "origin.git"
+        local = tmp_path / "local"
+        remote = tmp_path / "remote"
+        self._git(None, "init", "--bare", "-q", str(origin))
+        self._git(None, "clone", "-q", str(origin), str(local))
+        for repo in (local,):
+            self._git(repo, "config", "user.name", "Fixture")
+            self._git(repo, "config", "user.email", "fixture@example.invalid")
+        (local / "state.txt").write_text("base\n")
+        self._git(local, "add", "state.txt")
+        self._git(local, "commit", "-qm", "base")
+        self._git(local, "branch", "-M", "main")
+        self._git(local, "push", "-qu", "origin", "main")
+        self._git(None, "--git-dir", str(origin), "symbolic-ref", "HEAD", "refs/heads/main")
+
+        self._git(None, "clone", "-q", str(origin), str(remote))
+        self._git(remote, "config", "user.name", "Fixture")
+        self._git(remote, "config", "user.email", "fixture@example.invalid")
+        with (remote / "state.txt").open("a") as state:
+            state.write("remote\n")
+        self._git(remote, "add", "state.txt")
+        self._git(remote, "commit", "-qm", "remote")
+        self._git(remote, "push", "-q", "origin", "main")
+
+        with (local / "state.txt").open("a") as state:
+            state.write("local\n")
+        self._git(local, "add", "state.txt")
+        self._git(local, "commit", "-qm", "local")
+        self._git(local, "fetch", "-q", "origin", "main")
+        head_before = self._git(local, "rev-parse", "HEAD").stdout.strip()
+
+        monkeypatch.setattr(hm, "PROJECT_ROOT", local)
+        monkeypatch.setattr(hm, "_run_pre_update_backup", lambda _args: None)
+        monkeypatch.setattr(hm, "_resolve_update_branch", lambda _args: "main")
+        monkeypatch.setattr(update_cmd, "_discard_lockfile_churn", lambda *_args: None)
+        monkeypatch.setattr(update_cmd, "_normalize_managed_eol", lambda *_args: None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            update_cmd._cmd_update_impl(SimpleNamespace(), gateway_mode=False)
+
+        assert exc_info.value.code == 1
+        assert self._git(local, "rev-parse", "HEAD").stdout.strip() == head_before
+        assert self._git(local, "rev-list", "--count", "origin/main..HEAD").stdout.strip() == "1"
+        assert not any(
+            entry.startswith("reset:")
+            for entry in self._git(local, "reflog", "--format=%gs").stdout.splitlines()
+        )
+        assert "committed local divergence was preserved" in capsys.readouterr().out
+
+
 class TestCmdUpdateCheckBranchFlag:
     """``hermes update --check --branch <name>`` honors the branch override.
 

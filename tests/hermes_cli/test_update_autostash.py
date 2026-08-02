@@ -114,6 +114,7 @@ def test_reload_updated_runtime_modules_restores_new_hermes_constants_symbol(mon
 def _make_update_side_effect(
     current_branch="main",
     commit_count="3",
+    local_only_count="0",
     ff_only_fails=False,
     reset_fails=False,
     fetch_fails=False,
@@ -133,6 +134,8 @@ def _make_update_side_effect(
             return SimpleNamespace(stdout=f"{current_branch}\n", stderr="", returncode=0)
         if "checkout" in joined and "main" in joined:
             return SimpleNamespace(stdout="", stderr="", returncode=0)
+        if "rev-list" in joined and f"origin/{current_branch}..HEAD" in joined:
+            return SimpleNamespace(stdout=f"{local_only_count}\n", stderr="", returncode=0)
         if "rev-list" in joined:
             return SimpleNamespace(stdout=f"{commit_count}\n", stderr="", returncode=0)
         if "--ff-only" in joined:
