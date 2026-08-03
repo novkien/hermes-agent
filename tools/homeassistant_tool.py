@@ -13,9 +13,10 @@ The HA instance URL is read from ``HASS_URL`` (default: http://homeassistant.loc
 import asyncio
 import json
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
+
+from agent.secret_scope import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -29,35 +30,45 @@ _HASS_TOKEN: str = ""
 
 def _resolve_ha_token() -> str:
     """Resolve the HA token, auto-refreshing via refresh token if needed."""
-    token = _HASS_TOKEN or os.getenv("HASS_TOKEN", "")
+    token = _HASS_TOKEN or get_secret("HASS_TOKEN", "")
     if token:
         return token
-    # Fallback: use refresh token from env to get access token
-    rt = os.getenv("HASS_REFRESH_TOKEN", "")
+    # Fallback: use refresh token from env to get access token.
+    rt = get_secret("HASS_REFRESH_TOKEN", "")
     if not rt:
         return ""
     try:
-        from urllib.request import Request, urlopen
         from urllib.parse import urlencode
-        url = (_HASS_URL or os.getenv("HASS_URL", "http://homeassistant.local:8123")).rstrip("/")
+        from urllib.request import Request, urlopen
+
+        url = (
+            _HASS_URL
+            or get_secret("HASS_URL", "http://homeassistant.local:8123")
+        ).rstrip("/")
         data = urlencode({
             "grant_type": "refresh_token",
             "client_id": "http://localhost:8123/",
-            "refresh_token": rt
+            "refresh_token": rt,
         }).encode()
-        r = Request(url + "/auth/token", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        resp = json.loads(urlopen(r, timeout=10).read())
-        return resp.get("access_token", "")
-    except Exception as e:
-        logging.getLogger(__name__).debug("HA token refresh failed: %s", e)
+        request = Request(
+            url + "/auth/token",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = json.loads(urlopen(request, timeout=10).read())
+        return response.get("access_token", "")
+    except Exception as exc:
+        logger.debug("HA token refresh failed: %s", exc)
         return ""
 
 
-
 def _get_config():
-    """Return (hass_url, hass_token) from env vars at call time."""
+    """Return the active profile's Home Assistant URL and token."""
     return (
-        (_HASS_URL or os.getenv("HASS_URL", "http://homeassistant.local:8123")).rstrip("/"),
+        (
+            _HASS_URL
+            or get_secret("HASS_URL", "http://homeassistant.local:8123")
+        ).rstrip("/"),
         _HASS_TOKEN or _resolve_ha_token(),
     )
 
@@ -368,7 +379,7 @@ def _handle_list_services(args: dict, **kw) -> str:
 # ---------------------------------------------------------------------------
 
 def _check_ha_available() -> bool:
-    """Tool is only available when HA token can be resolved."""
+    """Tool is available when a direct or refreshable HA token is configured."""
     return bool(_resolve_ha_token())
 
 

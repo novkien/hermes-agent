@@ -11,6 +11,16 @@ Config (``~/.hermes/config.yaml``)::
         enabled: true                       # off by default
         fields: [model, context_pct, cwd]   # order shown; drop any to hide
 
+Available fields:
+    model        — bare model id, vendor prefix dropped (``gpt-5.4``)
+    context_pct  — last-call context occupancy as a percent (``5%``)
+    tokens       — token usage and context limit (``30.19K / 1M``)
+    latency      — wall-clock duration of the turn (``22s``, ``1m05s``)
+    cwd          — home-relative working dir (``~``)
+
+``latency`` is opt-in: it is NOT in the default field set, so a footer whose
+``fields`` are unset renders exactly as before.
+
 Per-platform overrides live under ``display.platforms.<platform>.runtime_footer``.
 Users can toggle the global setting with ``/footer on|off`` from both the CLI
 and any gateway platform.
@@ -99,12 +109,24 @@ def resolve_footer_config(
     return resolved
 
 
+def _format_latency(seconds: float) -> str:
+    """Humanize a turn duration: ``<1s``, ``22s``, ``1m05s``."""
+    if seconds < 1:
+        return "<1s"
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total}s"
+    m, sec = divmod(total, 60)
+    return f"{m}m{sec:02d}s"
+
+
 def format_runtime_footer(
     *,
     model: Optional[str],
     context_tokens: int,
     context_length: Optional[int],
     cwd: Optional[str] = None,
+    turn_seconds: Optional[float] = None,
     fields: Iterable[str] = _DEFAULT_FIELDS,
 ) -> str:
     """Render the footer line, or return "" if no fields have data.
@@ -133,6 +155,11 @@ def format_runtime_footer(
                         parts.append(f"{tk_val:.2f}K / {cl}K")
                 else:
                     parts.append(f"{tk_val:.2f}K")
+        elif field == "latency":
+            # Wall-clock turn duration. Skipped when the caller supplied no
+            # timing (call sites that don't measure) or the value is negative.
+            if turn_seconds is not None and turn_seconds >= 0:
+                parts.append(_format_latency(turn_seconds))
         elif field == "cwd":
             rel = _home_relative_cwd(cwd or os.environ.get("TERMINAL_CWD", ""))
             if rel:
@@ -152,11 +179,16 @@ def build_footer_line(
     context_tokens: int,
     context_length: Optional[int],
     cwd: Optional[str] = None,
+    turn_seconds: Optional[float] = None,
 ) -> str:
     """Top-level entry point used by gateway/run.py.
 
     Returns the footer text (empty string when disabled or no data).  Callers
     append this to the final response with :func:`append_runtime_footer`.
+
+    ``turn_seconds`` is the wall-clock duration of the agent run, measured by
+    the caller with ``time.monotonic()``.  Callers that don't measure it leave
+    it ``None`` and the ``latency`` field is skipped.
     """
     cfg = resolve_footer_config(user_config, platform_key)
     if not cfg.get("enabled"):
@@ -166,5 +198,6 @@ def build_footer_line(
         context_tokens=context_tokens,
         context_length=context_length,
         cwd=cwd,
+        turn_seconds=turn_seconds,
         fields=cfg.get("fields") or _DEFAULT_FIELDS,
     )
