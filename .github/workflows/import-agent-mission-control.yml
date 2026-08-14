@@ -1,0 +1,34 @@
+name: Import agent-mission-control
+
+on:
+  push:
+    branches:
+      - agent/integrate-mission-control
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Import complete repository history and tracked tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          test ! -e apps/mission-control
+          git remote add agent-mission-control https://github.com/novkien/agent-mission-control.git
+          git fetch --no-tags agent-mission-control main
+          git subtree add --prefix=apps/mission-control agent-mission-control main
+          git rm .github/workflows/import-agent-mission-control.yml
+          git commit -m "chore: import complete agent-mission-control repository"
+          git push origin HEAD:agent/integrate-mission-control
