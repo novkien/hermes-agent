@@ -1,0 +1,166 @@
+name: One-shot full Mission Control import
+
+on:
+  push:
+    branches:
+      - agent/integrate-full-mission-control
+    paths:
+      - .github/workflows/one-shot-import-mission-control.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-import-mission-control
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          ref: agent/integrate-full-mission-control
+
+      - name: Import exact source tree and validate integration
+        shell: bash
+        env:
+          TARGET_BRANCH: agent/integrate-full-mission-control
+          EXPECTED_SOURCE_COMMIT: 42a9c191fdebc66ace4aac98a1e581d9ab7a13d1
+          EXPECTED_SOURCE_TREE: 4fa5660d088401f2f62a4d76c37af60fadd747fc
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          source_url="https://github.com/novkien/agent-mission-control.git"
+          remote_main="$(git ls-remote "$source_url" refs/heads/main | awk '{print $1}')"
+          if [ "$remote_main" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::agent-mission-control main moved: expected $EXPECTED_SOURCE_COMMIT, found $remote_main"
+            exit 1
+          fi
+
+          source_dir="$(mktemp -d)"
+          trap 'rm -rf "$source_dir"' EXIT
+          git -C "$source_dir" init -q
+          git -C "$source_dir" remote add origin "$source_url"
+          git -C "$source_dir" fetch --no-tags --depth=1 origin "$EXPECTED_SOURCE_COMMIT"
+
+          actual_source_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+          actual_source_tree="$(git -C "$source_dir" rev-parse "$actual_source_commit^{tree}")"
+          test "$actual_source_commit" = "$EXPECTED_SOURCE_COMMIT"
+          test "$actual_source_tree" = "$EXPECTED_SOURCE_TREE"
+
+          manifest="/tmp/mission-control-source-manifest.tsv"
+          git -C "$source_dir" ls-tree -r "$EXPECTED_SOURCE_COMMIT" > "$manifest"
+          source_count="$(wc -l < "$manifest" | tr -d ' ')"
+          source_manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"
+
+          mkdir -p apps/mission-control
+          git -C "$source_dir" archive "$EXPECTED_SOURCE_COMMIT" | tar -xf - -C apps/mission-control
+          cp "$manifest" apps/mission-control/SOURCE_MANIFEST.tsv
+
+          export SOURCE_COUNT="$source_count"
+          export SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          payload = {
+              "source_repository": "novkien/agent-mission-control",
+              "source_commit": os.environ["EXPECTED_SOURCE_COMMIT"],
+              "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
+              "tracked_file_count": int(os.environ["SOURCE_COUNT"]),
+              "source_manifest": "SOURCE_MANIFEST.tsv",
+              "source_manifest_sha256": os.environ["SOURCE_MANIFEST_SHA256"],
+              "canonical_target": "novkien/hermes-agent/apps/mission-control",
+              "imported_at_utc": datetime.now(timezone.utc).isoformat(),
+              "original_tracked_files_preserved": True,
+              "ongoing_source_repository_dependency": False,
+          }
+          Path("apps/mission-control/SOURCE_IMPORT.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          # Apply only the deterministic Hermes integration changes. Original
+          # Mission Control tracked files remain byte-identical to the source commit.
+          python .github/scripts/integrate_mission_control_once.py
+
+          # Verify every original source blob and executable mode before staging.
+          while IFS=$'\t' read -r meta path; do
+            mode="${meta%% *}"
+            rest="${meta#* }"
+            type="${rest%% *}"
+            sha="${rest##* }"
+            target="apps/mission-control/$path"
+            test "$type" = "blob"
+            if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+              echo "::error::missing imported source file: $path"
+              exit 1
+            fi
+            actual_sha="$(git hash-object "$target")"
+            if [ "$actual_sha" != "$sha" ]; then
+              echo "::error::source blob mismatch at $path: expected $sha, found $actual_sha"
+              exit 1
+            fi
+            if [ "$mode" = "100755" ] && [ ! -x "$target" ]; then
+              echo "::error::executable mode lost at $path"
+              exit 1
+            fi
+          done < "$manifest"
+
+          git add -A
+
+          # Verify the staged index also preserves every source blob and mode.
+          while IFS=$'\t' read -r meta path; do
+            mode="${meta%% *}"
+            rest="${meta#* }"
+            sha="${rest##* }"
+            target="apps/mission-control/$path"
+            index_entry="$(git ls-files -s -- "$target")"
+            index_mode="${index_entry%% *}"
+            index_rest="${index_entry#* }"
+            index_sha="${index_rest%% *}"
+            if [ "$index_mode" != "$mode" ] || [ "$index_sha" != "$sha" ]; then
+              echo "::error::index parity mismatch at $path: expected $mode $sha; found $index_mode $index_sha"
+              exit 1
+            fi
+          done < "$manifest"
+
+          # Runtime state and secret-bearing files are forbidden. The committed
+          # *.env.example template is allowed because it contains names only.
+          forbidden="$(git diff --cached --name-only | grep -E '(^|/)(\.env$|[^/]+\.db$|[^/]+\.db-wal$|[^/]+\.db-shm$|node_modules/|\.venv/|__pycache__/|[^/]+\.log$)' || true)"
+          if [ -n "$forbidden" ]; then
+            echo "::error::runtime or secret-bearing material was staged"
+            printf '%s\n' "$forbidden"
+            exit 1
+          fi
+
+          python -m pip install --disable-pip-version-check -q \
+            "fastapi>=0.104,<1" \
+            "uvicorn>=0.24,<1" \
+            "httpx>=0.28,<1" \
+            "cryptography>=42,<51" \
+            "pytest>=8,<10" \
+            "pytest-asyncio>=0.23,<2"
+
+          python -m compileall -q \
+            apps/mission-control/agent_mission_control \
+            hermes_cli/mission_control.py \
+            hermes_cli/subcommands/mission_control.py
+          (cd apps/mission-control && PYTHONPATH=. python tests/test_runtime_contracts.py)
+          (cd apps/mission-control && PYTHONPATH=. python tests/test_static_repair_surface.py)
+          (cd apps/mission-control && node tests/frontend_contracts.mjs)
+          (cd apps/mission-control && node tests/skills_surface.mjs)
+          PYTHONPATH="$PWD" python -m pytest -q tests/hermes_cli/test_mission_control.py
+          git diff --cached --check
+
+          git commit -m "feat: integrate complete AgentOS Mission Control source"
+          git push origin "HEAD:$TARGET_BRANCH"
