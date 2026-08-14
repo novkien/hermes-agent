@@ -18,15 +18,28 @@ jobs:
   import:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: trusted-automation
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           ref: agent/integrate-full-mission-control
 
+      - name: Get cross-repository GitHub App token
+        id: app-token
+        uses: ./.github/actions/get-app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: novkien
+          repositories: |
+            hermes-agent
+            agent-mission-control
+
       - name: Import exact source tree and validate integration
         shell: bash
         env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_BRANCH: agent/integrate-full-mission-control
           EXPECTED_SOURCE_COMMIT: 42a9c191fdebc66ace4aac98a1e581d9ab7a13d1
           EXPECTED_SOURCE_TREE: 4fa5660d088401f2f62a4d76c37af60fadd747fc
@@ -36,7 +49,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          source_url="https://github.com/novkien/agent-mission-control.git"
+          source_url="https://x-access-token:${APP_TOKEN}@github.com/novkien/agent-mission-control.git"
           remote_main="$(git ls-remote "$source_url" refs/heads/main | awk '{print $1}')"
           if [ "$remote_main" != "$EXPECTED_SOURCE_COMMIT" ]; then
             echo "::error::agent-mission-control main moved: expected $EXPECTED_SOURCE_COMMIT, found $remote_main"
@@ -47,7 +60,7 @@ jobs:
           trap 'rm -rf "$source_dir"' EXIT
           git -C "$source_dir" init -q
           git -C "$source_dir" remote add origin "$source_url"
-          git -C "$source_dir" fetch --no-tags --depth=1 origin "$EXPECTED_SOURCE_COMMIT"
+          git -C "$source_dir" fetch --no-tags --depth=1 origin main
 
           actual_source_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
           actual_source_tree="$(git -C "$source_dir" rev-parse "$actual_source_commit^{tree}")"
