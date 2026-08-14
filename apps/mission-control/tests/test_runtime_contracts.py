@@ -856,13 +856,496 @@ async def test_session_persona_stores_only_the_profile_name() -> None:
         response = await Router.session_persona_write(router, request, "s2")
         assert response.status_code == 400
 
-        # The table holds a pointer, never a copy of what Hermes already serves.
+        # The table holds pointers, never a copy of what Hermes already
+        # serves. execution_mode ('gateway'/'runner') is the one other fact
+        # only the BFF knows — it decided which path the session runs on.
         columns = {
             row[1] for row in
             store._conn.execute("PRAGMA table_info(session_persona)").fetchall()
         }
-        assert columns == {"session_id", "profile_name", "created_at"}
+        assert columns == {"session_id", "profile_name", "created_at", "execution_mode"}
+        assert store.get_execution_mode("s1") == "gateway"
         store.close()
+
+
+class _FakeRunnerStdout:
+    """Minimal StreamReader stand-in: pops queued lines, then EOF (b'')."""
+
+    def __init__(self, lines: list[bytes]):
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
+
+
+class _FakeRunnerProcess:
+    """Stands in for asyncio.subprocess.Process in runner_manager tests."""
+
+    def __init__(self, label: str, *, ready: bool = True, on_stop=None):
+        self.pid = (abs(hash(label)) % 60000) + 1
+        self.returncode: int | None = None
+        self._on_stop = on_stop
+        self.stdout = _FakeRunnerStdout(
+            [b"HERMES_BACKEND_READY port=54321\n"] if ready else []
+        )
+        self.stderr = _FakeRunnerStdout([])
+
+    async def wait(self) -> int:
+        self.returncode = 0
+        if self._on_stop:
+            self._on_stop()
+        return 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+
+def _patch_runner_spawn(spawned: list, *, ready: bool = True, on_stop=None):
+    """Monkeypatch asyncio.create_subprocess_exec for runner_manager tests.
+    Returns (restore_fn,); caller MUST call restore in a finally block —
+    this patches the real stdlib asyncio module, shared process-wide."""
+
+    async def fake_create_subprocess_exec(*argv, **_kwargs):
+        spawned.append(list(argv))
+        profile = argv[argv.index("--profile") + 1]
+        return _FakeRunnerProcess(profile, ready=ready, on_stop=on_stop)
+
+    original = asyncio.create_subprocess_exec
+    asyncio.create_subprocess_exec = fake_create_subprocess_exec
+    return original
+
+
+def _patch_runner_health(*, status: int = 200):
+    from agent_mission_control.clients import GatewayClient
+
+    async def fake_get(self, path, *, params=None, inbound_request_id=None, raw=False):
+        return status, {"status": "ok"}, {}
+
+    original = GatewayClient.get
+    GatewayClient.get = fake_get
+    return original
+
+
+async def test_runner_manager_shares_one_spawn_per_profile() -> None:
+    """Sequential AND concurrent ensure_profile_gateway() calls for the same
+    not-yet-running profile share one subprocess — never two. --isolated is
+    always present: without it Hermes silently redirects `--profile X serve`
+    into the shared machine dashboard instead of running standalone."""
+    from agent_mission_control.runner_manager import RunnerManager
+
+    spawned: list[list[str]] = []
+    original_spawn = _patch_runner_spawn(spawned)
+    original_get = _patch_runner_health()
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes",
+            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+        )
+        c1 = await manager.ensure_profile_gateway("alpha")
+        c2 = await manager.ensure_profile_gateway("alpha")
+        assert c1 is c2
+        assert len(spawned) == 1
+        assert "--isolated" in spawned[0]
+        assert spawned[0][spawned[0].index("--profile") + 1] == "alpha"
+
+        c3, c4 = await asyncio.gather(
+            manager.ensure_profile_gateway("beta"),
+            manager.ensure_profile_gateway("beta"),
+        )
+        assert c3 is c4
+        assert len(spawned) == 2
+        await manager.stop_all()
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+        from agent_mission_control.clients import GatewayClient
+        GatewayClient.get = original_get
+
+
+async def test_runner_manager_fails_closed_when_the_process_exits_early() -> None:
+    """A process that closes stdout without announcing a port (Hermes
+    rejecting an invalid profile, a crash, ...) must raise, not hang or
+    return a broken client — and must not leave a stuck pool entry, so the
+    next call retries clean instead of awaiting a dead future forever."""
+    from agent_mission_control.runner_manager import RunnerManager, RunnerSpawnError
+
+    spawned: list[list[str]] = []
+    original_spawn = _patch_runner_spawn(spawned, ready=False)
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes", port_announce_timeout_seconds=2,
+        )
+        raised = False
+        try:
+            await manager.ensure_profile_gateway("ghost")
+        except RunnerSpawnError:
+            raised = True
+        assert raised, "a process exiting before port announcement must fail closed"
+        assert len(spawned) == 1
+        assert "ghost" not in manager._pool
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+
+
+async def test_runner_manager_lru_eviction_spares_fresh_backends() -> None:
+    """LRU eviction only ever removes a backend idle past the
+    keepalive-fresh window — an actively chatting profile is never killed
+    just to honor the soft pool cap; the pool is allowed to exceed it."""
+    from agent_mission_control.runner_manager import RunnerManager
+
+    stopped: list[str] = []
+    spawned: list[list[str]] = []
+    original_spawn = _patch_runner_spawn(
+        spawned, on_stop=None,
+    )
+    original_get = _patch_runner_health()
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes", pool_max=1,
+            keepalive_fresh_seconds=90.0, idle_seconds=900.0,
+            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+        )
+        await manager.ensure_profile_gateway("alpha")
+        # alpha was just touched (fresh) — spawning beta over the pool_max=1
+        # cap must NOT evict it.
+        await manager.ensure_profile_gateway("beta")
+        assert set(manager._pool.keys()) == {"alpha", "beta"}
+
+        # Age alpha past the keepalive-fresh window without a real sleep.
+        manager._pool["alpha"].last_active_at -= 1000.0
+        await manager.ensure_profile_gateway("gamma")
+        assert "alpha" not in manager._pool
+        assert set(manager._pool.keys()) == {"beta", "gamma"}
+        await manager.stop_all()
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+        from agent_mission_control.clients import GatewayClient
+        GatewayClient.get = original_get
+
+
+async def test_runner_manager_idle_reap_allows_a_clean_respawn() -> None:
+    """A profile gateway idle past idle_seconds is reaped; the next
+    ensure_profile_gateway() for that profile spawns a fresh one rather than
+    erroring — the real state lives in Hermes' state.db, not this process."""
+    from agent_mission_control.runner_manager import RunnerManager
+
+    spawned: list[list[str]] = []
+    original_spawn = _patch_runner_spawn(spawned)
+    original_get = _patch_runner_health()
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes", idle_seconds=900.0,
+            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+        )
+        await manager.ensure_profile_gateway("alpha")
+        assert len(spawned) == 1
+
+        manager._pool["alpha"].last_active_at -= 1000.0
+        await manager._reap_once()
+        assert "alpha" not in manager._pool
+
+        client = await manager.ensure_profile_gateway("alpha")
+        assert client is not None
+        assert len(spawned) == 2, "idle reap must allow a clean respawn"
+        await manager.stop_all()
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+        from agent_mission_control.clients import GatewayClient
+        GatewayClient.get = original_get
+
+
+async def test_gateway_client_for_session_resolves_by_execution_mode() -> None:
+    """execution_mode='runner' routes a chat session through runner_manager;
+    the default 'gateway' mode — every session that predates this feature,
+    and every one that doesn't opt in — is untouched and never spawns."""
+    import tempfile
+
+    from agent_mission_control.session_persona_store import SessionPersonaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SessionPersonaStore(Path(tmp) / "store.db")
+        router = bare_router()
+        router.dashboard_store = store
+        router.gateway = object()  # sentinel identity for "the shared default"
+
+        calls: dict[str, list[str]] = {"ensure": [], "touch": []}
+
+        class _FakeRunnerManager:
+            async def ensure_profile_gateway(self, profile_name):
+                calls["ensure"].append(profile_name)
+                return f"runner-client:{profile_name}"
+
+            def touch(self, profile_name):
+                calls["touch"].append(profile_name)
+
+        router.runner_manager = _FakeRunnerManager()
+
+        # No persona row at all (every session before this feature shipped).
+        client = await Router._gateway_client_for_session(router, "legacy-session")
+        assert client is router.gateway
+        assert calls["ensure"] == []
+
+        # Runner-backed session.
+        store.set_persona("runner-session", "jarvis", execution_mode="runner")
+        client = await Router._gateway_client_for_session(router, "runner-session")
+        assert client == "runner-client:jarvis"
+        assert calls["ensure"] == ["jarvis"]
+        assert calls["touch"] == ["jarvis"]
+
+        # A row explicitly recorded 'gateway' must never spawn.
+        store.set_persona("plain-session", "jarvis", execution_mode="gateway")
+        client = await Router._gateway_client_for_session(router, "plain-session")
+        assert client is router.gateway
+        assert calls["ensure"] == ["jarvis"]  # unchanged — no second spawn
+
+        store.close()
+
+
+async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
+    """POST /api/chat/sessions with profile_name routes session creation
+    through the profile's own isolated gateway, records execution_mode
+    ='runner' locally, and echoes profile_name/execution_mode back to the
+    caller. Omitting profile_name is byte-for-byte the pre-existing path."""
+    import tempfile
+
+    from agent_mission_control import chat_proxy
+    from agent_mission_control.session_persona_store import SessionPersonaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SessionPersonaStore(Path(tmp) / "store.db")
+        router = bare_router(dashboard=FakeDashboard(body=[{"name": "jarvis"}]))
+        router.gateway = object()
+        router.dashboard_store = store
+        router.store = type("S", (), {
+            "append_audit": lambda self, **kw: None,
+            "update_audit_result": lambda self, **kw: None,
+        })()
+        router._require_session = lambda request: {"id": "sess"}
+        router._require_csrf = lambda request, session: None
+        router._origin_allowed = lambda request: True
+        router._host_allowed = lambda request: True
+        router._request_profile = lambda request: None
+        router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
+        router._record_audit_result = lambda *a, **k: None
+        router.event_bus = None
+
+        ensure_calls: list[str] = []
+
+        class _FakeRunnerManager:
+            async def ensure_profile_gateway(self, profile_name):
+                ensure_calls.append(profile_name)
+                return "runner-client"
+
+        router.runner_manager = _FakeRunnerManager()
+
+        seen: dict = {}
+
+        async def fake_create_session(gateway, body, idem):
+            seen["gateway"] = gateway
+            seen["body"] = body
+            return {
+                "status": 200,
+                "body": {"object": "hermes.session", "session": {"id": "sess-1"}},
+            }
+
+        original_create = chat_proxy.create_session
+        chat_proxy.create_session = fake_create_session
+        try:
+            request = make_request("")
+            request._body = json.dumps({
+                "message": "hi", "profile_name": "jarvis",
+            }).encode("utf-8")
+            response = await Router.chat_create_session(router, request)
+        finally:
+            chat_proxy.create_session = original_create
+
+        assert ensure_calls == ["jarvis"], "an unrecognized/no-op profile must never spawn"
+        assert seen["gateway"] == "runner-client", "must create the session on the runner, not the default gateway"
+        payload = response_json(response)
+        assert payload["session"]["id"] == "sess-1"
+        assert payload["profile_name"] == "jarvis"
+        assert payload["execution_mode"] == "runner"
+        assert store.get_persona("sess-1") == "jarvis"
+        assert store.get_execution_mode("sess-1") == "runner"
+
+        # Unknown profile: fail closed before ever touching runner_manager.
+        router.dashboard = FakeDashboard(body=[])
+        request2 = make_request("")
+        request2._body = json.dumps({
+            "message": "hi", "profile_name": "not-a-real-profile",
+        }).encode("utf-8")
+        response2 = await Router.chat_create_session(router, request2)
+        assert response2.status_code == 400
+        assert ensure_calls == ["jarvis"], "unknown profile must not spawn a runner"
+
+        store.close()
+
+
+async def test_persona_write_never_downgrades_a_runner_session() -> None:
+    """A persona-label write must not silently move a runner-backed session
+    back onto the shared gateway. set_persona() without an explicit mode
+    means "I am not deciding execution": it defaults a new row to 'gateway'
+    but leaves an existing row's mode alone. Overwriting it here would route
+    every later turn of that session to the wrong process, with no error."""
+    import tempfile
+
+    from agent_mission_control.session_persona_store import SessionPersonaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SessionPersonaStore(Path(tmp) / "store.db")
+
+        store.set_persona("s-runner", "jarvis", execution_mode="runner")
+        # The still-live POST /api/sessions/{id}/persona route's call shape.
+        store.set_persona("s-runner", "renamed")
+        assert store.get_persona("s-runner") == "renamed"
+        assert store.get_execution_mode("s-runner") == "runner", \
+            "a plain persona write must not downgrade a runner-backed session"
+
+        # A brand new row still defaults to the legacy shared gateway.
+        store.set_persona("s-new", "jarvis")
+        assert store.get_execution_mode("s-new") == "gateway"
+
+        # An explicit mode is still authoritative in both directions.
+        store.set_persona("s-runner", "renamed", execution_mode="gateway")
+        assert store.get_execution_mode("s-runner") == "gateway"
+
+        store.close()
+
+
+async def test_fork_of_a_runner_session_inherits_its_execution_mode() -> None:
+    """The fork lives in the same isolated process the fork call was proxied
+    to, so the new session id must be recorded runner-backed too. Left
+    unrecorded it would default to 'gateway' and its first turn would go to
+    the shared default gateway — wrong process, wrong profile, no error."""
+    import tempfile
+
+    from agent_mission_control.session_persona_store import SessionPersonaStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SessionPersonaStore(Path(tmp) / "store.db")
+        router = bare_router()
+        router.dashboard_store = store
+
+        store.set_persona("parent", "jarvis", execution_mode="runner")
+        writer = Router._fork_persona_writer(router, "parent")
+        assert writer is not None
+        writer(200, {"object": "hermes.session", "session": {"id": "fork-1"}})
+        assert store.get_persona("fork-1") == "jarvis"
+        assert store.get_execution_mode("fork-1") == "runner"
+
+        # Forking a plain gateway session records nothing new — unchanged
+        # behavior for the entire pre-existing install base.
+        store.set_persona("plain", "jarvis", execution_mode="gateway")
+        assert Router._fork_persona_writer(router, "plain") is None
+        assert Router._fork_persona_writer(router, "never-seen") is None
+
+        store.close()
+
+
+async def test_chat_create_session_audits_before_any_upstream_effect() -> None:
+    """The pending audit row has to exist before the profile lookup and the
+    subprocess spawn, not just before the gateway create — both are real
+    upstream effects. A request rejected for an unknown profile must still
+    leave a completed (non-'pending') trail."""
+    order: list[str] = []
+
+    class _AuditStore:
+        def append_audit(self, **kw):
+            order.append(f"audit:{kw['result']}")
+
+    class _TracingDashboard(FakeDashboard):
+        async def get(self, path, **kw):
+            order.append("upstream:profiles")
+            return await FakeDashboard.get(self, path, **kw)
+
+    router = bare_router(dashboard=_TracingDashboard(body=[]))
+    router.gateway = object()
+    router.dashboard_store = None
+    router.store = _AuditStore()
+    router._require_session = lambda request: {"id": "sess"}
+    router._require_csrf = lambda request, session: None
+    router._origin_allowed = lambda request: True
+    router._host_allowed = lambda request: True
+    router._request_profile = lambda request: None
+    router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
+    router._record_audit_result = lambda rid, status, result: order.append(f"result:{result}")
+    router.event_bus = None
+
+    spawned: list[str] = []
+
+    class _FakeRunnerManager:
+        async def ensure_profile_gateway(self, profile_name):
+            spawned.append(profile_name)
+            return "runner-client"
+
+    router.runner_manager = _FakeRunnerManager()
+
+    request = make_request("")
+    request._body = json.dumps({"message": "hi", "profile_name": "ghost"}).encode("utf-8")
+    response = await Router.chat_create_session(router, request)
+
+    assert response.status_code == 400
+    assert spawned == [], "an unknown profile must never reach a spawn"
+    assert order == [
+        "audit:pending",          # BEFORE any upstream call, not after
+        "upstream:profiles",
+        "result:error:unknown_profile",
+    ], f"audit must precede every upstream effect, got {order}"
+
+
+async def test_runner_manager_hit_path_cannot_race_eviction() -> None:
+    """The pool hit path resolves and touches under the same lock the
+    reclaim paths take, so a concurrent eviction/reap can never tear down
+    the entry a caller is being handed. An unlocked read would return an
+    entry whose GatewayClient is already being aclose()d."""
+    from agent_mission_control.runner_manager import RunnerManager
+
+    manager = RunnerManager(
+        hermes_executable="hermes", pool_max=2,
+        idle_seconds=0.0,  # anything in the pool is instantly reapable
+    )
+    spawned: list[list[str]] = []
+    original_spawn = _patch_runner_spawn(spawned)
+    original_get = _patch_runner_health()
+    try:
+        await manager.ensure_profile_gateway("alpha")
+
+        # Make teardown observably span an await point — exactly the window
+        # an unlocked pool read used to slip through.
+        teardown: list[str] = []
+        real_stop = manager._stop
+
+        async def instrumented_stop(profile_name):
+            teardown.append("begin")
+            await asyncio.sleep(0)
+            await real_stop(profile_name)
+            teardown.append("end")
+
+        manager._stop = instrumented_stop
+
+        observed_mid_teardown: list[bool] = []
+
+        async def hit():
+            await asyncio.sleep(0)  # let the reap pass get in first
+            client = await manager.ensure_profile_gateway("alpha")
+            observed_mid_teardown.append(len(teardown) % 2 == 1)
+            return client
+
+        client, _ = await asyncio.gather(hit(), manager._reap_once())
+
+        assert client is not None
+        assert observed_mid_teardown == [False], \
+            "a caller was handed an entry while its teardown was still in flight"
+        assert len(spawned) == 2, "the reaped entry must respawn, not resurrect"
+    finally:
+        manager._stop = real_stop
+        await manager.stop_all()
+        import agent_mission_control.runner_manager as rm
+        rm.asyncio.create_subprocess_exec = original_spawn
+        from agent_mission_control.clients import GatewayClient
+        GatewayClient.get = original_get
 
 
 async def test_events_recent_is_bounded_and_separate_from_the_audit_ledger() -> None:
@@ -1079,14 +1562,19 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     })()
     router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
     router.gateway = object()
+    router.dashboard_store = None
+    router.runner_manager = None
     router._require_session = lambda request: {"id": "sess"}
     router._require_csrf = lambda request, session: None
+    router._origin_allowed = lambda request: True
+    router._host_allowed = lambda request: True
     router._request_profile = lambda request: "default"
     router._record_audit_result = lambda *a, **k: None
 
-    seen: dict = {}
+    seen: dict = {"calls": 0}
 
     async def fake_stream_chat(gateway, session_id, body):
+        seen["calls"] += 1
         seen["body"] = body
         raise chat_proxy.UpstreamError(409, "model_lock_unavailable")
 
@@ -1097,6 +1585,11 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
             "session_id": "s1", "message": "hi", "model": "normal",
             "provider": "9router", "model_options": {"reasoning": {"effort": "xhigh"}},
             "require_model_lock": True,
+            "attachments": [{
+                "name": "notes.json", "mime_type": "application/json",
+                "size": 2, "kind": "file", "data": "data:application/json;base64,e30=",
+                "not_allowed": "drop me",
+            }],
             "not_allowed": "drop me",
         }
 
@@ -1116,9 +1609,33 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     assert body["require_model_lock"] is True, "the lock flag must reach the gateway"
     assert body["model"] == "normal" and body["provider"] == "9router"
     assert body["model_options"] == {"reasoning": {"effort": "xhigh"}}
+    attachment = body["attachments"][0]
+    assert attachment["name"] == attachment["fileName"] == "notes.json"
+    assert attachment["type"] == "file" and attachment["contentType"] == "application/json"
+    assert attachment["content"] == attachment["data"] == attachment["base64"] == "e30="
+    assert attachment["dataUrl"] == "data:application/json;base64,e30="
+    assert "not_allowed" not in attachment
     # Still an allowlist, not a passthrough.
     assert "not_allowed" not in body
     assert "session_id" not in body, "the id travels in the path, not the body"
+
+    invalid = dict(sent)
+    invalid["attachments"] = [{
+        "name": "broken.pdf", "mime_type": "application/pdf",
+        "size": 99, "kind": "pdf", "data": "JVBERi0=",
+    }]
+
+    async def receive_invalid():
+        return {"type": "http.request", "body": json.dumps(invalid).encode(), "more_body": False}
+
+    invalid_request = Request(
+        {"type": "http", "method": "POST", "path": "/api/chat/stream", "headers": []},
+        receive_invalid,
+    )
+    invalid_request.state.request_id = "rid-2"
+    invalid_response = await router.chat_stream(invalid_request)
+    assert invalid_response.status_code == 400
+    assert seen["calls"] == 1, "invalid attachments must not call the gateway"
 
 
 async def test_session_changed_names_the_session_that_moved() -> None:
@@ -1330,6 +1847,8 @@ async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> Non
 
 
 async def main() -> None:
+    from core_contract_cases import run_all as run_core_contract_cases
+
     test_redaction_regex_matches_the_frontend_copy()
     test_redaction_masks_nested_secrets_and_detects_the_sentinel()
     await test_config_read_is_redacted_server_side()
@@ -1363,6 +1882,16 @@ async def main() -> None:
     await test_event_bus_cache_invalidated_emits_only_on_drop()
     await test_preferences_are_profile_scoped_and_key_gated()
     await test_session_persona_stores_only_the_profile_name()
+    await test_runner_manager_shares_one_spawn_per_profile()
+    await test_runner_manager_fails_closed_when_the_process_exits_early()
+    await test_runner_manager_lru_eviction_spares_fresh_backends()
+    await test_runner_manager_idle_reap_allows_a_clean_respawn()
+    await test_gateway_client_for_session_resolves_by_execution_mode()
+    await test_chat_create_session_with_profile_name_spawns_a_runner()
+    await test_persona_write_never_downgrades_a_runner_session()
+    await test_fork_of_a_runner_session_inherits_its_execution_mode()
+    await test_chat_create_session_audits_before_any_upstream_effect()
+    await test_runner_manager_hit_path_cannot_race_eviction()
     test_path_tokens_cannot_span_a_slash()
     test_literal_specs_win_over_token_specs()
     test_per_verb_upstream_method_translation()
@@ -1382,6 +1911,7 @@ async def main() -> None:
     test_decision_field_allowlists_are_closed()
     await test_every_typed_adapter_method_accepts_request_id_by_keyword()
     test_audit_summary_logs_decisions_but_never_free_text()
+    await run_core_contract_cases()
     print("RUNTIME_CONTRACT_TESTS=PASS")
 
 

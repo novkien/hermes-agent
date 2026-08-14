@@ -171,10 +171,11 @@ class EventBus:
         for i, e in enumerate(ring):
             if e["event_id"] == last_event_id:
                 return ring[i + 1:]
-        # not in ring -> DB replay after cursor (ring events excluded)
-        db = self.store.replay_events_after(last_event_id, self.db_replay_limit)
-        seen = {e["event_id"] for e in ring}
-        return [e for e in db if e["event_id"] not in seen]
+        # The cursor fell out of the ring, so the DB is the complete ordered
+        # source of truth after that cursor. Do not remove rows merely because
+        # they are also still present in the ring: replay_after() returns one
+        # list and the caller does not append the ring separately.
+        return self.store.replay_events_after(last_event_id, self.db_replay_limit)
 
     def last_event_id(self) -> str:
         if self._ring:

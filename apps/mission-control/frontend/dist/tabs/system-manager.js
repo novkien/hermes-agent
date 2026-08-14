@@ -64,15 +64,12 @@ export function createSystemManager({ api, profile, toolbar }) {
   let inspectorHost = null;
   let pollTimer = null;
 
-  // The active sub-tab changes the immutable table schema, so this reference
-  // must follow the replacement table rather than copying its accessor-backed
-  // API onto the old object.
-  let table = createTable({
+  const table = createTable({
     rowId: (row) => row.id,
-    emptyTitle: 'No System Manager records',
-    emptyNote: 'The database will populate as records are created or services are discovered.',
+    emptyTitle: `No ${active} records`,
+    emptyNote: 'Running systemd/Docker services are discovered by the 30-second reconciler.',
     sort: { key: 'name', dir: 'asc' },
-    columns: [],
+    columns: columnsFor(active),
     onSelect: (row) => {
       selected = row;
       creating = false;
@@ -154,7 +151,7 @@ export function createSystemManager({ api, profile, toolbar }) {
       onSelect: (row) => { selected = row; creating = false; renderSide(); },
     });
     table.node.replaceWith(next.node);
-    table = next;
+    Object.assign(table, next);
   }
 
   async function load(keepSelection = true) {

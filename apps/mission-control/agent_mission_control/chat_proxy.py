@@ -12,7 +12,10 @@ model_options?} (+ optional session_id to stream into an existing session).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import re
 import uuid
 from typing import Any, AsyncIterator, Optional
 
@@ -25,12 +28,114 @@ UPSTREAM_SESSION_CREATE = "/api/sessions"
 UPSTREAM_SESSION_EVENTS = "/api/sessions/{session_id}/events/stream"
 UPSTREAM_SESSIONS_RUNNING = "/api/sessions/running"
 
+CHAT_ATTACHMENT_MAX_COUNT = 8
+CHAT_ATTACHMENT_MAX_BYTES = 700 * 1024
+CHAT_ATTACHMENTS_TOTAL_BYTES = 700 * 1024
+_ATTACHMENT_KINDS = frozenset({"image", "pdf", "file"})
+_MIME_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+_DATA_URL_RE = re.compile(
+    r"^data:([^;,]*)(?:;[^;,=]+=[^;,]+)*;base64,(.*)$", re.IGNORECASE | re.DOTALL
+)
+
 
 class UpstreamError(Exception):
     def __init__(self, status: int, body: Any) -> None:
         super().__init__(f"upstream error {status}")
         self.status = status
         self.body = body
+
+
+class AttachmentValidationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
+    """Validate the BFF attachment contract and emit Hermes' compatibility shape."""
+    if value is None or value == []:
+        return None
+    if not isinstance(value, list):
+        raise AttachmentValidationError("invalid_attachments", "attachments must be an array")
+    if len(value) > CHAT_ATTACHMENT_MAX_COUNT:
+        raise AttachmentValidationError(
+            "too_many_attachments",
+            f"at most {CHAT_ATTACHMENT_MAX_COUNT} attachments are allowed",
+        )
+
+    normalized: list[dict[str, Any]] = []
+    total_bytes = 0
+    for index, item in enumerate(value):
+        label = f"attachment {index + 1}"
+        if not isinstance(item, dict):
+            raise AttachmentValidationError("invalid_attachment", f"{label} must be an object")
+
+        name = item.get("name")
+        mime_type = item.get("mime_type")
+        kind = item.get("kind")
+        declared_size = item.get("size")
+        data = item.get("data")
+        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+            raise AttachmentValidationError("invalid_attachment_name", f"{label} has an invalid name")
+        name = name.strip()
+        if any(ord(char) < 32 for char in name) or "/" in name or "\\" in name:
+            raise AttachmentValidationError("invalid_attachment_name", f"{label} name must be a filename")
+        if not isinstance(mime_type, str) or not _MIME_TYPE_RE.fullmatch(mime_type.strip()):
+            raise AttachmentValidationError("invalid_attachment_mime", f"{label} has an invalid mime_type")
+        mime_type = mime_type.strip().lower()
+        if kind not in _ATTACHMENT_KINDS:
+            raise AttachmentValidationError("invalid_attachment_kind", f"{label} has an invalid kind")
+        if kind == "image" and not mime_type.startswith("image/"):
+            raise AttachmentValidationError("invalid_attachment_kind", f"{label} image kind requires image MIME")
+        if kind == "pdf" and mime_type != "application/pdf":
+            raise AttachmentValidationError("invalid_attachment_kind", f"{label} pdf kind requires application/pdf")
+        if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size <= 0:
+            raise AttachmentValidationError("invalid_attachment_size", f"{label} has an invalid size")
+        if not isinstance(data, str) or not data.strip():
+            raise AttachmentValidationError("attachment_data_required", f"{label} data is required")
+
+        encoded = data.strip()
+        match = _DATA_URL_RE.fullmatch(encoded)
+        if match:
+            data_mime = match.group(1).strip().lower()
+            if data_mime and data_mime != mime_type:
+                raise AttachmentValidationError(
+                    "attachment_mime_mismatch", f"{label} data MIME does not match mime_type"
+                )
+            encoded = match.group(2)
+        encoded = re.sub(r"\s+", "", encoded)
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise AttachmentValidationError(
+                "invalid_attachment_data", f"{label} data must be valid base64"
+            ) from exc
+        size = len(decoded)
+        if size == 0 or size != declared_size:
+            raise AttachmentValidationError(
+                "attachment_size_mismatch", f"{label} size does not match decoded data"
+            )
+        if size > CHAT_ATTACHMENT_MAX_BYTES:
+            raise AttachmentValidationError("attachment_too_large", f"{label} exceeds 700 KB")
+        total_bytes += size
+        if total_bytes > CHAT_ATTACHMENTS_TOTAL_BYTES:
+            raise AttachmentValidationError("attachments_too_large", "combined attachments exceed 700 KB")
+
+        data_url = f"data:{mime_type};base64,{encoded}"
+        normalized.append({
+            "name": name,
+            "fileName": name,
+            "type": kind,
+            "contentType": mime_type,
+            "mimeType": mime_type,
+            "mediaType": mime_type,
+            "content": encoded,
+            "data": encoded,
+            "base64": encoded,
+            "dataUrl": data_url,
+            "size": size,
+        })
+    return normalized
 
 
 async def create_session(gateway: GatewayClient, body: dict, idempotency_key: Optional[str] = None) -> dict:

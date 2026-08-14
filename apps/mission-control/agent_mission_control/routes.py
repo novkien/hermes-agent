@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -37,6 +38,7 @@ from .correlation import CorrelationEngine
 from .event_bus import EventBus, sse_frame, sse_frame_named, sse_heartbeat
 from .pulse import Pulse
 from .run_inspector import RunInspector
+from .runner_manager import RunnerManager, RunnerSpawnError
 from .clients import (
     AdapterClient,
     DashboardClient,
@@ -52,6 +54,8 @@ from .security import (
 )
 from .session_persona_store import SessionPersonaStore
 from .store import Store
+
+logger = logging.getLogger("agent_mission_control.routes")
 
 # --------------------------------------------------------------------------
 # Read allowlist — derived from stage1-evidence u02-dashboard-routes.json
@@ -896,10 +900,12 @@ class Router:
         alert_engine: alerts_mod.AlertEngine | None = None,
         pulse: Pulse | None = None,
         dashboard_store: SessionPersonaStore | None = None,
+        runner_manager: RunnerManager | None = None,
     ):
         self.s = settings
         self.store = store
         self.dashboard_store = dashboard_store
+        self.runner_manager = runner_manager
         self.dashboard = dashboard
         self.gateway = gateway
         self.adapter = adapter
@@ -990,6 +996,79 @@ class Router:
         if not self.mutation_limiter.allow(session["id"]):
             raise ApiError(429, "rate_limited", "mutation rate limit exceeded")
         return session
+
+    async def _gateway_client_for_session(self, session_id: str) -> GatewayClient:
+        """Resolve the right GatewayClient for an existing session.
+
+        Runner-backed sessions (execution_mode='runner') talk to their own
+        profile-scoped `hermes serve --isolated` process via runner_manager;
+        every other session (the default, and the entire pre-existing
+        install base) is unaffected and gets the one shared gateway client
+        exactly as before. Falls back to the shared gateway whenever the
+        local store or runner manager isn't wired (tests, or the mode is
+        unrecorded) — 'gateway' is the correct default, not an error.
+        """
+        if self.dashboard_store is None or self.runner_manager is None:
+            return self.gateway
+        mode = self.dashboard_store.get_execution_mode(session_id)
+        if mode != "runner":
+            return self.gateway
+        profile_name = self.dashboard_store.get_persona(session_id)
+        if not profile_name:
+            # Recorded as runner-backed but the profile pointer is missing —
+            # fail back to the shared gateway rather than erroring the turn;
+            # this should not happen (set_persona always writes both), but
+            # a stale/corrupt row must not break an existing chat.
+            return self.gateway
+        client = await self.runner_manager.ensure_profile_gateway(profile_name)
+        self.runner_manager.touch(profile_name)
+        return client
+
+    async def _profile_exists(self, profile_name: str) -> bool:
+        """True when profile_name is in the dashboard's current profile
+        inventory. Fails closed (False) on any upstream trouble — an
+        unreachable dashboard must not be treated as "any name is fine"."""
+        try:
+            status, body, _ = await self.dashboard.get("/api/profiles")
+        except UpstreamError:
+            return False
+        if status >= 400:
+            return False
+        rows = body
+        if isinstance(rows, dict):
+            rows = rows.get("profiles") or rows.get("data") or rows.get("items") or []
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            if isinstance(row, dict) and (row.get("name") or row.get("id")) == profile_name:
+                return True
+            if isinstance(row, str) and row == profile_name:
+                return True
+        return False
+
+    def _stream_touch_callback(self, session_id: str):
+        """A cheap, throttled per-frame callback for a chat SSE generator to
+        call as bytes arrive, so a single turn running longer than the
+        runner pool's idle timeout doesn't get its profile gateway reaped
+        out from under it mid-stream (the pool only sees activity at the
+        start of a turn otherwise — a long-running one goes quiet from the
+        pool's point of view even while very much alive)."""
+        if self.dashboard_store is None or self.runner_manager is None:
+            return lambda: None
+        state = {"last": 0.0}
+
+        def _touch() -> None:
+            now = time.monotonic()
+            if now - state["last"] < 30.0:
+                return
+            state["last"] = now
+            if self.dashboard_store.get_execution_mode(session_id) != "runner":
+                return
+            profile_name = self.dashboard_store.get_persona(session_id)
+            if profile_name:
+                self.runner_manager.touch(profile_name)
+
+        return _touch
 
     # ------------------------------------------------------------- envelope
     def _envelope(
@@ -1876,7 +1955,10 @@ class Router:
         return []
 
     async def mutation(self, request: Request, action: str, path: str,
-                       upstream_path: str | None = None) -> Response:
+                       upstream_path: str | None = None,
+                       gateway: GatewayClient | None = None,
+                       on_success: Callable[[int, Any], None] | None = None) -> Response:
+        gateway = gateway or self.gateway
         spec = MUTATION_ALLOWLIST.get(action)
         if spec is None:
             return _json_error(404, "mutation_unknown", "unknown mutation",
@@ -1949,15 +2031,16 @@ class Router:
         # Streaming mutation (chat) — passthrough SSE without buffering.
         if spec.get("stream"):
             return await self._stream_chat(request, spec, upstream_path, body,
-                                           extra_headers, rid, profile_id, idem)
+                                           extra_headers, rid, profile_id, idem,
+                                           gateway=gateway)
 
         try:
             if spec.get("cron"):
-                status, resp_body, _ = await self.gateway.cron_fire(
+                status, resp_body, _ = await gateway.cron_fire(
                     body or {}, inbound_request_id=rid, idempotency_key=idem
                 )
             else:
-                status, resp_body, _ = await self.gateway.request(
+                status, resp_body, _ = await gateway.request(
                     spec["method"], upstream_path,
                     json_body=body, inbound_request_id=rid, extra_headers=extra_headers,
                 )
@@ -1975,6 +2058,16 @@ class Router:
             )
 
         self._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")
+        # Post-success bookkeeping the generic path can't know about (fork
+        # carrying its parent's execution_mode onto the new session id).
+        # Best-effort: local bookkeeping must never turn a succeeded upstream
+        # mutation into an error response.
+        if on_success is not None and status < 400:
+            try:
+                on_success(status, resp_body)
+            except Exception:  # noqa: BLE001
+                logger.warning("mutation on_success hook failed for %s", action,
+                               exc_info=True)
         # Exact upstream status/body passthrough — never rewrite success.
         freshness = "live" if status < 400 else "unavailable"
         return JSONResponse(
@@ -1990,11 +2083,13 @@ class Router:
     async def _stream_chat(
         self, request: Request, spec: dict, upstream_path: str, body: Any,
         extra_headers: dict | None, rid: str, profile_id: str | None, idem: str | None,
+        *, gateway: GatewayClient | None = None,
     ) -> Response:
         """Proxy the gateway SSE stream chunk-by-chunk (never buffered)."""
+        gateway = gateway or self.gateway
         upstream: Any = None
         try:
-            upstream = await self.gateway.stream(
+            upstream = await gateway.stream(
                 "POST", upstream_path, json_body=body,
                 inbound_request_id=rid, extra_headers=extra_headers,
             )
@@ -2030,20 +2125,22 @@ class Router:
             )
 
         self._record_audit_result(rid, status, "stream-started")
+        session_id = str((body or {}).get("session_id") or "")
         bus = getattr(self, "event_bus", None)
         if bus is not None:
             # One event per turn (never per frame): marks activity on the
             # session so subscribers can react without flooding the ring.
             await bus.safe_publish(
-                "session.changed", "chat", "session",
-                str((body or {}).get("session_id") or ""),
+                "session.changed", "chat", "session", session_id,
                 {"event": "message_received"}, coverage="native",
                 profile_id=profile_id,
             )
 
         async def gen():
+            touch = self._stream_touch_callback(session_id) if session_id else (lambda: None)
             try:
                 async for chunk in upstream.aiter_bytes():
+                    touch()
                     yield chunk
             finally:
                 await upstream.aclose()
@@ -2059,8 +2156,13 @@ class Router:
             },
         )
 
-    def _record_audit_result(self, rid: str, status: int, result: str) -> None:
-        """Update the pending audit row's upstream_status/result in place."""
+    def _record_audit_result(self, rid: str, status: int | None, result: str) -> None:
+        """Update the pending audit row's upstream_status/result in place.
+
+        ``status`` is None when the request failed before any upstream was
+        reached (e.g. an unknown profile, or a runner that would not spawn) —
+        the row still has to leave 'pending'.
+        """
         try:
             self.store.complete_audit(rid, status, result)
         except Exception:  # noqa: BLE001 — non-fatal after the fact
@@ -2465,6 +2567,12 @@ class Router:
     async def chat_create_session(self, request: Request) -> Response:
         session = self._require_session(request)
         self._require_csrf(request, session)
+        if not self._origin_allowed(request):
+            return _json_error(403, "origin_forbidden", "Origin not allowed",
+                               request.state.request_id)
+        if not self._host_allowed(request):
+            return _json_error(403, "host_forbidden", "Host not allowed",
+                               request.state.request_id)
         if not self.mutation_limiter.allow(session["id"]):
             return _json_error(429, "rate_limited", "mutation rate limit exceeded",
                                request.state.request_id)
@@ -2478,16 +2586,64 @@ class Router:
                                request.state.request_id)
         idem = request.headers.get("Idempotency-Key")
         rid = request.state.request_id
+
+        # A runtime `profile_name` routes this session to its own isolated,
+        # profile-scoped gateway (runner_manager) instead of the shared
+        # default gateway — true profile scoping (SOUL/model/credentials/
+        # memory/state.db all genuinely from that profile), not the old
+        # persona-copy (SOUL text borrowed into a session still running on
+        # the default profile's gateway). Absent profile_name, behavior is
+        # unchanged: the shared default gateway, execution_mode='gateway'.
+        profile_name = body.get("profile_name")
+        gateway = self.gateway
+        execution_mode = "gateway"
+        wants_runner = isinstance(profile_name, str) and bool(profile_name.strip())
+
+        # AUDIT FIRST — before ANY upstream effect. The profile-inventory
+        # lookup and the runner spawn below are both real side effects (an
+        # HTTP call to the dashboard, and a `hermes serve --isolated`
+        # subprocess), so the pending row has to exist before them, not just
+        # before the gateway create. Same rule the generic mutation() path
+        # follows; auditing after the spawn would leave a crashed request
+        # with real effects and no trail.
+        #
         # Defensive (S8-FIX t_7fcdab02): resolve the optional profile instead
         # of hardcoding None — the nullable schema (migration 003) is primary,
         # but no audit call site should force a NOT NULL failure.
-        self.store.append_audit(
-            request_id=rid, actor="owner", action="chat_session_create",
-            target="/api/sessions", profile_id=self._request_profile(request),
-            request_summary="POST /api/sessions", upstream_status=None, result="pending",
-        )
         try:
-            result = await chat_proxy.create_session(self.gateway, body, idem)
+            self.store.append_audit(
+                request_id=rid, actor="owner", action="chat_session_create",
+                target="/api/sessions", profile_id=self._request_profile(request),
+                request_summary="POST /api/sessions", upstream_status=None,
+                result="pending",
+            )
+        except Exception as e:  # noqa: BLE001
+            return _json_error(503, "audit_failed",
+                               f"audit write failed: {type(e).__name__}", rid)
+
+        if wants_runner:
+            profile_name = profile_name.strip()
+            if self.runner_manager is None:
+                self._record_audit_result(rid, None, "error:runner_unavailable")
+                return _json_error(503, "runner_unavailable",
+                                   "profile-scoped chat runner not configured", rid)
+            # Fail closed on an unknown profile before ever touching a
+            # process spawn — a garbage/injected name still cannot reach
+            # argv (create_subprocess_exec never shells out), but there is
+            # no reason to pay for a spawn attempt Hermes would only reject.
+            if not await self._profile_exists(profile_name):
+                self._record_audit_result(rid, None, "error:unknown_profile")
+                return _json_error(400, "unknown_profile",
+                                   f"no such profile: {profile_name!r}", rid)
+            try:
+                gateway = await self.runner_manager.ensure_profile_gateway(profile_name)
+            except RunnerSpawnError as exc:
+                self._record_audit_result(rid, None, "error:runner_spawn_failed")
+                return _json_error(502, "runner_spawn_failed", str(exc), rid)
+            execution_mode = "runner"
+
+        try:
+            result = await chat_proxy.create_session(gateway, body, idem)
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
             return JSONResponse(
@@ -2499,6 +2655,14 @@ class Router:
         if result["status"] < 400:
             body_data = result["body"] if isinstance(result["body"], dict) else {}
             sid = self._created_session_id(body_data)
+            if profile_name and sid and self.dashboard_store is not None:
+                self.dashboard_store.set_persona(
+                    sid, profile_name, execution_mode=execution_mode
+                )
+                body_data = dict(body_data)
+                body_data["profile_name"] = profile_name
+                body_data["execution_mode"] = execution_mode
+                result = {**result, "body": body_data}
             bus = getattr(self, "event_bus", None)
             if bus is not None:
                 await bus.safe_publish(
@@ -2521,6 +2685,12 @@ class Router:
     async def chat_stream(self, request: Request) -> Response:
         session = self._require_session(request)
         self._require_csrf(request, session)
+        if not self._origin_allowed(request):
+            return _json_error(403, "origin_forbidden", "Origin not allowed",
+                               request.state.request_id)
+        if not self._host_allowed(request):
+            return _json_error(403, "host_forbidden", "Host not allowed",
+                               request.state.request_id)
         if not self.mutation_limiter.allow(session["id"]):
             return _json_error(429, "rate_limited", "mutation rate limit exceeded",
                                request.state.request_id)
@@ -2537,6 +2707,10 @@ class Router:
             return _json_error(400, "session_id_required", "session_id required",
                                request.state.request_id)
         rid = request.state.request_id
+        try:
+            attachments = chat_proxy.normalize_chat_attachments(body.get("attachments"))
+        except chat_proxy.AttachmentValidationError as exc:
+            return _json_error(400, exc.code, str(exc), rid)
         upstream_body = {
             k: body.get(k) for k in
             # `require_model_lock` is what makes the composer's model pick
@@ -2547,6 +2721,8 @@ class Router:
              "model_options", "require_model_lock")
             if body.get(k) is not None
         }
+        if attachments:
+            upstream_body["attachments"] = attachments
         self.store.append_audit(
             request_id=rid, actor="owner", action="chat_stream",
             target=f"/api/sessions/{session_id}/chat/stream",
@@ -2554,9 +2730,10 @@ class Router:
             request_summary="POST /api/chat/stream", upstream_status=None, result="streaming",
         )
 
+        gateway = await self._gateway_client_for_session(session_id)
         try:
             resp, request_id = await chat_proxy.stream_chat(
-                self.gateway, session_id, upstream_body
+                gateway, session_id, upstream_body
             )
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
@@ -2582,8 +2759,10 @@ class Router:
             # Emitted before the first upstream byte so the composer can show
             # "connected, waiting on the agent" instead of an inert screen.
             yield chat_proxy.open_frame(rid, request_id)
+            touch = self._stream_touch_callback(session_id)
             try:
                 async for frame in chat_proxy.iter_forwarded_frames(resp, request_id):
+                    touch()
                     yield frame
             except asyncio.CancelledError:
                 # The client hung up (Stop button, tab closed). Let the
@@ -2775,17 +2954,58 @@ class Router:
         # Explicit upstream path: the generic `{id}` substitution would have
         # resolved to the trailing "stream" segment.
         path = f"/api/sessions/{session_id}/chat/stream"
-        return await self.mutation(request, "chat_send", path, upstream_path=path)
+        gateway = await self._gateway_client_for_session(session_id)
+        return await self.mutation(request, "chat_send", path, upstream_path=path,
+                                   gateway=gateway)
 
     async def _mutation_session_fork(self, request: Request, session_id: str) -> Response:
         path = f"/api/sessions/{session_id}/fork"
-        return await self.mutation(request, "session_fork", path, upstream_path=path)
+        gateway = await self._gateway_client_for_session(session_id)
+        return await self.mutation(request, "session_fork", path, upstream_path=path,
+                                   gateway=gateway,
+                                   on_success=self._fork_persona_writer(session_id))
+
+    def _fork_persona_writer(self, source_session_id: str):
+        """Carry a session's profile + execution mode onto its fork.
+
+        A fork of a runner-backed session is itself runner-backed: it lives
+        in the same profile's isolated `hermes serve` process, since that is
+        the gateway the fork request was proxied to. Without recording it,
+        get_execution_mode() would default the new id to 'gateway' and the
+        fork's very first turn would be routed to the shared default gateway
+        — wrong process, wrong profile, no error.
+        """
+        if self.dashboard_store is None:
+            return None
+        mode = self.dashboard_store.get_execution_mode(source_session_id)
+        profile_name = self.dashboard_store.get_persona(source_session_id)
+        if mode != "runner" or not profile_name:
+            # Nothing profile-scoped to inherit: leave the fork on the
+            # default 'gateway' path, exactly as before this feature.
+            return None
+
+        def _write(_status: int, resp_body: Any) -> None:
+            new_sid = self._created_session_id(resp_body)
+            if new_sid:
+                self.dashboard_store.set_persona(
+                    new_sid, profile_name, execution_mode="runner"
+                )
+
+        return _write
 
     async def _mutation_session_model(self, request: Request, session_id: str) -> Response:
         path = f"/api/sessions/{session_id}/model"
-        return await self.mutation(request, "session_model_lock", path, upstream_path=path)
+        gateway = await self._gateway_client_for_session(session_id)
+        return await self.mutation(request, "session_model_lock", path, upstream_path=path,
+                                   gateway=gateway)
 
     async def _mutation_run_stop(self, request: Request, run_id: str) -> Response:
+        # Not resolved to a runner-backed client: run_id is a gateway run id,
+        # not a session id, and there is no existing lookup from one to the
+        # other anywhere in this codebase. This route already 404s until the
+        # gateway registers the run (see MUTATION_ALLOWLIST comment) and the
+        # SPA falls back to aborting the stream either way, so it stays on
+        # the shared default gateway rather than guessing a mapping.
         path = f"/v1/runs/{run_id}/stop"
         return await self.mutation(request, "run_stop", path, upstream_path=path)
 
@@ -2793,10 +3013,14 @@ class Router:
         return await self.mutation(request, "session_create", "/api/sessions")
 
     async def _mutation_session_patch(self, request: Request, session_id: str) -> Response:
-        return await self.mutation(request, "session_patch", f"/api/sessions/{session_id}")
+        gateway = await self._gateway_client_for_session(session_id)
+        return await self.mutation(request, "session_patch", f"/api/sessions/{session_id}",
+                                   gateway=gateway)
 
     async def _mutation_session_delete(self, request: Request, session_id: str) -> Response:
-        return await self.mutation(request, "session_delete", f"/api/sessions/{session_id}")
+        gateway = await self._gateway_client_for_session(session_id)
+        return await self.mutation(request, "session_delete", f"/api/sessions/{session_id}",
+                                   gateway=gateway)
 
     async def _mutation_cron_fire(self, request: Request) -> Response:
         return await self.mutation(request, "cron_fire", "/api/cron/fire")

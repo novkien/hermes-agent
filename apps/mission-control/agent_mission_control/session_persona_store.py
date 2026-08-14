@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 # v1: which profile's persona a chat session was created with. The gateway
 # session row stores the resolved system_prompt but not its origin, so the name
@@ -33,8 +33,18 @@ CREATE TABLE IF NOT EXISTS session_persona (
 );
 """
 
+# v2: how a session is executed — 'gateway' (default, the shared multiplexed
+# gateway, unchanged legacy behavior) or 'runner' (its own profile-scoped
+# `hermes serve --isolated` process via runner_manager.py). BFF is the sole
+# source of this fact (it's the one deciding which path a session runs on),
+# so it belongs here alongside profile_name.
+_SCHEMA_V2 = """
+ALTER TABLE session_persona ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'gateway';
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
+    (2, _SCHEMA_V2),
 ]
 
 
@@ -95,15 +105,41 @@ class SessionPersonaStore:
         with self._lock:
             self._conn.close()
 
-    def set_persona(self, session_id: str, profile_name: str) -> None:
+    def set_persona(
+        self, session_id: str, profile_name: str, *, execution_mode: str | None = None
+    ) -> None:
+        """Record which profile a session belongs to.
+
+        ``execution_mode=None`` (the default) means "the caller is not
+        deciding how this session runs" — it inserts the 'gateway' default
+        for a brand-new row but LEAVES an existing row's mode alone. Only
+        the create path, which actually knows whether it spawned a runner,
+        passes a mode explicitly. Overwriting it unconditionally here would
+        let a plain persona-label write silently downgrade a runner-backed
+        session to the shared gateway, and every later turn would then be
+        routed to the wrong process with no error.
+        """
+        now = _iso(time.time())
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO session_persona (session_id, profile_name, created_at) "
-                "VALUES (?, ?, ?) "
-                "ON CONFLICT(session_id) DO UPDATE SET "
-                "profile_name=excluded.profile_name, created_at=excluded.created_at",
-                (session_id, profile_name, _iso(time.time())),
-            )
+            if execution_mode is None:
+                self._conn.execute(
+                    "INSERT INTO session_persona "
+                    "(session_id, profile_name, created_at, execution_mode) "
+                    "VALUES (?, ?, ?, 'gateway') "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "profile_name=excluded.profile_name, created_at=excluded.created_at",
+                    (session_id, profile_name, now),
+                )
+            else:
+                self._conn.execute(
+                    "INSERT INTO session_persona "
+                    "(session_id, profile_name, created_at, execution_mode) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "profile_name=excluded.profile_name, created_at=excluded.created_at, "
+                    "execution_mode=excluded.execution_mode",
+                    (session_id, profile_name, now, execution_mode),
+                )
             self._conn.commit()
 
     def get_persona(self, session_id: str) -> str | None:
@@ -113,3 +149,17 @@ class SessionPersonaStore:
                 (session_id,),
             ).fetchone()
         return row["profile_name"] if row else None
+
+    def get_execution_mode(self, session_id: str) -> str:
+        """Return the session's execution mode; 'gateway' when unrecorded.
+
+        Unrecorded means either the session predates this column or was
+        never routed through set_persona — both cases are legacy gateway
+        sessions, so 'gateway' is the correct default, not an error.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT execution_mode FROM session_persona WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return row["execution_mode"] if row else "gateway"

@@ -28,16 +28,9 @@ export const PHASES = [
 
 const TERMINAL_PHASES = new Set(['done', 'failed', 'stopped']);
 
-// Phases where nothing else on screen says anything is happening: no tool
-// row, no streaming text, just the activity line itself. A long wait in one
-// of these used to be flagged as "stalled" — an amber warning color and a
-// literal "— still running" suffix — which named a healthy, ordinary wait
-// (a slow provider round trip, a reasoning model working through a hard
-// problem) as if something had gone wrong. `activityLabel` below reads the
-// same wait as progressively deeper thinking instead: the honest fact is
-// simply that no answer has arrived yet, and there is no failure to warn
-// about that a plain elapsed timer does not already show.
-const SILENT_PHASES = new Set(['connecting', 'queued', 'starting', 'thinking']);
+// Escalation belongs to an explicit `_thinking` interval, not to the whole
+// request. A slow connection, queue or run startup is not evidence that the
+// model is thinking, and a later thinking round must get a fresh clock.
 const THINKING_MORE_MS = 30000;
 const DEEP_THINKING_MS = 60000;
 
@@ -97,6 +90,7 @@ export function createTurn(now = Date.now()) {
     tools: [],
 
     narration: '',
+    thinkingStartedAt: null,
     activeToolKey: null,
 
     usage: null,
@@ -295,6 +289,12 @@ export function reduceTurn(turn, event, now = Date.now()) {
 
   const setPhase = (phase) => {
     if (next.phase !== phase) { next.phase = phase; touch('phase'); }
+    // Leaving an explicit `_thinking` interval closes its clock. If another
+    // round starts thinking later, its first `_thinking` frame starts over.
+    if (phase !== 'thinking' && next.thinkingStartedAt !== null) {
+      next.thinkingStartedAt = null;
+      touch('thinkingStartedAt');
+    }
   };
 
   switch (name) {
@@ -382,7 +382,11 @@ export function reduceTurn(turn, event, now = Date.now()) {
     case 'tool.progress': {
       // Liveness only. See NARRATION_TOOL: this channel carries the reply text,
       // so it drives the status line and never the transcript.
-      if (toolName(data) === NARRATION_TOOL && !next.text) {
+      if (toolName(data) === NARRATION_TOOL) {
+        if (!Number.isFinite(next.thinkingStartedAt)) {
+          next.thinkingStartedAt = now;
+          touch('thinkingStartedAt');
+        }
         const preview = textOf(data, 'delta', 'preview');
         if (preview) { next.narration = preview; touch('narration'); }
         setPhase('thinking');
@@ -551,7 +555,8 @@ export function stopTurn(turn, now = Date.now()) {
   return derive({
     ...turn, phase: 'stopped', interrupted: true, endedAt: now,
     blocks: closeOpenBlocks(turn.blocks, now),
-    narration: '', changed: ['phase', 'interrupted', 'narration', 'blocks'],
+    narration: '', thinkingStartedAt: null,
+    changed: ['phase', 'interrupted', 'narration', 'thinkingStartedAt', 'blocks'],
   });
 }
 
@@ -560,7 +565,8 @@ export function failTurn(turn, message, now = Date.now()) {
   return derive({
     ...turn, phase: 'failed', error: String(message || 'stream failed'),
     blocks: closeOpenBlocks(turn.blocks, now),
-    endedAt: now, narration: '', changed: ['phase', 'error', 'narration', 'blocks'],
+    endedAt: now, narration: '', thinkingStartedAt: null,
+    changed: ['phase', 'error', 'narration', 'thinkingStartedAt', 'blocks'],
   });
 }
 
@@ -589,17 +595,14 @@ export function phaseLabel(turn) {
 }
 
 /**
- * The activity line's label. In a silent phase (nothing else on screen shows
- * progress — no tool row, no streaming text) a long wait reads as thinking
- * harder rather than as a name for the current technical phase: past 30s,
- * "Thinking more"; past 60s, "Deep thinking". A phase with its own visible
- * signal (a running tool, streaming text, wrapping up) keeps naming itself —
- * escalating "Running <tool>" into "Deep thinking" would erase real
- * information a reader already has in front of them.
+ * The activity line escalates only while an explicit `_thinking` interval is
+ * active: past 30s, "Thinking more"; past 60s, "Deep thinking". Startup and
+ * queue time never count, and leaving the interval resets the clock before a
+ * later thinking round.
  */
 export function activityLabel(turn, now = Date.now()) {
-  if (SILENT_PHASES.has(turn.phase)) {
-    const elapsed = turnElapsed(turn, now);
+  if (turn.phase === 'thinking' && Number.isFinite(turn.thinkingStartedAt)) {
+    const elapsed = Math.max(0, now - turn.thinkingStartedAt);
     if (elapsed >= DEEP_THINKING_MS) return 'Deep thinking';
     if (elapsed >= THINKING_MORE_MS) return 'Thinking more';
   }

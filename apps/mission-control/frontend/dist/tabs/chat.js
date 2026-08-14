@@ -35,7 +35,9 @@ import {
   sessionTitle, threadIdentity, withOptimisticSession,
 } from '../pure/chat-session.js';
 import { attachChainTips } from '../pure/session-chain.js';
-import { isAtBottom, messageKeys, mirrorAppend } from '../pure/chat-mirror.js';
+import {
+  createMirrorBarrier, isAtBottom, messageKeys, mirrorAppend,
+} from '../pure/chat-mirror.js';
 import { displayModelName, unwrapModelOptions } from '../pure/chat-model.js';
 import {
   catalogHas, createModelPrefs, effectiveModel, normalizeProvider, observeConfirmedLock,
@@ -134,6 +136,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   let mirrorTimer = null;
   let mirrorVisibility = null;
   let mirroring = false;
+  const mirrorBaselineBarrier = createMirrorBarrier();
   // Paging state for the full session list. The aggregator's first page is only
   // the newest 500 of (here) 5,295; `pager` knows how to reach the rest.
   let pager = createPager({});
@@ -475,7 +478,9 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       instructionsStore,
       draftStore,
       onFork: () => forkSession(session),
-      onTurnSettled: (turn) => onTurnSettled(turn, session),
+      onTurnSettled: (turn) => onTurnSettled(
+        turn, session, sessionId, sessionProfile,
+      ),
       // A turn watched from elsewhere was painted from frames, not from
       // persisted rows, so the mirror has to be re-anchored exactly as it is
       // after a local turn — otherwise the next poll appends the whole thing
@@ -635,11 +640,20 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     // painted frame by frame, and appending the persisted copy on top would
     // duplicate the whole turn.
     if (composerHandle && (composerHandle.isRunning() || composerHandle.isWatching())) return;
+    // A completed streamed turn is visible already, but its persisted message
+    // ids arrive slightly later. Until baseline sync records those ids, a
+    // mirror read would append the same turn as ordinary history.
+    if (mirrorBaselineBarrier.active(sessionId)) return;
     mirroring = true;
     try {
       const messages = await readMessages(sessionId, sessionProfile, 0);
       if (!messages.length) return;
       if (list !== threadList || selectedSessionId !== sessionId) return;
+      // The read may have started while idle and returned after a local send
+      // claimed the transcript or a baseline sync began. Re-check immediately
+      // before touching the DOM to close that in-flight request race.
+      if (composerHandle && (composerHandle.isRunning() || composerHandle.isWatching())) return;
+      if (mirrorBaselineBarrier.active(sessionId)) return;
       const fresh = mirrorAppend(renderedKeys, messages);
       if (!fresh.length) return;
 
@@ -685,11 +699,18 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
    * reason to stop early even once something comes back.
    */
   async function syncMirrorBaseline(sessionId, sessionProfile) {
-    for (const delay of RELOAD_BACKOFF_MS) {
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      if (selectedSessionId !== sessionId) return;
-      const messages = await readMessages(sessionId, sessionProfile, 0).catch(() => []);
-      for (const key of messageKeys(messages)) renderedKeys.add(key);
+    // Acquired synchronously, before the first backoff await, so a session
+    // event or timer cannot squeeze a mirror append into the persistence gap.
+    const release = mirrorBaselineBarrier.acquire(sessionId);
+    try {
+      for (const delay of RELOAD_BACKOFF_MS) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (selectedSessionId !== sessionId) return;
+        const messages = await readMessages(sessionId, sessionProfile, 0).catch(() => []);
+        for (const key of messageKeys(messages)) renderedKeys.add(key);
+      }
+    } finally {
+      release();
     }
   }
 
@@ -759,7 +780,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     arm();
   }
 
-  function onTurnSettled(turn, session) {
+  function onTurnSettled(turn, session, sessionId, sessionProfile) {
     // Refresh the sider's recency ordering without a full reload. The runtime
     // the gateway REPORTS having used also lands here, so the header chip
     // shows what actually answered rather than what the row was created with —
@@ -814,7 +835,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     // The turn just drawn on screen came from SSE frames, not persisted rows.
     // Teach the mirror that those rows are already on screen, or its next poll
     // would append the whole turn again.
-    syncMirrorBaseline(openTargetId(session), session.profile || profile).catch(() => null);
+    syncMirrorBaseline(sessionId, sessionProfile).catch(() => null);
     // A long turn that finishes while the operator is elsewhere should say so.
     if (document.hidden && turn && !turn.error) {
       const tokens = turnTokens(turn.usage);
@@ -881,9 +902,10 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     const meta = el('div', { class: 'chat-thread-meta' });
     const bits = [];
     if (session.profile) bits.push(['chip', session.profile]);
-    // Whose voice this thread is in, when it is not this profile's own. The
-    // session runs on the gateway's profile either way; only the SOUL.md it was
-    // born with differs, and nothing else on screen would ever say so.
+    // A runner-backed session's own profile IS session.profile (it runs on
+    // that profile's own isolated gateway), so this only ever shows for
+    // legacy sessions created on the shared default gateway with another
+    // profile's SOUL.md borrowed in — the one case where the two diverge.
     const persona = personaBySession.get(openTargetId(session));
     if (persona && persona !== session.profile) bits.push(['chip', `persona: ${persona}`]);
     if (session.source) bits.push(['chip', session.source]);
@@ -1014,28 +1036,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
 
   /* ---------------------------------------------------- session mutations -- */
 
-  // Start a session on another profile's persona.
-  //
-  // The gateway is a single process serving one profile at a time, so a session
-  // cannot be moved to a different one. What it does accept at create time is a
-  // `system_prompt` — so a session can be born with another profile's SOUL.md
-  // and model even though it still runs on this gateway. The profile's name is
-  // then stored on the BFF, because the session row keeps the resolved prompt
-  // but not its origin, and without it the header could never say whose voice
-  // this thread is in.
-  async function personaFor(profileName) {
-    const row = (profilesList || []).find((p) => (p?.name ?? p?.id) === profileName);
-    if (!row) return null;
-    const response = await api.get(
-      `/api/upstream/api/profiles/${encodeURIComponent(profileName)}/soul`,
-      { profile },
-    );
-    const body = recordFrom(response?.data) || {};
-    const soul = typeof body === 'string' ? body : (body.content ?? '');
-    return { name: profileName, soul, model: row.model || null, provider: row.provider || null };
-  }
-
-  /** Ask which persona to start on, then create. With nothing else to offer,
+  /** Ask which profile to start on, then create. With nothing else to offer,
    * skip the menu and behave exactly like every other entry point. */
   function startSession(anchor) {
     if (!gatewayAvailable) return;
@@ -1046,7 +1047,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     });
   }
 
-  async function createSession(personaProfile = null) {
+  async function createSession(runtimeProfile = null) {
     if (!gatewayAvailable) return;
     try {
       // Say which model this session is for.
@@ -1066,13 +1067,13 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       // case say nothing and let the gateway resolve its own default — the
       // first turn reports what it truly ran on, and that is what sticks.
       const created0 = { profile };
-      // A picked persona speaks for itself: its own model, not this tab's
-      // default, or the two would disagree about whose session this is.
-      const persona = personaProfile ? await personaFor(personaProfile) : null;
-      if (persona) {
-        if (persona.soul) created0.system_prompt = persona.soul;
-        if (persona.model) created0.model = persona.model;
-        if (persona.provider) created0.provider = persona.provider;
+      // A picked profile runs on its OWN isolated gateway (runner_manager,
+      // BFF-side) — its own SOUL.md, model, credentials, memory and
+      // state.db, not text borrowed into a session still running on this
+      // tab's default gateway. The BFF resolves model/provider from that
+      // profile itself; nothing to inject here beyond the name.
+      if (runtimeProfile) {
+        created0.profile_name = runtimeProfile;
       } else if (catalogHas(modelOptions, modelOptions?.provider, modelOptions?.model)) {
         created0.model = modelOptions.model;
         created0.provider = modelOptions.provider;
@@ -1080,14 +1081,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       const response = await api.post('/api/chat/sessions', created0, { profile });
       const created = createdSession(response.data || response);
       if (!created) throw new Error('gateway returned no session id');
-      if (persona) {
-        personaBySession.set(created.id, persona.name);
-        // Best-effort: the chip is already correct from the map above, so a
-        // failed write costs the label on the next reload, not this session.
-        api.post(
-          `/api/sessions/${encodeURIComponent(created.id)}/persona`,
-          { profile_name: persona.name }, { profile },
-        ).catch(() => null);
+      if (runtimeProfile) {
+        personaBySession.set(created.id, runtimeProfile);
       }
       // Insert optimistically: the sider reads from the dashboard aggregator,
       // which has not indexed this row yet. Waiting for it is what used to

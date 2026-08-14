@@ -1,9 +1,10 @@
-// Which persona a new session starts on.
+// Which profile a new session runs on.
 //
-// The gateway serves one profile at a time, so this does not move a session to
-// another profile — it starts one on another profile's SOUL.md and model while
-// still running here. The first item is therefore the plain path: this tab's
-// own profile, the behaviour every other entry point keeps.
+// Picking another profile here starts the session on that profile's own
+// isolated gateway (runner_manager, BFF-side) — its real SOUL.md, model,
+// credentials, memory and state.db, not a borrowed copy on this tab's
+// gateway. The first item is therefore the plain path: this tab's own
+// profile, the behaviour every other entry point keeps.
 
 import { el, closeMenu } from '../../ui.js';
 import { icon } from '../../icons.js';

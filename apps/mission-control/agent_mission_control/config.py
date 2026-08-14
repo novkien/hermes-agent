@@ -85,6 +85,16 @@ class Settings:
     gateway_token: str | None = None
     nas_jwt_secret: str | None = None  # required for POST /api/cron/fire
 
+    # --- profile-scoped chat runner pool (runner_manager.py) ---
+    # Executable spawned as `<runner_hermes_executable> --profile X serve
+    # --isolated --host 127.0.0.1 --port 0` per profile with an active
+    # runner-backed chat session. Must resolve on PATH or be an absolute path.
+    runner_hermes_executable: str = "hermes"
+    runner_pool_max: int = 3
+    runner_pool_idle_seconds: float = 900.0
+    runner_pool_keepalive_fresh_seconds: float = 90.0
+    runner_port_announce_timeout_seconds: float = 90.0
+
     # --- request security ---
     allowed_origin: str = "http://192.168.1.9:51763"
     allowed_host: str | None = None  # derived from allowed_origin when unset
@@ -173,6 +183,15 @@ class Settings:
                 or _env("API_SERVER_KEY")
             ),
             nas_jwt_secret=_env("NAS_JWT_SECRET"),
+            runner_hermes_executable=_env("RUNNER_HERMES_EXECUTABLE", "hermes") or "hermes",
+            runner_pool_max=_env_int("RUNNER_POOL_MAX", 3),
+            runner_pool_idle_seconds=float(_env("RUNNER_POOL_IDLE_SECONDS", "900") or "900"),
+            runner_pool_keepalive_fresh_seconds=float(
+                _env("RUNNER_POOL_KEEPALIVE_FRESH_SECONDS", "90") or "90"
+            ),
+            runner_port_announce_timeout_seconds=float(
+                _env("RUNNER_PORT_ANNOUNCE_TIMEOUT_SECONDS", "90") or "90"
+            ),
             allowed_origin=_env("ALLOWED_ORIGIN", "http://192.168.1.9:51763") or "http://192.168.1.9:51763",
             allowed_host=_env("ALLOWED_HOST"),
             body_limit_bytes=_env_int("BODY_LIMIT_BYTES", 1024 * 1024),

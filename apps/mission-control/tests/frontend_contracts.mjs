@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { filterRows, filterSummary, queryTerms } from '../frontend/dist/pure/text-filter.js';
 import { fitPopover, POPOVER_GAP, POPOVER_MIN_HEIGHT } from '../frontend/dist/pure/popover-fit.js';
 import { buildTranscriptMarkdown } from '../frontend/dist/pure/chat-export.js';
@@ -650,17 +651,49 @@ assert.equal(drifted.unknown[0].name, 'some.future.event');
 
 assert.equal(turnElapsed(turn), 90);
 
-// A silent phase escalates its own label as the wait lengthens — no separate
-// "stalled" flag, no color, just a truer name for what is already visible.
-// `quiet` starts at t=0 (createTurn(0)), so `now` passed to activityLabel IS
-// the elapsed time — no offset to add.
+// Startup never masquerades as thinking, however long the provider stays
+// silent. Escalation starts only at the first explicit `_thinking` frame.
 const quiet = reduceTurn(createTurn(0), frame('run.started', {}), 1000);
 assert.equal(quiet.phase, 'starting');
 assert.equal(activityLabel(quiet, 1000), 'Starting the run');
-assert.equal(activityLabel(quiet, 29999), 'Starting the run');
-assert.equal(activityLabel(quiet, 30000), 'Thinking more');
-assert.equal(activityLabel(quiet, 59999), 'Thinking more');
-assert.equal(activityLabel(quiet, 60000), 'Deep thinking');
+assert.equal(activityLabel(quiet, 90000), 'Starting the run');
+
+let explicitThinking = reduceTurn(quiet, frame('tool.progress', {
+  tool_name: NARRATION_TOOL, delta: 'Working through it.',
+}), 5000);
+assert.equal(explicitThinking.thinkingStartedAt, 5000);
+assert.equal(activityLabel(explicitThinking, 34999), 'Thinking');
+explicitThinking = reduceTurn(explicitThinking, frame('tool.progress', {
+  tool_name: NARRATION_TOOL, delta: 'Still working through it.',
+}), 20000);
+assert.equal(explicitThinking.thinkingStartedAt, 5000,
+  'later `_thinking` frames in the same interval must not restart its clock');
+assert.equal(activityLabel(explicitThinking, 35000), 'Thinking more');
+assert.equal(activityLabel(explicitThinking, 64999), 'Thinking more');
+assert.equal(activityLabel(explicitThinking, 65000), 'Deep thinking');
+
+// Ending one thinking round clears its clock. A later `_thinking` frame starts
+// from zero even though it belongs to the same overall chat turn.
+explicitThinking = reduceTurn(explicitThinking, frame('assistant.delta', {
+  message_id: 'm1', delta: 'First round.',
+}), 66000);
+assert.equal(explicitThinking.thinkingStartedAt, null);
+explicitThinking = reduceTurn(explicitThinking, frame('message.started', {
+  message_id: 'm2',
+}), 67000);
+assert.equal(activityLabel(explicitThinking, 120000), 'Starting the run');
+explicitThinking = reduceTurn(explicitThinking, frame('tool.progress', {
+  tool_name: NARRATION_TOOL, delta: 'Thinking again.',
+}), 100000);
+assert.equal(explicitThinking.thinkingStartedAt, 100000);
+assert.equal(activityLabel(explicitThinking, 129999), 'Thinking');
+assert.equal(activityLabel(explicitThinking, 130000), 'Thinking more');
+
+// A real reasoning event without `_thinking` stays at the plain phase label.
+const reasoningOnly = reduceTurn(createTurn(0), frame('assistant.reasoning', {
+  delta: 'Reasoning without the compatibility signal.',
+}), 1000);
+assert.equal(activityLabel(reasoningOnly, 90000), 'Thinking');
 
 // A phase with its own visible signal keeps naming itself, however long it
 // runs — a running tool row already says something is happening, and
@@ -1044,8 +1077,28 @@ assert.ok(!bare.includes('## System prompt'));
 // --- mirroring a thread driven from another runtime -------------------------
 // A session advanced from Telegram/cron/CLI has to land in an open thread
 // without a repaint, and without rendering the same message twice.
-const { messageKey, messageKeys, mirrorAppend, trimUnsettledTail, isAtBottom } =
+const {
+  createMirrorBarrier, messageKey, messageKeys, mirrorAppend, trimUnsettledTail, isAtBottom,
+} =
   await import('../frontend/dist/pure/chat-mirror.js');
+
+const mirrorBarrier = createMirrorBarrier();
+const releaseLocal = mirrorBarrier.acquire('s1');
+const releaseWatched = mirrorBarrier.acquire('s1');
+const releaseOther = mirrorBarrier.acquire('s2');
+assert.equal(mirrorBarrier.active('s1'), true);
+assert.equal(mirrorBarrier.active('s2'), true);
+releaseLocal();
+assert.equal(mirrorBarrier.active('s1'), true,
+  'one baseline finishing must not release another sync for the same session');
+releaseLocal(); // idempotent
+assert.equal(mirrorBarrier.active('s1'), true);
+releaseWatched();
+assert.equal(mirrorBarrier.active('s1'), false);
+assert.equal(mirrorBarrier.active('s2'), true,
+  'baseline gates must be scoped to one session');
+releaseOther();
+assert.equal(mirrorBarrier.active('s2'), false);
 
 assert.equal(messageKey({ id: 'm1', role: 'user' }), 'm1');
 assert.equal(messageKey({ message_id: 'm2' }), 'm2');
@@ -1147,6 +1200,49 @@ const pickedSameName = chatStreamBody({
 assert.equal(pickedSameName.require_model_lock, true,
   'an explicit pick locks regardless of what the caller believes the session already runs');
 assert.equal(pickedSameName.provider, '9router');
+
+const attachmentTurn = chatStreamBody({
+  sessionId: 's1', sessionProfile: 'default', text: 'inspect this',
+  attachments: [{
+    kind: 'pdf', name: 'report.pdf', mime_type: 'application/pdf',
+    size: 4, data: 'data:application/pdf;base64,JVBERg==', url: '',
+  }],
+});
+assert.equal(attachmentTurn.message, 'inspect this');
+assert.deepEqual(attachmentTurn.attachments, [{
+  name: 'report.pdf', mime_type: 'application/pdf', size: 4,
+  kind: 'pdf', data: 'data:application/pdf;base64,JVBERg==',
+}]);
+assert.equal(chatStreamBody({
+  sessionId: 's1', text: '', attachments: attachmentTurn.attachments,
+}).message, 'Please review the attached content.');
+
+const composerSource = readFileSync(
+  new URL('../frontend/dist/tabs/chat/composer.js', import.meta.url), 'utf8',
+);
+const chatTabSource = readFileSync(
+  new URL('../frontend/dist/tabs/chat.js', import.meta.url), 'utf8',
+);
+const attachmentSource = readFileSync(
+  new URL('../frontend/dist/tabs/chat/attachments.js', import.meta.url), 'utf8',
+);
+assert.match(composerSource, /return Boolean\(localActive \|\| controller\)/,
+  'the optimistic-send window must count as running before a stream controller exists');
+assert.match(composerSource,
+  /`\/api\/runs\/\$\{encodeURIComponent\(id\)\}\/stop`/,
+  'Stop must call the gateway run-stop mutation instead of only aborting the browser stream');
+assert.match(composerSource, /suppressedRunIds\.has\(eventRunId\)/,
+  'a locally stopped run must not re-attach through the session frame watcher');
+assert.match(composerSource, /await findRunningRunId\(\)/,
+  'an early Stop must resolve a run id even if run.started did not reach the browser');
+assert.match(chatTabSource,
+  /mirrorBaselineBarrier\.active\(sessionId\)[\s\S]*?await readMessages\([\s\S]*?mirrorBaselineBarrier\.active\(sessionId\)/,
+  'the mirror must re-check its baseline gate after an in-flight history read');
+assert.match(composerSource, /accept:\s*['"]\*\/\*['"]/,
+  'the chat file picker must accept every file type');
+assert.match(attachmentSource, /readAsDataURL\(file\)/,
+  'non-image files must be transported, not replaced with a text summary');
+assert.doesNotMatch(attachmentSource, /This file cannot be safely inlined/);
 
 /* ---------------------------------------------------------------------------
  * One owner for "which model does this session run".

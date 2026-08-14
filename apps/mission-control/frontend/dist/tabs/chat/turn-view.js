@@ -276,11 +276,8 @@ export function createTurnView({ list, onStop = null, getContextTotal = null }) 
 
     const elapsed = turnElapsed(turn, now);
     // Below the reveal delay the bar shows movement but no claim about what
-    // that movement is. Past it, a silent phase (no tool row, no streaming
-    // text) escalates its own label the longer it runs — "Thinking more",
-    // then "Deep thinking" — instead of the flat phase name sitting there
-    // unchanged, which is what used to need a separate "stalled" warning to
-    // say "this is still normal, just slow."
+    // that movement is. Past it, the current phase is named; only an explicit
+    // `_thinking` interval can escalate to "Thinking more" or "Deep thinking".
     label.textContent = elapsed >= LABEL_REVEAL_MS ? activityLabel(turn, now) : 'Working';
 
     const bits = [];

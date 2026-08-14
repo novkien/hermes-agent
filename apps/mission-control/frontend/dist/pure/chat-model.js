@@ -60,9 +60,9 @@ export function modelSupportsReasoning(modelOptions, provider, model) {
 }
 
 /**
- * Mirrors the gateway's session chat contract: `message` is a plain string for
- * text-only turns (so prompt caching and trajectory logging see the native
- * shape) and the OpenAI vision part array once images are attached.
+ * Mirrors the gateway's session chat contract: `message` remains plain text
+ * and attachments travel in their own array. Hermes stages those attachments
+ * and decides whether they become native image parts, PDF pages, or @file refs.
  *
  * `system_message` and `instructions` are forwarded by the BFF's chat-stream
  * key allowlist and accepted by the gateway, which is what lets the composer
@@ -74,13 +74,15 @@ export function chatStreamBody({
 }) {
   const body = { session_id: sessionId, profile: sessionProfile };
 
+  body.message = text || (attachments.length ? 'Please review the attached content.' : '');
   if (attachments.length) {
-    const parts = [];
-    if (text) parts.push({ type: 'text', text });
-    for (const item of attachments) parts.push({ type: 'image_url', image_url: { url: item.url } });
-    body.message = parts;
-  } else {
-    body.message = text;
+    body.attachments = attachments.filter(Boolean).map((item) => ({
+      name: item.name,
+      mime_type: item.mime_type || item.mime,
+      size: item.size,
+      kind: item.kind,
+      data: item.data,
+    }));
   }
 
   // The model picker knows exactly which provider each model belongs to, and

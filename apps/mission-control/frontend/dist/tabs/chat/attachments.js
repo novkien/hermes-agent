@@ -1,33 +1,95 @@
-// Image attachments for the composer.
+// File attachments for the composer.
 //
-// The BFF caps request bodies at 1 MB and base64 inflates ~4/3, so an image is
-// downscaled and re-encoded until its data URL fits the budget. The gateway
-// accepts image parts only — files/documents are rejected upstream with
-// `unsupported_content_type`, so the picker is image-only by design.
+// Hermes owns provider-aware attachment routing. The browser only prepares a
+// bounded transport object: images are compressed, while PDFs and every other
+// file type are carried as data URLs without trying to interpret their bytes.
+
+export const ATTACHMENT_MAX_COUNT = 8;
+export const ATTACHMENT_TOTAL_BYTES = 700 * 1024;
 
 const ATTACHMENT_URL_BUDGET = 700 * 1024;
 const ATTACHMENT_MAX_EDGE = 1568;
 
-export async function toImageAttachment(file, { budget = ATTACHMENT_URL_BUDGET } = {}) {
-  if (!/^image\//.test(file.type || '')) {
-    throw new Error('only images can be attached');
-  }
-  const bitmap = await loadImage(file);
-  const scale = Math.min(1, ATTACHMENT_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+function isImageFile(file) {
+  return /^image\//.test(file.type || '');
+}
 
-  // PNG first to keep screenshots crisp; fall back to progressively stronger
-  // JPEG compression when the encoded URL is still over budget.
-  let url = canvas.toDataURL('image/png');
-  for (const quality of [0.9, 0.75, 0.6, 0.45]) {
-    if (url.length <= budget) break;
-    url = canvas.toDataURL('image/jpeg', quality);
+function isPdfFile(file) {
+  return (file.type || '').toLowerCase() === 'application/pdf'
+    || String(file.name || '').toLowerCase().endsWith('.pdf');
+}
+
+function dataUrlMimeType(url) {
+  const match = /^data:([^;,]+)(?:;[^;,=]+=[^;,]+)*;base64,/i.exec(String(url || ''));
+  return match ? match[1].toLowerCase() : '';
+}
+
+function dataUrlByteLength(url) {
+  const encoded = String(url || '').slice(String(url || '').indexOf(',') + 1).replace(/\s+/g, '');
+  if (!encoded) return 0;
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((encoded.length * 3) / 4) - padding);
+}
+
+function readFileDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function toImageAttachment(file, { budget = ATTACHMENT_URL_BUDGET } = {}) {
+  const attachment = await toChatAttachment(file, { budget });
+  if (attachment.kind !== 'image') {
+    throw new Error('not an image attachment');
   }
-  if (url.length > budget) throw new Error('image too large after compression');
-  return { name: file.name || 'image', url };
+  return attachment;
+}
+
+export async function toChatAttachment(file, { budget = ATTACHMENT_URL_BUDGET } = {}) {
+  if (!file || typeof file !== 'object') throw new Error('no file selected');
+  if (!Number.isFinite(file.size) || file.size <= 0) throw new Error('file is empty');
+
+  let data;
+  let previewUrl = '';
+  if (isImageFile(file)) {
+    const bitmap = await loadImage(file);
+    const scale = Math.min(1, ATTACHMENT_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    data = canvas.toDataURL('image/png');
+    for (const quality of [0.9, 0.75, 0.6, 0.45]) {
+      if (data.length <= budget) break;
+      data = canvas.toDataURL('image/jpeg', quality);
+    }
+    if (data.length > budget) throw new Error('image too large after compression');
+    previewUrl = data;
+  } else {
+    data = await readFileDataUrl(file);
+    if (!data || data.length > budget) {
+      throw new Error('file is too large for the 1 MB chat request limit');
+    }
+  }
+
+  const mimeType = dataUrlMimeType(data)
+    || (isPdfFile(file) ? 'application/pdf' : (file.type || 'application/octet-stream'));
+  const size = dataUrlByteLength(data);
+  if (!size) throw new Error('file is empty');
+
+  return {
+    kind: isImageFile(file) ? 'image' : (isPdfFile(file) ? 'pdf' : 'file'),
+    name: file.name || 'file',
+    mime: mimeType,
+    mime_type: mimeType,
+    size,
+    data,
+    url: previewUrl,
+  };
 }
 
 function loadImage(file) {
@@ -41,21 +103,13 @@ function loadImage(file) {
   });
 }
 
-/**
- * Pull images out of a paste or drop. Both events expose the same
- * `DataTransfer` shape, so one reader covers "⌘V a screenshot" and "drag a file
- * onto the composer" — the two ways an operator actually attaches an image,
- * neither of which the file-picker-only composer supported.
- */
-export function imagesFromTransfer(transfer) {
+/** Pull files out of either a paste or a drop DataTransfer. */
+export function filesFromTransfer(transfer) {
   if (!transfer) return [];
-  const out = [];
-  for (const item of transfer.files || []) {
-    if (/^image\//.test(item.type || '')) out.push(item);
-  }
+  const out = [...(transfer.files || [])];
   if (out.length) return out;
   for (const item of transfer.items || []) {
-    if (item.kind === 'file' && /^image\//.test(item.type || '')) {
+    if (item.kind === 'file') {
       const file = item.getAsFile();
       if (file) out.push(file);
     }

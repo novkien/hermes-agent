@@ -54,8 +54,22 @@ export function appendMessage(list, role, text, message = {}) {
   wrap.append(body);
 
   if (Array.isArray(message.attachments) && message.attachments.length) {
-    wrap.append(el('div', { class: 'msg-attachments' }, message.attachments.map((item) =>
-      el('img', { class: 'msg-attachment', src: item.url, alt: item.name || '' }))));
+    const nodes = message.attachments
+      .map((item) => {
+        if (!item) return null;
+        if ((item.kind === 'image' || (item.kind == null && item.url)) && item.url) {
+          return el('img', { class: 'msg-attachment', src: item.url, alt: item.name || '' });
+        }
+        const label = item.name || 'attachment';
+        const mime = item.mime ? ` · ${item.mime}` : '';
+        return el('span', { class: 'msg-attachment-file', title: `${label}${mime}` }, [
+          icon('doc', { size: 14, className: 'msg-attachment-icon' }),
+          el('span', { class: 'msg-attachment-file-name', text: label }),
+          mime ? el('span', { class: 'msg-attachment-file-meta', text: mime }) : null,
+        ]);
+      })
+      .filter(Boolean);
+    if (nodes.length) wrap.append(el('div', { class: 'msg-attachments' }, nodes));
   }
 
   const actions = el('div', { class: 'msg-actions' });

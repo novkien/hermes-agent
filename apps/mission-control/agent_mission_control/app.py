@@ -33,6 +33,7 @@ from .ip_utils import resolve_client_ip
 from .pulse import Pulse
 from .routes import ApiError, Router
 from .run_inspector import RunInspector
+from .runner_manager import RunnerManager
 from .session_persona_store import SessionPersonaStore
 from .store import Store
 from .system_manager_routes import build_system_manager_router
@@ -212,12 +213,14 @@ class AppDeps:
         pulse: Pulse | None = None,
         workers: SourceWorkers | None = None,
         dashboard_store: SessionPersonaStore | None = None,
+        runner_manager: RunnerManager | None = None,
     ):
         self.settings = settings
         self.store = store
         self.dashboard_store = dashboard_store or getattr(
             router, "dashboard_store", None
         )
+        self.runner_manager = runner_manager or getattr(router, "runner_manager", None)
         self.dashboard = dashboard
         self.gateway = gateway
         self.adapter = adapter
@@ -248,6 +251,13 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             stream_read_timeout=s.chat_stream_read_timeout_seconds,
         )
         adapter = AdapterClient(s.adapter_url, s.adapter_token)
+        runner_manager = RunnerManager(
+            hermes_executable=s.runner_hermes_executable,
+            pool_max=s.runner_pool_max,
+            idle_seconds=s.runner_pool_idle_seconds,
+            keepalive_fresh_seconds=s.runner_pool_keepalive_fresh_seconds,
+            port_announce_timeout_seconds=s.runner_port_announce_timeout_seconds,
+        )
         cache = Cache(ttl_seconds=s.cache_ttl_seconds, max_concurrency=s.cache_max_concurrency)
         bus = EventBus(
             store,
@@ -273,12 +283,13 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             s, store, dashboard, gateway, adapter, cache, registry,
             event_bus=bus, correlation_engine=engine, run_inspector=inspector,
             alert_engine=alert_engine, pulse=pulse, dashboard_store=dashboard_store,
+            runner_manager=runner_manager,
         )
         deps = AppDeps(
             s, store, dashboard, gateway, adapter, cache, registry, router,
             event_bus=bus, correlation_engine=engine, run_inspector=inspector,
             alert_engine=alert_engine, pulse=pulse, workers=workers,
-            dashboard_store=dashboard_store,
+            dashboard_store=dashboard_store, runner_manager=runner_manager,
         )
 
     app = FastAPI(title="agent-mission-control", version="0.1.0", docs_url=None,
@@ -335,6 +346,12 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
         for client in (deps.dashboard, deps.gateway, deps.adapter):
             try:
                 await client.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+        runner_manager = getattr(deps, "runner_manager", None)
+        if runner_manager is not None:
+            try:
+                await runner_manager.stop_all()
             except Exception:  # noqa: BLE001
                 pass
         try:

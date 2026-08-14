@@ -2,11 +2,10 @@
 // context gauge, and the turn controller that drives one send from first byte
 // to settled transcript.
 //
-// The turn controller is the important part. It owns the AbortController (which
-// is also the stop mechanism — dropping the connection is what interrupts the
-// agent upstream), folds every frame through the pure reducer, and settles the
-// turn from `run.completed` instead of re-reading the thread and racing the
-// gateway's own persistence.
+// The turn controller is the important part. It owns the AbortController and
+// the explicit run-stop request, folds every frame through the pure reducer,
+// and settles the turn from `run.completed` instead of re-reading the thread
+// and racing the gateway's own persistence.
 
 import { el, clear, closeMenu, openMenu } from '../../ui.js';
 import { icon } from '../../icons.js';
@@ -22,7 +21,9 @@ import {
 import { appendMessage, scrollToLatest } from './transcript.js';
 import { createTurnView, jumpToLatest } from './turn-view.js';
 import { createContextPanel } from './context-panel.js';
-import { imagesFromTransfer, toImageAttachment } from './attachments.js';
+import {
+  ATTACHMENT_MAX_COUNT, ATTACHMENT_TOTAL_BYTES, filesFromTransfer, toChatAttachment,
+} from './attachments.js';
 import { openSlashMenu, openToolsetMenu } from './palette.js';
 
 export function createComposer(ctx) {
@@ -67,7 +68,12 @@ export function createComposer(ctx) {
 
   /* ---- turn controller ---- */
 
-  let controller = null;      // AbortController for the live stream
+  let controller = null;      // AbortController once the stream has opened
+  let localActive = false;    // claimed before CSRF/fetch begins
+  let stopRequested = false;
+  let activeStopRunId = null;
+  let activeStopPromise = null;
+  const suppressedRunIds = new Set();
   let turn = null;
   let view = null;
   let lastUserText = '';
@@ -76,7 +82,11 @@ export function createComposer(ctx) {
   const latestPill = jumpToLatest(() => view && view.scrollToBottom());
 
   function running() {
-    return Boolean(controller);
+    // `controller` does not exist until CSRF and the streaming POST have
+    // opened. The optimistic user bubble already exists during that window,
+    // so callers (especially the history mirror) must treat the earlier
+    // `localActive` claim as running too or they can append the persisted copy.
+    return Boolean(localActive || controller);
   }
 
   /* ---- watching a turn this tab did not start ---- */
@@ -96,7 +106,6 @@ export function createComposer(ctx) {
   // deliberately not a connection of this module's own. A browser allows six
   // HTTP/1.1 connections per host, and a permanent extra stream per open thread
   // starved every ordinary request behind it until the app looked frozen.
-  let localActive = false;      // this tab is driving a turn right now
   let remoteTurn = null;
   let remoteView = null;
 
@@ -156,6 +165,17 @@ export function createComposer(ctx) {
     if (localActive) return;
     const name = event && event.event;
     const data = event && event.data;
+    const eventRunId = data && data.run_id ? String(data.run_id) : null;
+
+    // Aborting the local fetch is immediate UI feedback, but the explicit
+    // gateway stop takes a moment to land. Do not re-attach this same composer
+    // to the broadcast copy of the run it has just stopped. Its terminal frame
+    // releases the suppression; a failed stop request releases it explicitly
+    // so continued work remains visible rather than burning tokens in secret.
+    if (eventRunId && suppressedRunIds.has(eventRunId)) {
+      if (TERMINAL_EVENTS.has(name)) suppressedRunIds.delete(eventRunId);
+      return;
+    }
 
     if (CONNECTION_EVENTS.has(name)) {
       // Attaching to a session with nothing in flight clears whatever the last
@@ -194,10 +214,12 @@ export function createComposer(ctx) {
   async function runTurn(text, outgoing) {
     lastUserText = text;
     lastAttachments = outgoing;
-    // Claimed before the POST, not after it resolves: `running()` only becomes
-    // true once the fetch returns, and in that window the watcher below would
-    // see this very turn's frames arrive over the broadcast and paint it a
-    // second time.
+    stopRequested = false;
+    activeStopRunId = null;
+    activeStopPromise = null;
+    // Claimed before the POST, not after it resolves, so `running()` and the
+    // broadcast guard both cover the CSRF/fetch handshake as well as the open
+    // stream.
     localActive = true;
     if (remote.turn) remote.discard();
 
@@ -240,16 +262,39 @@ export function createComposer(ctx) {
       }), {
         profile: sessionProfile || profile,
         onEvent: (event) => {
+          if (stopRequested) {
+            // Do not paint buffered deltas after the click. We only still care
+            // about a run id that arrived late enough to make the explicit
+            // stop addressable.
+            const runId = turn.runId || event?.data?.run_id;
+            if (runId) {
+              if (!turn.runId) turn = { ...turn, runId: String(runId) };
+              requestRunStop(runId).catch(() => null);
+            }
+            if (controller) controller.abort();
+            return;
+          }
           turn = reduceTurn(turn, event);
           view.apply(turn);
         },
       });
       controller = handle.controller;
+      // Stop may have been clicked while CSRF/fetch was still opening and no
+      // AbortController was available to the composer yet.
+      if (stopRequested) {
+        if (turn.runId) requestRunStop(turn.runId).catch(() => null);
+        controller.abort();
+      }
       await handle.done;
       // A stream that closed without `run.completed` still has to settle —
       // otherwise the composer stays disabled with no explanation.
       if (!isTurnOver(turn)) {
-        turn = reduceTurn(turn, { event: 'done', data: {} });
+        // Fetch abort can resolve the reader cleanly instead of throwing an
+        // AbortError when it lands between chunks. The operator's explicit
+        // intent still wins: this is stopped, not a successful `done` turn.
+        turn = stopRequested
+          ? stopTurn(turn)
+          : reduceTurn(turn, { event: 'done', data: {} });
         view.apply(turn);
       }
     } catch (err) {
@@ -261,6 +306,14 @@ export function createComposer(ctx) {
       }
       view.finish(turn);
     } finally {
+      // A very early stop can close the stream before `run.started` reaches
+      // this tab. Resolve the run from the gateway's registry and stop it
+      // explicitly; disconnect alone is only a fallback and is not reliable
+      // enough to promise that the session stopped.
+      if (stopRequested) {
+        const runId = turn?.runId || await findRunningRunId();
+        if (runId) await requestRunStop(runId);
+      }
       controller = null;
       localActive = false;
       setRunningUi(false);
@@ -285,9 +338,53 @@ export function createComposer(ctx) {
     drainQueue();
   }
 
+  async function findRunningRunId() {
+    for (const delay of [0, 200, 600]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      const response = await api.get('/api/chat/running', {
+        profile: sessionProfile || profile,
+      }).catch(() => null);
+      const rows = response?.data?.running;
+      if (!Array.isArray(rows)) continue;
+      const match = rows.find((row) => String(row?.session_id || '') === String(sessionId));
+      if (match?.run_id) return String(match.run_id);
+    }
+    return null;
+  }
+
+  function requestRunStop(runId) {
+    const id = String(runId || '');
+    if (!id) return Promise.resolve(false);
+    if (activeStopPromise && activeStopRunId === id) return activeStopPromise;
+
+    activeStopRunId = id;
+    suppressedRunIds.add(id);
+    activeStopPromise = api.post(
+      `/api/runs/${encodeURIComponent(id)}/stop`, {},
+      { profile: sessionProfile || profile },
+    ).then(() => true).catch((err) => {
+      suppressedRunIds.delete(id);
+      appendMessage(
+        list, 'error',
+        `Could not stop the upstream run: ${err?.message || 'request failed'}`,
+      );
+      scrollToLatest(list);
+      return false;
+    });
+    return activeStopPromise;
+  }
+
   function stop() {
-    if (!controller) return;
-    controller.abort();
+    if (!running() || stopRequested) return;
+    stopRequested = true;
+    // Stop the local painter synchronously; explicit gateway cancellation can
+    // finish in the background without another buffered delta appearing.
+    turn = stopTurn(turn);
+    if (view) view.apply(turn);
+    if (turn?.runId) requestRunStop(turn.runId).catch(() => null);
+    // Keep the explicit stop request independent from this AbortController:
+    // the latter closes only the SSE response and gives immediate UI feedback.
+    if (controller) controller.abort();
   }
 
   function retry() {
@@ -365,7 +462,7 @@ export function createComposer(ctx) {
 
   const fileInput = el('input', {
     type: 'file',
-    accept: 'image/*',
+    accept: '*/*',
     multiple: 'multiple',
     class: 'chat-file-input',
     'aria-hidden': 'true',
@@ -375,8 +472,18 @@ export function createComposer(ctx) {
   async function acceptFiles(files) {
     attachErrors = [];
     for (const file of files) {
+      if (attachments.length >= ATTACHMENT_MAX_COUNT) {
+        attachErrors.push(`Only ${ATTACHMENT_MAX_COUNT} attachments are allowed per message`);
+        break;
+      }
       try {
-        attachments.push(await toImageAttachment(file));
+        const prepared = await toChatAttachment(file);
+        const nextTotal = attachments.reduce((total, item) => total + (item.size || 0), 0)
+          + prepared.size;
+        if (nextTotal > ATTACHMENT_TOTAL_BYTES) {
+          throw new Error('combined attachments exceed the 700 KB chat limit');
+        }
+        attachments.push(prepared);
       } catch (err) {
         attachErrors.push(`${file.name || 'file'}: ${err.message}`);
       }
@@ -392,16 +499,15 @@ export function createComposer(ctx) {
 
   const attachButton = el('button', {
     class: 'chat-tool-btn chat-attach-btn',
-    title: 'Attach image (this endpoint accepts images only)',
-    'aria-label': 'Attach image',
+    title: 'Attach file',
+    'aria-label': 'Attach file',
     onclick: () => fileInput.click(),
   }, [icon('plus', { size: 15 })]);
   if (disabled) attachButton.setAttribute('disabled', 'disabled');
 
-  // Paste and drag-drop, the two ways an operator actually attaches a
-  // screenshot. Neither worked before; only the file picker did.
+  // Paste and drag-drop, the two ways an operator actually attaches files.
   input.addEventListener('paste', (event) => {
-    const files = imagesFromTransfer(event.clipboardData);
+    const files = filesFromTransfer(event.clipboardData);
     if (!files.length) return;
     event.preventDefault();
     acceptFiles(files);
@@ -414,7 +520,7 @@ export function createComposer(ctx) {
   box.addEventListener('dragleave', () => box.classList.remove('is-dropping'));
   box.addEventListener('drop', (event) => {
     box.classList.remove('is-dropping');
-    const files = imagesFromTransfer(event.dataTransfer);
+    const files = filesFromTransfer(event.dataTransfer);
     if (!files.length) return;
     event.preventDefault();
     acceptFiles(files);
@@ -424,8 +530,15 @@ export function createComposer(ctx) {
     clear(attachRow);
     for (const item of attachments) {
       const chip = el('span', { class: 'chat-attach-chip', title: item.name });
-      chip.append(el('img', { class: 'chat-attach-thumb', src: item.url, alt: '' }));
+      if (item?.kind === 'image' && item.url) {
+        chip.append(el('img', { class: 'chat-attach-thumb', src: item.url, alt: '' }));
+      } else {
+        chip.append(el('span', { class: 'chat-attach-doc', text: 'file' }));
+      }
       chip.append(el('span', { class: 'chat-attach-name', text: item.name }));
+      if (item?.mime) {
+        chip.append(el('span', { class: 'chat-attach-meta', text: item.mime }));
+      }
       chip.append(el('button', {
         class: 'chat-attach-remove',
         title: 'Remove attachment',

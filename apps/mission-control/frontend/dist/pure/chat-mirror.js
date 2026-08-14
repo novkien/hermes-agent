@@ -36,6 +36,35 @@ export function messageKeys(messages) {
   return (messages || []).map(messageKey).filter(Boolean);
 }
 
+/**
+ * Session-scoped gate for mirror reads that must wait for a streamed turn's
+ * persisted rows to become the new baseline. It is reference-counted because
+ * local and watched turns can settle close together; one finishing must not
+ * reopen mirroring while the other is still synchronising.
+ */
+export function createMirrorBarrier() {
+  const counts = new Map();
+  const keyOf = (sessionId) => String(sessionId || '');
+
+  return {
+    active(sessionId) {
+      return (counts.get(keyOf(sessionId)) || 0) > 0;
+    },
+    acquire(sessionId) {
+      const key = keyOf(sessionId);
+      counts.set(key, (counts.get(key) || 0) + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = (counts.get(key) || 1) - 1;
+        if (remaining > 0) counts.set(key, remaining);
+        else counts.delete(key);
+      };
+    },
+  };
+}
+
 function toolCallIds(message) {
   const raw = message?.tool_calls;
   let calls = raw;

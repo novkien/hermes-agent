@@ -959,7 +959,9 @@ html, body {
   font-size: var(--fs-xs); color: var(--text-dim);
 }
 .chat-attach-thumb { width: 22px; height: 22px; object-fit: cover; border-radius: var(--radius-sm); flex: none; }
+.chat-attach-doc { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; color: var(--text); text-transform: uppercase; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); flex: none; }
 .chat-attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-attach-meta { color: var(--text-faint); font-size: 10px; margin-left: 2px; }
 .chat-attach-remove {
   display: grid; place-items: center; width: 18px; height: 18px; flex: none;
   cursor: pointer; background: none; border: 0; border-radius: var(--radius-sm);
@@ -970,6 +972,13 @@ html, body {
 
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg-attachment { max-width: 220px; max-height: 160px; border-radius: var(--radius-md); border: 1px solid var(--border); }
+.msg-attachment-file {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 3px 6px;
+  border-radius: var(--radius-md); border: 1px solid var(--border); color: var(--text-dim);
+}
+.msg-attachment-icon { color: var(--text-faint); flex: none; }
+.msg-attachment-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-attachment-file-meta { color: var(--text-faint); white-space: nowrap; }
 
 /* === CHAT: composer popover menus === */
 .chat-menu-layer { position: fixed; z-index: 120; }
@@ -2742,10 +2751,9 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
   color: var(--text-faint); font-size: var(--fs-xxs);
 }
 .chat-activity-timer { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
-/* No separate "stalled" warning state: a long silent wait now escalates the
-   label itself (`activityLabel` in pure/chat-turn.js — "Thinking more", then
-   "Deep thinking"), so the ordinary activity styling already tells the whole
-   story without an amber flag implying something went wrong. */
+/* No separate "stalled" warning state. An explicit `_thinking` interval can
+   escalate its label (`activityLabel` in pure/chat-turn.js — "Thinking more",
+   then "Deep thinking") without an amber flag implying something failed. */
 .chat-activity-stop {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
   padding: 1px 7px; cursor: pointer; font-family: inherit; font-size: var(--fs-xxs);

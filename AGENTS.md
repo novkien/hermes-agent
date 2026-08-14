@@ -1,358 +1,201 @@
-# Jarvis/Hermes — Repository Agent Guide
+# Repository Guidelines
 
-This file is the compact repository entrypoint for AI coding assistants, Hermes agents,
-and human maintainers working in `novkien/hermes-agent`.
+This repository contains AgentOS Mission Control, the browser BFF/control plane used by
+Jarvis/Hermes. Current source and tests take precedence over older repository notes.
 
-It explains where this application repository fits in Le Kien's wider Jarvis/Hermes
-system. It is intentionally shorter than a full architecture manual. Deep deployment,
-network, control-plane, instruction-layer, plugin-source, and profile-SOUL context lives
-in the installed `hermes-agent` skill and its focused references.
+## Project Structure & Module Organization
 
-## Authority and precedence
+- `agent_mission_control/` is the FastAPI backend package.
+  - `main.py` creates the module-level application and startup guard.
+  - `app.py` is the composition root for clients, store, cache, capabilities, event
+    fabric, alert/pulse engines, workers and routes.
+  - `routes.py` owns the main HTTP boundary, allowlists, mutation gates and envelopes.
+  - `clients.py` contains the Dashboard, Gateway and Adapter upstream clients.
+  - `store.py` manages the SQLite WAL control store and migrations.
+  - `workers.py` runs bounded source polling loops.
+  - `chat_proxy.py` relays Hermes gateway chat/session traffic including SSE streaming.
+  - `search.py` implements bounded federated search over adapter-backed sources.
+- `agent_mission_control/migrations/` contains SQL representations of runtime schema
+  migrations; keep them aligned with the migration definitions in `store.py`.
+- `frontend/dist/` is the committed **source-of-truth SPA**, despite the `dist` name.
+  It is served directly with native ES modules; there is no separate frontend build
+  pipeline in this repository.
+- `frontend/dist/tabs/` contains dynamically loaded dashboard tabs.
+- `frontend/dist/pure/` contains data-shape, routing, state and transformer modules used
+  directly by Node contract tests.
+- `tests/` contains the active Python and Node contract suites.
+- `deploy/agent-mission-control.service` and related deploy files define the systemd
+  deployment surface.
+- Root-level `agentos-dashboard.db*` files are runtime state, not source artifacts.
 
-Le Kien is the owner and final decision authority.
+## Runtime Architecture
 
-Apply instructions in this order:
-
-1. the newest explicit owner directive;
-2. the current task's exact scope and target;
-3. this repository guide;
-4. the installed `hermes-agent` skill and the directly relevant reference;
-5. current source, configuration structure, service state, logs, and runtime evidence;
-6. older documentation and historical reports.
-
-Never let an older reference override a newer owner decision or current evidence.
-
-## Default work classification
-
-Reading and searching this repository is allowed whenever it is needed to understand
-Hermes behavior, trace an execution path, or identify the correct instruction surface.
-
-A request is **not** permission to modify application source merely because source
-inspection is useful.
-
-Use these rules:
-
-- Requests about skills, prompts, references, SOUL, context, role behavior,
-  evaluation, reporting, or agent instructions are instruction-layer work by default.
-- A general, ambiguous, or outcome-only request is not source-code authorization.
-- Modify executable application source only when the owner explicitly requests a code,
-  runtime, plugin, service, router, tool, dashboard, or other executable change.
-- When code modification is explicitly authorized, execute the requested scope instead
-  of redirecting it back to instruction-layer advice.
-- Documentation changes to `AGENTS.md` and `README.md` remain repository documentation
-  work; they do not authorize unrelated code changes.
-
-## What this repository is
-
-`novkien/hermes-agent` is the application source for the Hermes agent runtime and its
-core surfaces:
-
-- conversation and tool-calling loop;
-- prompt and context assembly;
-- CLI, TUI, web dashboard, desktop, AgentOS Mission Control, and messaging gateway surfaces;
-- Telegram and other platform adapters;
-- tools, toolsets, plugin framework/integration, skills integration, cron, memory,
-  sessions, and profiles;
-- tests, installer, documentation, and update mechanics.
-
-This repository is **one component** of the Jarvis/Hermes deployment. It is not the
-entire deployed system and is not the source of truth for live process state, private
-shared skills, owner-managed external plugin packages, or profile `SOUL.md` definitions.
-
-## Jarvis/Hermes system at a glance
-
-```mermaid
-flowchart LR
-    U[Le Kien] <--> TG[Telegram]
-    TG <--> GW[Hermes Gateway<br/>Jarvis host]
-    GW <--> CORE[Hermes Agent Core]
-    CORE --> CTX[Context<br/>SOUL + AGENTS + skills<br/>memory + session state]
-    CORE --> R9[9router<br/>Pi]
-    CORE --> LP[llama-proxy<br/>Pi]
-
-    U <--> OS[AgentOS Mission Control<br/>Jarvis host]
-    OS --> HD[Hermes Dashboard API<br/>Jarvis host]
-    OS --> GA[Hermes Gateway API<br/>Jarvis host]
-    OS --> AD[Temporary external AgentOS adapter<br/>Jarvis host]
-    OS --> R9
-    OS --> LP
-
-    GHS[(novkien/hermes-skills)] -->|shared skills + profile packs| CTX
-    GHA[(novkien/agents)] -->|profile SOUL.md| CTX
-    GHP[(novkien/hermes-plugins)] -->|gateway/runtime plugins| GW
-    GHAPP[(novkien/hermes-agent)] -->|application source| CORE
-
-    LAN[LAN route] -. preferred .- OS
-    TS[Tailnet route] -. fallback / distributed hosts .- OS
-```
-
-### Current component roles
-
-| Component | Current role | Current location or repository |
-|---|---|---|
-| Hermes application | Agent runtime, gateway, tools, profiles, sessions, plugin framework and skills integration | This repository; deployed checkout normally `/home/jarvis/.hermes/hermes-agent` |
-| Telegram | Primary owner conversation surface | Hermes gateway platform adapter |
-| AgentOS Mission Control | Browser control plane for the whole Jarvis/Hermes system; independent sibling service to the gateway | Native app under `apps/mission-control/`; deployed on the Jarvis/Hermes host |
-| AgentOS external adapter | Temporary external data/mutation bridge consumed by AgentOS through bounded supported routes | Jarvis host; remains separate until an owner-authorized merge plan changes that boundary |
-| 9router | General LLM/provider routing path | Pi; external project at `/home/pi/9router` |
-| llama-proxy | Local model routing, wake/switch/unload lifecycle, dashboard and ComfyUI passthrough | `novkien/llama-proxy`; Pi |
-| Skill registry | Canonical source for shared skills and profile-selectable skill packs | Private `novkien/hermes-skills` |
-| Plugin registry | Canonical source for owner-managed gateway/runtime plugin packages | Private `novkien/hermes-plugins`; live packages under `/home/jarvis/.hermes/plugins/` |
-| Agent SOUL registry | Canonical reviewed source for profile `SOUL.md` definitions | Private `novkien/agents`; deployed files under `/home/jarvis/.hermes/agents/<profile>/SOUL.md` |
-
-Addresses, ports, process identities, active models, bindings, branches, and commit SHAs
-are volatile facts. Before an operational action, reverify them from current evidence.
-The private `hermes-agent` skill contains the latest observed topology and the exact
-reverification contract.
-
-## Load deeper system context only when needed
-
-When running inside Hermes and the task concerns Jarvis/Hermes architecture,
-repositories, runtime topology, AgentOS, Telegram routing, LLM proxies, skills,
-plugins, profile SOUL, context loading, profiles, or deployment, load:
+AgentOS is a FastAPI BFF between the browser SPA and three Hermes upstream families:
 
 ```text
-skill_view("hermes-agent")
+Browser / frontend/dist
+        ↓
+AgentOS FastAPI BFF
+        ├── DashboardClient → Hermes dashboard API :9119
+        ├── GatewayClient   → Hermes gateway API :8642
+        └── AdapterClient   → external adapter :8643
 ```
 
-Then load only the directly relevant reference named by that skill. Do not preload the
-entire reference library.
+Current upstream responsibilities include:
 
-The installed skill is expected at:
+- dashboard health/status and supported dashboard mutations through `DashboardClient`;
+- session/chat and chat SSE streaming through `GatewayClient`;
+- Kanban, permits, issues, timeline, fingerprints, memory files and related supported
+  adapter surfaces through `AdapterClient`.
 
-```text
-/home/jarvis/.hermes/skills/autonomous-ai-agents/hermes-agent/
-```
+Reads and writes are intentionally bounded by explicit allowlists. Do not turn any
+upstream client into an arbitrary path proxy.
 
-Its canonical Git source is:
+The backend also maintains a bounded SQLite control store, capability registry, cache,
+event bus/replay buffer, source workers and alert/pulse engines. Source deltas are
+published to the event fabric and exposed through the event stream.
 
-```text
-novkien/hermes-skills:
-skills/autonomous-ai-agents/hermes-agent/
-```
+Observed Hermes production host: `jarvis@192.168.1.128`. Reverify the host from current
+runtime evidence before operational actions. Credentials must be obtained from the
+host's secure secret store and must not be recorded here.
 
-## Context architecture
+## Security and Mutation Invariants
 
-The intended context hierarchy is:
+Preserve the existing fail-closed boundaries:
 
-```text
-Repository AGENTS.md
-  └─ compact, common repository and owner boundaries
+- Public/network binding requires an explicit `ALLOWED_CIDRS` allowlist.
+- Read paths, adapter paths and supported mutation paths have separate allowlists.
+- Protected mutations preserve the established chain: session validation → CSRF →
+  Origin/Host checks → per-session rate limit → audit `pending` write **before** the
+  upstream call → audit completion after the response.
+- If the initial audit write fails, the upstream mutation must not run.
+- Preserve `X-Request-Id`/correlation handling and the response envelope contract.
+- Do not weaken `meta.mutations_supported`; frontend action gating and backend capability
+  contracts must remain aligned.
+- Keep credentials in environment variables only. Never commit `.env`, tokens, keys,
+  cookies, passwords or local database copies.
 
-Installed hermes-agent SKILL.md
-  └─ broad Jarvis/Hermes system context and routing table
+## Local Run Commands
 
-Focused skill references
-  ├─ system topology and hosts
-  ├─ AgentOS and adapter
-  ├─ 9router and llama-proxy
-  ├─ Telegram and multi-agent routing
-  ├─ repositories and change control
-  ├─ context loading and skill routing
-  ├─ skills registry and profile packs
-  ├─ external gateway plugins and profile SOUL sources
-  └─ freshness and source-of-truth rules
+Use Python 3.11+ with FastAPI, Uvicorn and HTTPX available in a compatible virtual
+environment. The repository does not currently provide a package manifest that makes a
+copied `.venv` portable across machines.
 
-Current source/runtime evidence
-  └─ authoritative for current implementation and deployment state
-```
-
-`AGENTS.md` must not become a dump of every subsystem detail. Put reusable deep detail
-in a focused skill reference. Put deterministic behavior in code or a script. Put
-current live facts in evidence rather than treating a dated document as timeless.
-
-## Repository and deployment map
-
-| Repository | Purpose | Normal write boundary |
-|---|---|---|
-| `novkien/hermes-agent` | Hermes application fork | Application source and root repository documentation |
-| `NousResearch/hermes-agent` | Upstream Hermes project | Read/fetch/update source; do not push owner changes here |
-| `novkien/hermes-skills` | Shared skills and profile-selectable skill packs | Instruction-layer skills, references, scripts, templates, tests and harnesses |
-| `novkien/hermes-plugins` | Owner-managed Hermes gateway/runtime plugins | External plugin packages and their plugin-owned tests/configuration; not live runtime state |
-| `novkien/agents` | Reviewed profile `SOUL.md` definitions | Profile `SOUL.md` files only; profile import code/config remains outside this repository unless explicitly added |
-| `novkien/agent-mission-control` | Historical AgentOS source imported at commit `42a9c191fdebc66ace4aac98a1e581d9ab7a13d1` | Provenance only after merge; canonical source is `apps/mission-control/` in this repository |
-| `novkien/llama-proxy` | Sanitized llama-proxy source | Proxy application source |
-
-Do not infer a remote's purpose from its name. Read current Git configuration and
-branch state before pull, push, merge, or update work.
-
-### Skills deployment
-
-The live skill roots remain:
-
-```text
-/home/jarvis/.hermes/skills/
-/home/jarvis/.hermes/workspace/skills-pack/
-```
-
-They are tracked by the private skills repository through a separate Git directory:
-
-```text
-/home/jarvis/.hermes/repos/hermes-skills.git
-```
-
-Bridge deploys an owner-authorized merged skills commit with a fast-forward-only pull:
+From the repository root:
 
 ```bash
-git \
-  --git-dir=/home/jarvis/.hermes/repos/hermes-skills.git \
-  --work-tree=/home/jarvis/.hermes \
-  pull --ff-only origin main
+source .venv/bin/activate
+FRONTEND_DIR=frontend/dist \
+STORE_PATH=/tmp/agent-mission-control-dev.db \
+ALLOWED_ORIGIN=http://127.0.0.1:51763 \
+ALLOWED_HOST=127.0.0.1:51763 \
+python -m uvicorn agent_mission_control.main:app --host 127.0.0.1 --port 51763
 ```
 
-For repository-tracked skill paths, this Git transport replaces apply-ZIP unless the
-owner explicitly selects apply-ZIP for that operation. Cache refresh, session reset,
-service reload, and behavioral verification are separate actions and must be reported
-separately.
+When binding to the network, keep application startup configuration and Uvicorn host
+consistent and provide the CIDR allowlist:
 
-### Plugin and SOUL source boundaries
-
-The owner-managed plugin source and profile SOUL source are separate from both this
-application repository and the skills registry:
-
-```text
-novkien/hermes-plugins
-  → reviewed gateway/runtime plugin packages
-  → deployed package root: /home/jarvis/.hermes/plugins/
-
-novkien/agents
-  → reviewed <profile>/SOUL.md files
-  → deployed file: /home/jarvis/.hermes/agents/<profile>/SOUL.md
+```bash
+FRONTEND_DIR=frontend/dist \
+ALLOWED_CIDRS=192.168.0.0/24 \
+BIND_HOST=0.0.0.0 \
+python -m uvicorn agent_mission_control.main:app --host 0.0.0.0 --port 51763
 ```
 
-A GitHub commit in either repository does not prove the corresponding live bytes were
-deployed, a service reloaded, a session reset, or behavior changed. Verify those steps
-separately when the task includes deployment or activation.
+The commonly used health request is:
 
-The `plugins/` directory inside this application repository is the application plugin
-framework and bundled/built-in plugin surface. Do not confuse it with the owner's
-separately versioned external plugin packages in `novkien/hermes-plugins`.
-
-## Network model
-
-The current deployment prefers LAN routes. Tailnet routes are required fallbacks for:
-
-- LAN failure;
-- hosts deployed in different physical networks;
-- future distribution of AgentOS, proxies, workers, or model servers.
-
-Do not hardcode a Tailnet IP in public repository documentation. Resolve the current
-Tailnet DNS name/IP from `tailscale status --json` or the private system-context
-reference before use. Do not silently fall back to historical `192.168.0.x` addresses.
-
-## Deep codebase development guide
-
-When executable application-source work is explicitly authorized, read
-[`docs/HERMES_CODEBASE_DEVELOPMENT_GUIDE.md`](docs/HERMES_CODEBASE_DEVELOPMENT_GUIDE.md)
-before editing. It preserves the detailed architecture, contribution, testing, platform,
-and implementation conventions that previously lived in root `AGENTS.md`, while keeping
-the default context compact. Current owner directives, current source, and any more
-specific nested `AGENTS.md` take precedence.
-
-## Application source map
-
-The filesystem is the source of truth; this map names the load-bearing areas rather
-than every file.
-
-```text
-hermes-agent/
-├── run_agent.py          # AIAgent orchestration and conversation loop
-├── agent/                # prompt assembly, providers, memory, compression, skills
-├── model_tools.py        # tool orchestration and function-call dispatch
-├── toolsets.py           # toolset definitions and core tool surface
-├── tools/                # tool implementations and registry
-├── gateway/              # messaging gateway and platform runtime
-├── plugins/              # plugin framework and bundled/built-in plugin surface
-├── hermes_cli/           # CLI commands, setup, profiles, web server and operations
-├── cli.py                # classic interactive CLI orchestration
-├── ui-tui/               # Ink/React terminal UI
-├── tui_gateway/          # Python JSON-RPC backend for TUI/GUI surfaces
-├── web/                  # Hermes web dashboard frontend when present in current tree
-├── apps/                 # desktop/shared packages plus native Mission Control
-├── cron/                 # scheduler and job execution
-├── skills/               # bundled seed skills, not the owner's complete live registry
-├── optional-skills/      # optional seed skills
-├── tests/                # automated behavior and integration tests
-└── website/              # product documentation
+```bash
+curl -sf http://127.0.0.1:51763/api/health
 ```
 
-## Load-bearing design invariants
+`/api/health` is an allowlisted proxy to the Hermes dashboard upstream; it is not a
+separate standalone BFF-health implementation.
 
-Preserve these unless the owner explicitly requests a redesign:
+Systemd operations:
 
-1. **Prompt-cache stability.** A conversation's stable prefix and tool surface should
-   remain byte-stable where the architecture requires it. Do not rebuild or mutate old
-   prompt content casually.
-2. **Strict message alternation and session integrity.** Do not inject synthetic turns
-   in ways that violate provider message ordering or corrupt persisted history.
-3. **Narrow core tool surface.** Prefer an existing tool, CLI command plus skill,
-   service-gated tool, external plugin, or MCP integration before adding a permanent
-   core model tool.
-4. **Session-scoped capabilities.** UI/client capabilities are determined by the
-   session and platform, not only by process environment.
-5. **Configuration separation.** Behavioral configuration belongs in `config.yaml`;
-   `.env` is for credentials and secrets.
-6. **Profiles are explicit scopes.** Do not flatten skill packs, profile SOUL, or
-   profile state merely for convenience.
-7. **Evidence-backed behavior claims.** Code proves implementation; reviewed Git source
-   proves repository content; runtime evidence proves deployment and current behavior.
-   One does not substitute for another.
-
-## Change workflow
-
-For every authorized change:
-
-1. Restate the exact outcome and scope internally.
-2. Inspect the smallest set of current source/evidence required.
-3. Verify the premise against the current implementation before calling something a
-   defect.
-4. Select the smallest correct target and repository: application/documentation,
-   shared skill/profile pack, external plugin, profile SOUL, AgentOS, proxy, config,
-   service, or other code.
-5. Author complete final files. Do not use fragment patches as the normal Hermes
-   handoff format.
-6. Preserve unrelated behavior and profile boundaries.
-7. Use a branch and pull request for owner repositories unless the owner explicitly
-   selects a different Git operation.
-8. Run the tests or checks requested by the owner or materially required by the
-   changed surface.
-9. Report writes, commits, PR/merge state, pulls, reloads, resets, and behavioral
-   outcomes as separate facts.
-
-Do not transform an execution request into review-only advice. Do not add an approval
-layer that the owner did not request.
-
-## Security
-
-- Never place credentials, passwords, private keys, bot tokens, API keys, cookies, or
-  authorization headers in repository documentation, skills, plugins, or SOUL files.
-- Store only the name/location class of a secret, never its value.
-- Do not publish live databases, WAL/SHM files, logs, session stores, model weights,
-  runtime state, or unreviewed backups.
-- Treat repository visibility as a current GitHub fact, not an assumption.
-- A historical secret found in Git history requires owner-facing reporting and secret
-  rotation; do not reproduce the value in a report.
-
-## Verification and completion evidence
-
-A complete report distinguishes:
-
-```text
-SOURCE_INSPECTED:
-FILES_CREATED:
-FILES_REPLACED:
-FILES_DELETED:
-COMMIT_CREATED:
-REMOTE_UPDATED:
-PULL_REQUEST:
-LOCAL_PULL_RESULT:
-CACHE_REFRESH_RESULT:
-SESSION_RESET_RESULT:
-SERVICE_RELOAD_RESULT:
-BEHAVIORAL_TEST_RESULT:
-UNRESOLVED_FACTS:
+```bash
+sudo systemctl restart agent-mission-control
+sudo systemctl status agent-mission-control --no-pager
+sudo journalctl -u agent-mission-control -f
 ```
 
-Never claim a commit, PR merge, pull, reload, activation, or behavior change without
-the corresponding result.
+Do not claim a restart or healthy deployment without the corresponding runtime result.
+
+## Test and Validation Commands
+
+This repository **does have an automated contract suite**. Run all four maintained
+suites for full repository validation:
+
+```bash
+python tests/test_runtime_contracts.py
+python tests/test_static_repair_surface.py
+node tests/frontend_contracts.mjs
+node tests/skills_surface.mjs
+```
+
+`test_runtime_contracts.py` runs its synchronous and asynchronous contract tests through
+its own entrypoint. Bare `pytest -q` is not the canonical full-suite command because the
+repository does not configure the async pytest plugin required to reproduce that suite
+as-is.
+
+Useful additional checks:
+
+```bash
+python -m compileall -q agent_mission_control
+```
+
+If `ruff` is available, the current repository convention permits:
+
+```bash
+ruff check agent_mission_control tests
+ruff format --check agent_mission_control tests
+```
+
+No repository-specific formatter/linter configuration is currently checked in, so do
+not invent stricter formatting rules without an explicit change.
+
+## Frontend Rules
+
+`frontend/dist/` is committed source, not a generated build output to be recreated from
+a missing `frontend/src` tree.
+
+- Edit the ES modules/CSS in `frontend/dist/` directly.
+- Preserve the canonical URL shape:
+  `/?profile=<id>#/<route>?<entity-or-filter-params>`.
+- Profile belongs in the document query, not in the hash.
+- Tab instances are profile-scoped; do not reuse state across profiles.
+- When adding/removing/renaming routes or tabs, update the corresponding route
+  registries/specs/inventory and loader maps together.
+- Keep chat SSE streaming incremental rather than buffering the complete response.
+- Do not move tab state into Web Storage merely for convenience.
+
+## Coding Style & Naming
+
+- Use Python 3.11+ syntax, four-space indentation and explicit type hints on new or
+  materially changed functions.
+- Use `snake_case` for functions/modules/variables, `PascalCase` for classes and
+  `UPPER_SNAKE_CASE` for constants.
+- Keep imports organized and avoid wildcard imports.
+- Preserve current architecture boundaries instead of collapsing route, client, store,
+  worker and frontend responsibilities into a single module.
+
+## Git and Pull Requests
+
+This repository has valid Git history. Do not rely on older notes claiming otherwise.
+
+- Work from the current default branch/HEAD and keep task changes scoped.
+- After completing any task that changes repository files, create a Git commit before
+  sending the final response. Do not leave completed changes uncommitted unless the
+  user explicitly asks for that, and include the resulting commit hash in the response.
+- Use clear imperative commit subjects.
+- PRs should summarize behavior/documentation changes, affected routes/configuration,
+  validation commands/results, and migration impact when applicable.
+- Never commit runtime DB/WAL/SHM files, copied environments, credentials, logs, or
+  machine-specific state.
+
+## Source-of-Truth Rule
+
+For implementation claims, current repository source and contract tests outrank this
+file. For deployed behavior, current service/process/API evidence is required in
+addition to source. A passing source review does not prove the Pi deployment has been
+updated or restarted.
