@@ -3002,6 +3002,7 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
 Description={SERVICE_DESCRIPTION}
 After=network-online.target
 Wants=network-online.target
+Wants=hermes-mission-control.service
 StartLimitIntervalSec=0
 
 [Service]
@@ -3045,6 +3046,7 @@ WantedBy=multi-user.target
 Description={SERVICE_DESCRIPTION}
 After=network-online.target
 Wants=network-online.target
+Wants=hermes-mission-control.service
 StartLimitIntervalSec=0
 
 [Service]
@@ -3415,6 +3417,17 @@ def systemd_install(
     if system:
         _require_root_for_system_service("install")
 
+    # Mission Control is installed as a sibling service. It is never a child
+    # process of the gateway, and its lifecycle remains independently addressable.
+    from hermes_cli.mission_control import install_for_gateway
+
+    install_for_gateway(
+        system=system,
+        run_as_user=run_as_user,
+        force=force,
+        enable_on_startup=enable_on_startup,
+    )
+
     # Offer to remove legacy units (hermes.service from pre-rename installs)
     # before installing the new hermes-gateway.service. If both remain, they
     # flap-fight for the Telegram bot token on every gateway startup.
@@ -3530,6 +3543,11 @@ def systemd_start(system: bool = False):
         # Raises UserSystemdUnavailableError with a remediation message.
         _preflight_user_systemd()
     _require_service_installed("start", system=system)
+    # Start Mission Control without restarting it when it is already active.
+    # Failure is visible but cannot block the gateway's own startup.
+    from hermes_cli.mission_control import start_for_gateway
+
+    start_for_gateway(system=system)
     # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
     # systemd_unit_is_current gate (the single chokepoint), and the unit is
     # guaranteed to exist here by _require_service_installed, so the gate runs.
@@ -3573,6 +3591,11 @@ def systemd_restart(system: bool = False):
     else:
         _preflight_user_systemd()
     _require_service_installed("restart", system=system)
+    # A start job is idempotent: an active Mission Control process keeps its
+    # PID while the gateway restarts. Never issue a sibling restart here.
+    from hermes_cli.mission_control import start_for_gateway
+
+    start_for_gateway(system=system)
     # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
     # systemd_unit_is_current gate (the single chokepoint). The unit exists
     # here (_require_service_installed), so the gate runs and its os.environ

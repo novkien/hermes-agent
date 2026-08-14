@@ -50,7 +50,7 @@ core surfaces:
 
 - conversation and tool-calling loop;
 - prompt and context assembly;
-- CLI, TUI, web dashboard, desktop, and messaging gateway surfaces;
+- CLI, TUI, web dashboard, desktop, AgentOS Mission Control, and messaging gateway surfaces;
 - Telegram and other platform adapters;
 - tools, toolsets, plugin framework/integration, skills integration, cron, memory,
   sessions, and profiles;
@@ -71,7 +71,7 @@ flowchart LR
     CORE --> R9[9router<br/>Pi]
     CORE --> LP[llama-proxy<br/>Pi]
 
-    U <--> OS[AgentOS Dashboard<br/>Pi]
+    U <--> OS[AgentOS Mission Control<br/>Jarvis host]
     OS --> HD[Hermes Dashboard API<br/>Jarvis host]
     OS --> GA[Hermes Gateway API<br/>Jarvis host]
     OS --> AD[Temporary external AgentOS adapter<br/>Jarvis host]
@@ -93,7 +93,7 @@ flowchart LR
 |---|---|---|
 | Hermes application | Agent runtime, gateway, tools, profiles, sessions, plugin framework and skills integration | This repository; deployed checkout normally `/home/jarvis/.hermes/hermes-agent` |
 | Telegram | Primary owner conversation surface | Hermes gateway platform adapter |
-| AgentOS | Browser control plane for the whole Jarvis/Hermes system | `novkien/agent-mission-control`; Pi LAN route currently `192.168.1.140` |
+| AgentOS Mission Control | Browser control plane for the whole Jarvis/Hermes system; independent sibling service to the gateway | Native app under `apps/mission-control/`; deployed on the Jarvis/Hermes host |
 | AgentOS external adapter | Temporary external data/mutation bridge consumed by AgentOS through bounded supported routes | Jarvis host; remains separate until an owner-authorized merge plan changes that boundary |
 | 9router | General LLM/provider routing path | Pi; external project at `/home/pi/9router` |
 | llama-proxy | Local model routing, wake/switch/unload lifecycle, dashboard and ComfyUI passthrough | `novkien/llama-proxy`; Pi |
@@ -171,7 +171,7 @@ current live facts in evidence rather than treating a dated document as timeless
 | `novkien/hermes-skills` | Shared skills and profile-selectable skill packs | Instruction-layer skills, references, scripts, templates, tests and harnesses |
 | `novkien/hermes-plugins` | Owner-managed Hermes gateway/runtime plugins | External plugin packages and their plugin-owned tests/configuration; not live runtime state |
 | `novkien/agents` | Reviewed profile `SOUL.md` definitions | Profile `SOUL.md` files only; profile import code/config remains outside this repository unless explicitly added |
-| `novkien/agent-mission-control` | AgentOS dashboard/BFF | Separate AgentOS code until an owner-authorized merge plan is executed |
+| `novkien/agent-mission-control` | Historical AgentOS source imported at commit `42a9c191fdebc66ace4aac98a1e581d9ab7a13d1` | Provenance only after merge; canonical source is `apps/mission-control/` in this repository |
 | `novkien/llama-proxy` | Sanitized llama-proxy source | Proxy application source |
 
 Do not infer a remote's purpose from its name. Read current Git configuration and
@@ -269,7 +269,7 @@ hermes-agent/
 ├── ui-tui/               # Ink/React terminal UI
 ├── tui_gateway/          # Python JSON-RPC backend for TUI/GUI surfaces
 ├── web/                  # Hermes web dashboard frontend when present in current tree
-├── apps/                 # desktop/shared application packages when present
+├── apps/                 # desktop/shared packages plus native Mission Control
 ├── cron/                 # scheduler and job execution
 ├── skills/               # bundled seed skills, not the owner's complete live registry
 ├── optional-skills/      # optional seed skills

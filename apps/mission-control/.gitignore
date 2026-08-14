@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+agentos-dashboard.db
+agentos-dashboard.db-shm
+agentos-dashboard.db-wal
+store.db
+store.db-shm
+store.db-wal
+.bridge-backups/

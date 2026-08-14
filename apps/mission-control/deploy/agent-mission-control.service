@@ -1,0 +1,26 @@
+[Unit]
+Description=AgentOS Mission Control BFF (Pi dashboard backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/agent-mission-control
+EnvironmentFile=/etc/agent-mission-control/env
+ExecStart=/usr/bin/python3 -m uvicorn agent_mission_control.main:app --host 0.0.0.0 --port 51763 --timeout-graceful-shutdown 5
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/pi/agent-mission-control /etc/agent-mission-control
+# Do not leak environment into the access log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

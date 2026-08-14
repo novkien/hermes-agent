@@ -1,0 +1,14 @@
+{
+  "archive_base64_sha256": "afd2fb5343888789f53ecdb7dcf9edbf2756628c8df5e79cb7e9bbfb290bc66b",
+  "canonical_target": "novkien/hermes-agent/apps/mission-control",
+  "import_method": "byte-faithful git archive at the locked source commit",
+  "imported_at_utc": "2026-08-14T11:39:32.285855+00:00",
+  "ongoing_source_repository_dependency": false,
+  "original_tracked_files_preserved": true,
+  "source_commit": "42a9c191fdebc66ace4aac98a1e581d9ab7a13d1",
+  "source_manifest": "SOURCE_MANIFEST.tsv",
+  "source_manifest_sha256": "3958406fa8d53029354be641a9f7e3938d5acf87e79048b4e0909f05129df5af",
+  "source_repository": "novkien/agent-mission-control",
+  "source_tree": "4fa5660d088401f2f62a4d76c37af60fadd747fc",
+  "tracked_file_count": 147
+}

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS Mission Control</title>
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f7f7f5">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./flat-white.css">
+</head>
+<body>
+  <div id="app" class="app"></div>
+  <noscript>
+    <div class="noscript">AgentOS Mission Control requires JavaScript. All data flows through the same-origin BFF API; no external CDN is used.</div>
+  </noscript>
+  <script type="module">
+    import { boot } from './app.js';
+    boot().catch((error) => {
+      console.error('Failed to bootstrap AgentOS Mission Control:', error);
+    });
+  </script>
+</body>
+</html>

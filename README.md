@@ -46,6 +46,7 @@ flowchart TB
     subgraph JarvisHost[Jarvis host]
       GW[Hermes Gateway :8642]
       HDA[Hermes Dashboard API :9119]
+      AMC[AgentOS Mission Control :51763]
       CORE[Hermes Agent Core]
       CTX[Context system<br/>SOUL · AGENTS · skills · memory · sessions]
       PLUG[External gateway/runtime plugins<br/>~/.hermes/plugins]
@@ -55,7 +56,6 @@ flowchart TB
     end
 
     subgraph PiHost[Pi control/routing host]
-      AMC[AgentOS Mission Control :51763]
       R9[9router :20128]
       LP[llama-proxy :8082]
     end
@@ -65,7 +65,6 @@ flowchart TB
       HS[(novkien/hermes-skills · private)]
       HP[(novkien/hermes-plugins · private)]
       AG[(novkien/agents · private)]
-      HM[(novkien/agent-mission-control)]
       HL[(novkien/llama-proxy · private)]
       UP[(NousResearch/hermes-agent)]
     end
@@ -92,7 +91,7 @@ flowchart TB
     HP --> PLUG
     AG --> SOUL
     HA --> CORE
-    HM --> AMC
+    HA --> AMC
     HL --> LP
     UP -. upstream source .-> HA
 
@@ -112,7 +111,7 @@ loaded by a running session.
 |---|---|---|
 | Hermes Agent | Agent loop, tools, gateway, profiles, sessions, memory, plugin/skills integration and user interfaces | [`novkien/hermes-agent`](https://github.com/novkien/hermes-agent); deployed checkout normally `/home/jarvis/.hermes/hermes-agent` |
 | Telegram gateway | Primary owner conversation channel and thread/topic routing | `gateway/` plus Telegram platform implementation in this repository |
-| AgentOS Mission Control | Browser BFF/control plane for system state, health, governance, chat, events and proxy surfaces | [`novkien/agent-mission-control`](https://github.com/novkien/agent-mission-control); deployed on the Pi |
+| AgentOS Mission Control | Browser BFF/control plane for system state, health, governance, chat, events and proxy surfaces | Native `apps/mission-control/` application in this repository; independent `hermes-mission-control.service` on the Jarvis/Hermes host |
 | AgentOS external adapter | Temporary external API for AgentOS-owned access to Hermes data surfaces and bounded supported mutations | External Jarvis-host service; remains separate until a future owner-authorized merge changes that boundary |
 | 9router | General model/provider router | External project on the Pi |
 | llama-proxy | OpenAI-compatible local-model router, model lifecycle controller, dashboard and ComfyUI passthrough | [`novkien/llama-proxy`](https://github.com/novkien/llama-proxy); deployed on the Pi |
@@ -214,26 +213,30 @@ runtime context. This README describes the topology, not every behavioral rule.
 
 ## AgentOS control plane
 
-AgentOS Mission Control runs on the Pi and presents the browser dashboard. Current
-source implements it as a FastAPI BFF plus a committed zero-build SPA, with separate
-clients for the Hermes dashboard API, Hermes gateway API, and the temporary external
-adapter:
+AgentOS Mission Control is a native application in this repository under
+`apps/mission-control/`. It runs on the Jarvis/Hermes host as an independent
+`hermes-mission-control.service` process alongside `hermes-gateway.service`:
 
 ```text
 AgentOS browser
-  → AgentOS Mission Control on Pi
-      → Hermes Dashboard API on Jarvis
-      → Hermes Gateway API on Jarvis
-      → external AgentOS adapter on Jarvis
-      → direct/proxied 9router dashboard/API
-      → direct/proxied llama-proxy dashboard/API
+  → Mission Control on Jarvis/Hermes :51763
+      → Hermes Dashboard API :9119
+      → Hermes Gateway API :8642
+      → temporary external AgentOS adapter :8643
+      → direct/proxied 9router dashboard/API on Pi
+      → direct/proxied llama-proxy dashboard/API on Pi
 ```
 
+The gateway unit uses only `Wants=hermes-mission-control.service`. There is no
+`Requires=`, `PartOf=` or `BindsTo=` relationship. Consequently, Mission Control has
+its own PID, cgroup, logs and restart policy; restarting or stopping it does not affect
+the gateway. Gateway start/restart issues an idempotent Mission Control start, so an
+already-running dashboard keeps its PID.
+
 The BFF keeps bounded allowlists for upstream reads and supported mutation surfaces.
-The external adapter currently supplies Hermes-related data such as Kanban, permits,
-issues, timeline/fingerprint information and memory-file surfaces. It remains a
-separate transitional component; any merge into `hermes-agent` requires a later
-explicit implementation change.
+The external adapter remains a separate transitional component until a later explicit
+owner-authorized merge. The old Pi checkout/service is retired only by a separate
+post-merge deployment and cleanup operation with runtime evidence.
 
 ## LLM routing
 
@@ -369,7 +372,7 @@ application/runtime documentation or code → novkien/hermes-agent
 shared skill/profile pack                 → novkien/hermes-skills
 external gateway/runtime plugin           → novkien/hermes-plugins
 profile SOUL.md                            → novkien/agents
-AgentOS                                    → novkien/agent-mission-control
+AgentOS Mission Control                    → novkien/hermes-agent/apps/mission-control
 llama-proxy                                → novkien/llama-proxy
 ```
 
@@ -386,6 +389,7 @@ hermes-agent/
 ├── toolsets.py           # toolset definitions
 ├── tools/                # tool implementations and registry
 ├── gateway/              # messaging gateway runtime
+├── apps/mission-control/ # native AgentOS BFF/control-plane application
 ├── plugins/              # plugin framework and bundled/built-in plugin surface
 ├── hermes_cli/           # commands, setup, profiles, web server
 ├── cli.py                # classic CLI

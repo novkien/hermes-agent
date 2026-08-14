@@ -441,6 +441,7 @@ from hermes_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_
 from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
+from hermes_cli.subcommands.mission_control import build_mission_control_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
@@ -2786,6 +2787,13 @@ def cmd_chat(args):
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+
+def cmd_mission_control(args):
+    """AgentOS Mission Control lifecycle commands."""
+    from hermes_cli.mission_control import mission_control_command
+
+    return mission_control_command(args)
 
 
 def cmd_gateway(args):
@@ -11670,6 +11678,9 @@ def main():
     # =========================================================================
     build_gateway_parser(
         subparsers, cmd_gateway=cmd_gateway, cmd_proxy=cmd_proxy, cmd_gateway_enroll=cmd_gateway_enroll
+    )
+    build_mission_control_parser(
+        subparsers, cmd_mission_control=cmd_mission_control
     )
 
     # =========================================================================
