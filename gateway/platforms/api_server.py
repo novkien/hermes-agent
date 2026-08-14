@@ -41,6 +41,8 @@ Requires:
 """
 
 import asyncio
+import base64
+import binascii
 import errno
 import hashlib
 import hmac
@@ -547,6 +549,12 @@ def _normalize_chat_content(
 _TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text"})
 _IMAGE_PART_TYPES = frozenset({"image_url", "input_image"})
 _FILE_PART_TYPES = frozenset({"file", "input_file"})
+_SESSION_CHAT_ATTACHMENT_MAX_COUNT = 8
+_SESSION_CHAT_ATTACHMENT_MAX_BYTES = 700 * 1024
+_SESSION_CHAT_ATTACHMENT_MIME_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+_SESSION_CHAT_ATTACHMENT_DATA_URL_RE = re.compile(
+    r"^data:([^;,]*)(?:;[^;,=]+=[^;,]+)*;base64,(.*)$", re.IGNORECASE | re.DOTALL
+)
 
 
 def _normalize_multimodal_content(content: Any) -> Any:
@@ -808,6 +816,180 @@ def _session_chat_user_message(body: Dict[str, Any], *, param: str = "message") 
         return _normalize_multimodal_content(user_message), None
     except ValueError as exc:
         return None, _multimodal_validation_error(exc, param=param)
+
+
+def _session_chat_attachments(body: Dict[str, Any]) -> tuple[list[Dict[str, Any]], Optional["web.Response"]]:
+    """Normalize Browser attachment transports before they reach the agent.
+
+    Agent Mission Control validates the same contract at its public boundary,
+    but the gateway is also a direct API surface. Keep this validation here so
+    a client cannot smuggle a path, malformed base64 payload, or unbounded
+    blob into the agent workspace by bypassing the BFF.
+    """
+    raw_attachments = body.get("attachments")
+    if raw_attachments is None or raw_attachments == []:
+        return [], None
+    if not isinstance(raw_attachments, list):
+        return [], web.json_response(
+            _openai_error("attachments must be an array", code="invalid_attachments"), status=400
+        )
+    if len(raw_attachments) > _SESSION_CHAT_ATTACHMENT_MAX_COUNT:
+        return [], web.json_response(
+            _openai_error(
+                f"at most {_SESSION_CHAT_ATTACHMENT_MAX_COUNT} attachments are allowed",
+                code="too_many_attachments",
+            ),
+            status=400,
+        )
+
+    normalized: list[Dict[str, Any]] = []
+    total_size = 0
+    for index, raw_attachment in enumerate(raw_attachments, start=1):
+        label = f"attachment {index}"
+        if not isinstance(raw_attachment, dict):
+            return [], web.json_response(
+                _openai_error(f"{label} must be an object", code="invalid_attachment"), status=400
+            )
+
+        name = raw_attachment.get("name") or raw_attachment.get("fileName")
+        kind = raw_attachment.get("kind") or raw_attachment.get("type")
+        mime_type = (
+            raw_attachment.get("mime_type")
+            or raw_attachment.get("contentType")
+            or raw_attachment.get("mimeType")
+            or raw_attachment.get("mediaType")
+        )
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 255
+            or any(ord(character) < 32 for character in name)
+            or "/" in name
+            or "\\" in name
+        ):
+            return [], web.json_response(
+                _openai_error(f"{label} has an invalid filename", code="invalid_attachment_name"), status=400
+            )
+        name = name.strip()
+        if kind not in {"image", "pdf", "file"}:
+            return [], web.json_response(
+                _openai_error(f"{label} has an invalid attachment type", code="invalid_attachment_kind"), status=400
+            )
+        if not isinstance(mime_type, str) or not _SESSION_CHAT_ATTACHMENT_MIME_RE.fullmatch(mime_type.strip()):
+            return [], web.json_response(
+                _openai_error(f"{label} has an invalid MIME type", code="invalid_attachment_mime"), status=400
+            )
+        mime_type = mime_type.strip().lower()
+        if kind == "image" and not mime_type.startswith("image/"):
+            return [], web.json_response(
+                _openai_error(f"{label} image type requires an image MIME type", code="invalid_attachment_kind"), status=400
+            )
+        if kind == "pdf" and mime_type != "application/pdf":
+            return [], web.json_response(
+                _openai_error(f"{label} pdf type requires application/pdf", code="invalid_attachment_kind"), status=400
+            )
+
+        data = next(
+            (
+                raw_attachment.get(key)
+                for key in ("content", "data", "base64", "dataUrl")
+                if isinstance(raw_attachment.get(key), str) and raw_attachment.get(key).strip()
+            ),
+            None,
+        )
+        if not isinstance(data, str):
+            return [], web.json_response(
+                _openai_error(f"{label} data is required", code="attachment_data_required"), status=400
+            )
+        encoded = data.strip()
+        data_url_match = _SESSION_CHAT_ATTACHMENT_DATA_URL_RE.fullmatch(encoded)
+        if data_url_match:
+            data_mime_type = data_url_match.group(1).strip().lower()
+            if data_mime_type and data_mime_type != mime_type:
+                return [], web.json_response(
+                    _openai_error(f"{label} data MIME does not match MIME type", code="attachment_mime_mismatch"), status=400
+                )
+            encoded = data_url_match.group(2)
+        encoded = re.sub(r"\s+", "", encoded)
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return [], web.json_response(
+                _openai_error(f"{label} data must be valid base64", code="invalid_attachment_data"), status=400
+            )
+        declared_size = raw_attachment.get("size")
+        if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size != len(decoded):
+            return [], web.json_response(
+                _openai_error(f"{label} size does not match decoded data", code="attachment_size_mismatch"), status=400
+            )
+        if not decoded or len(decoded) > _SESSION_CHAT_ATTACHMENT_MAX_BYTES:
+            return [], web.json_response(
+                _openai_error(f"{label} exceeds the 700 KB limit", code="attachment_too_large"), status=400
+            )
+        total_size += len(decoded)
+        if total_size > _SESSION_CHAT_ATTACHMENT_MAX_BYTES:
+            return [], web.json_response(
+                _openai_error("combined attachments exceed the 700 KB limit", code="attachments_too_large"), status=400
+            )
+        normalized.append({
+            "name": name,
+            "kind": kind,
+            "mime_type": mime_type,
+            "data": encoded,
+        })
+    return normalized, None
+
+
+def _attach_session_files_to_message(
+    user_message: Any,
+    attachments: list[Dict[str, Any]],
+    session_id: str,
+) -> Any:
+    """Make chat attachments available to the agent's native input surfaces."""
+    if not attachments:
+        return user_message
+
+    from hermes_constants import get_hermes_home
+
+    session_component = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:96] or "session"
+    attachment_dir = get_hermes_home() / "workspace" / ".hermes-attachments" / session_component
+    attachment_dir.mkdir(parents=True, exist_ok=True)
+
+    image_parts: list[Dict[str, Any]] = []
+    file_references: list[str] = []
+    for attachment in attachments:
+        if attachment["kind"] == "image":
+            image_parts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{attachment['mime_type']};base64,{attachment['data']}",
+                },
+            })
+            continue
+
+        stored_name = f"{uuid.uuid4().hex}-{attachment['name']}"
+        stored_path = attachment_dir / stored_name
+        stored_path.write_bytes(base64.b64decode(attachment["data"], validate=True))
+        file_references.append(
+            f"- {stored_path} (original name: {attachment['name']}; MIME: {attachment['mime_type']})"
+        )
+
+    if file_references:
+        reference_text = (
+            "\n\n[Files attached to this message]\n"
+            + "\n".join(file_references)
+            + "\nRead the listed file directly with the available file tools before answering."
+        )
+        if isinstance(user_message, list):
+            user_message = [*user_message, {"type": "text", "text": reference_text}]
+        else:
+            user_message = f"{user_message}{reference_text}"
+
+    if not image_parts:
+        return user_message
+    if isinstance(user_message, list):
+        return [*user_message, *image_parts]
+    return [{"type": "text", "text": user_message}, *image_parts]
 
 
 def check_api_server_requirements() -> bool:
@@ -3710,6 +3892,9 @@ class APIServerAdapter(BasePlatformAdapter):
         user_message, err = _session_chat_user_message(body)
         if err is not None:
             return err
+        attachments, err = _session_chat_attachments(body)
+        if err is not None:
+            return err
         system_prompt = body.get("system_message") or body.get("instructions")
         if system_prompt is not None and not isinstance(system_prompt, str):
             return web.json_response(_openai_error("system_message must be a string", code="invalid_system_message"), status=400)
@@ -3768,6 +3953,7 @@ class APIServerAdapter(BasePlatformAdapter):
         result, usage = await self._run_agent(
             user_message=user_message,
             conversation_history=history,
+            attachments=attachments,
             ephemeral_system_prompt=system_prompt,
             soul_identity=session.get("system_prompt"),
             session_id=session_id,
@@ -3826,6 +4012,9 @@ class APIServerAdapter(BasePlatformAdapter):
         if err:
             return err
         user_message, err = _session_chat_user_message(body)
+        if err is not None:
+            return err
+        attachments, err = _session_chat_attachments(body)
         if err is not None:
             return err
         system_prompt = body.get("system_message") or body.get("instructions")
@@ -3994,6 +4183,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 result, usage = await self._run_agent(
                     user_message=user_message,
                     conversation_history=history,
+                    attachments=attachments,
                     ephemeral_system_prompt=system_prompt,
                     soul_identity=session.get("system_prompt"),
                     session_id=session_id,
@@ -6446,6 +6636,7 @@ class APIServerAdapter(BasePlatformAdapter):
         self,
         user_message: str,
         conversation_history: List[Dict[str, str]],
+        attachments: Optional[list[Dict[str, Any]]] = None,
         ephemeral_system_prompt: Optional[str] = None,
         soul_identity: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -6548,7 +6739,9 @@ class APIServerAdapter(BasePlatformAdapter):
                     # is a usable hook for the rest.
                     self._shutdown_interruptible_agents[id(agent)] = agent
                     result = agent.run_conversation(
-                        user_message=user_message,
+                        user_message=_attach_session_files_to_message(
+                            user_message, attachments or [], session_id or "session"
+                        ),
                         conversation_history=conversation_history,
                         task_id=effective_task_id,
                     )
