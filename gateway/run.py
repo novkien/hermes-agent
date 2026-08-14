@@ -60,6 +60,20 @@ from agent.conversation_compression import (
 from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 from agent.i18n import t
 from agent.interrupt_compat import request_hard_interrupt
+
+# Optional: mirrors a platform turn to watchers on the same session. Guarded so
+# the gateway runs identically where the relay module is absent.
+try:
+    from agent.session_event_relay import (
+        finish_turn_relay as _finish_turn_relay,
+        start_turn_relay as _start_turn_relay,
+    )
+except Exception:  # pragma: no cover
+    def _start_turn_relay(*_args, **_kwargs):
+        return None
+
+    def _finish_turn_relay(*_args, **_kwargs):
+        return None
 from agent.turn_context import (
     compression_made_progress,
 )
@@ -5615,10 +5629,22 @@ class TurnRunner:
                 _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
             from agent.skill_policy_context import bind_enabled_skills
 
-            with bind_enabled_skills(ctx.enabled_skills):
-                result = agent.run_conversation(
-                    _api_run_message, **_conversation_kwargs
-                )
+            # Mirror this turn to anyone watching the same session elsewhere.
+            # A Telegram or cron turn runs here, inside the gateway daemon, but
+            # NOT through the chat/stream endpoint that broadcasts on its own —
+            # so without this a dashboard watching the session saw the incoming
+            # message and then nothing until the whole turn had finished and
+            # been persisted. Best-effort throughout: see
+            # agent/session_event_relay.py.
+            result = None
+            _event_relay = _start_turn_relay(agent, ctx.session_id, _api_run_message)
+            try:
+                with bind_enabled_skills(ctx.enabled_skills):
+                    result = agent.run_conversation(
+                        _api_run_message, **_conversation_kwargs
+                    )
+            finally:
+                _finish_turn_relay(_event_relay, result)
         finally:
             unregister_gateway_notify(_approval_session_key)
             # Cancel any pending clarify entries so blocked agent

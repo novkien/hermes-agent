@@ -94,6 +94,7 @@ from gateway.platforms.base import (
 from agent.redact import redact_sensitive_text
 from agent.interrupt_compat import request_hard_interrupt
 from gateway.readiness import collect_runtime_readiness
+from gateway.session_events import SessionEventHub
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
@@ -1424,6 +1425,11 @@ class APIServerAdapter(BasePlatformAdapter):
         self._run_streams_created: Dict[str, float] = {}
         # Runs with a connected SSE consumer; their queue is actively draining.
         self._run_stream_subscribers: set[str] = set()
+        # Session-scoped broadcast of turn events, so a turn started anywhere —
+        # this gateway, the CLI in its own process, Telegram, cron — can be
+        # watched live by any number of other clients. Unlike _run_streams above,
+        # every subscriber gets its own buffer and none consumes another's.
+        self._session_events = SessionEventHub()
         # Active run agent/task references for stop support
         self._active_run_agents: Dict[str, Any] = {}
         # Session chat streams build their agent inside _run_agent, so they
@@ -2059,6 +2065,9 @@ class APIServerAdapter(BasePlatformAdapter):
             ("GET", "/v1/toolsets", self._handle_toolsets),
             ("GET", "/api/sessions", self._handle_list_sessions),
             ("POST", "/api/sessions", self._handle_create_session),
+            # Before /api/sessions/{session_id}: "running" is a literal path, and
+            # the dynamic route would otherwise swallow it as a session id.
+            ("GET", "/api/sessions/running", self._handle_sessions_running),
             ("GET", "/api/sessions/{session_id}", self._handle_get_session),
             ("PATCH", "/api/sessions/{session_id}", self._handle_patch_session),
             ("DELETE", "/api/sessions/{session_id}", self._handle_delete_session),
@@ -2067,6 +2076,8 @@ class APIServerAdapter(BasePlatformAdapter):
             ("POST", "/api/sessions/{session_id}/chat", self._handle_session_chat),
             ("POST", "/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream),
             ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),
+            ("GET", "/api/sessions/{session_id}/events/stream", self._handle_session_events_stream),
+            ("POST", "/api/sessions/{session_id}/events/ingest", self._handle_session_events_ingest),
             ("POST", "/v1/chat/completions", self._handle_chat_completions),
             ("POST", "/v1/responses", self._handle_responses),
             ("GET", "/v1/responses/{response_id}", self._handle_get_response),
@@ -2590,6 +2601,7 @@ class APIServerAdapter(BasePlatformAdapter):
     def _create_agent(
         self,
         ephemeral_system_prompt: Optional[str] = None,
+        soul_identity: Optional[str] = None,
         session_id: Optional[str] = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
@@ -2913,6 +2925,7 @@ class APIServerAdapter(BasePlatformAdapter):
             "quiet_mode": True,
             "verbose_logging": False,
             "ephemeral_system_prompt": ephemeral_system_prompt or None,
+            "soul_identity": soul_identity or None,
             "enabled_toolsets": enabled_toolsets,
             "session_id": session_id,
             "platform": "api_server",
@@ -3744,6 +3757,7 @@ class APIServerAdapter(BasePlatformAdapter):
             user_message=user_message,
             conversation_history=history,
             ephemeral_system_prompt=system_prompt,
+            soul_identity=session.get("system_prompt"),
             session_id=session_id,
             gateway_session_key=gateway_session_key,
             route=route,
@@ -3877,6 +3891,19 @@ class APIServerAdapter(BasePlatformAdapter):
             payload.setdefault("ts", time.time())
             return name, payload
 
+        def _deliver(event: tuple) -> None:
+            # Runs on the event loop, always. The requesting client's own queue
+            # first — it is the one waiting on a response — then everyone else
+            # watching this session from another tab, the dashboard, or a
+            # different platform entirely.
+            queue.put_nowait(event)
+            try:
+                self._session_events.publish(session_id, event[0], event[1])
+            except Exception:
+                # A broadcast is a courtesy to observers; it must never be able
+                # to break the turn that produced it.
+                logger.debug("[api_server] session event broadcast failed", exc_info=True)
+
         def _enqueue(name: str, payload: Dict[str, Any]) -> None:
             event = _event_payload(name, payload)
             try:
@@ -3885,9 +3912,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 running_loop = None
             try:
                 if running_loop is loop:
-                    queue.put_nowait(event)
+                    _deliver(event)
                 else:
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
+                    loop.call_soon_threadsafe(_deliver, event)
             except RuntimeError:
                 pass
 
@@ -3942,16 +3969,22 @@ class APIServerAdapter(BasePlatformAdapter):
 
         async def _run_and_signal() -> None:
             try:
-                await queue.put(_event_payload("run.started", {
+                # Through _enqueue rather than queue.put: that is the one place
+                # a frame reaches both this request's stream and the session
+                # broadcast, and a turn whose `run.started` skipped the
+                # broadcast would never show up as running to anyone else.
+                _enqueue("run.started", {
                     "user_message": {"role": "user", "content": user_message},
                     "runtime": runtime_meta,
-                }))
-                await queue.put(_event_payload("message.started", {"message": {"id": message_id, "role": "assistant"}}))
+                    "platform": "gateway",
+                })
+                _enqueue("message.started", {"message": {"id": message_id, "role": "assistant"}})
                 history = await self._conversation_history_for_session(session_id)
                 result, usage = await self._run_agent(
                     user_message=user_message,
                     conversation_history=history,
                     ephemeral_system_prompt=system_prompt,
+                    soul_identity=session.get("system_prompt"),
                     session_id=session_id,
                     stream_delta_callback=_delta,
                     tool_progress_callback=_tool_progress,
@@ -3985,7 +4018,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         else ""
                     ),
                 )
-                await queue.put(_event_payload("assistant.completed", {
+                _enqueue("assistant.completed", {
                     "session_id": effective_session_id,
                     "message_id": message_id,
                     "content": final_response,
@@ -3993,20 +4026,23 @@ class APIServerAdapter(BasePlatformAdapter):
                     "partial": False,
                     "interrupted": False,
                     "runtime": effective_runtime,
-                }))
-                await queue.put(_event_payload("run.completed", {
+                })
+                _enqueue("run.completed", {
                     "session_id": effective_session_id,
                     "message_id": message_id,
                     "completed": True,
                     "messages": turn_messages,
                     "usage": usage,
                     "runtime": effective_runtime,
-                }))
+                })
             except Exception as exc:
                 logger.exception("[api_server] session chat stream failed")
-                await queue.put(_event_payload("error", {"message": _redact_api_error_text(exc)}))
+                _enqueue("error", {"message": _redact_api_error_text(exc)})
             finally:
-                await queue.put(_event_payload("done", {}))
+                _enqueue("done", {})
+                # The sentinel closes THIS request's stream only; it is not an
+                # event, so it is not broadcast — other watchers keep their own
+                # subscriptions until they disconnect.
                 await queue.put(None)
 
         task = asyncio.create_task(_run_and_signal())
@@ -4057,6 +4093,153 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.debug("[api_server] session SSE stream error: %s", exc)
         return response
+
+    # A watcher is idle most of the time, so the keepalive is what actually
+    # detects a browser that went away: writes are the only thing that fail on a
+    # dead socket, and this is the only write a quiet session ever makes.
+    SESSION_EVENTS_KEEPALIVE_SECONDS = 20.0
+
+    async def _handle_session_events_stream(self, request: "web.Request") -> "web.StreamResponse":
+        """GET /api/sessions/{session_id}/events/stream — watch this session's live turn.
+
+        The read-only twin of ``POST /api/sessions/{id}/chat/stream``: same frame
+        names, same payloads, but it starts nothing and any number of clients may
+        attach at once. Frames arrive regardless of which platform drove the turn.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session_id = request.match_info["session_id"]
+        _, err = await self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+
+        try:
+            after_seq = int(request.query.get("after_seq") or 0)
+        except (TypeError, ValueError):
+            after_seq = 0
+
+        subscriber = self._session_events.subscribe(session_id, after_seq)
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Hermes-Session-Id": session_id,
+            },
+        )
+        await response.prepare(request)
+        try:
+            # Sent before anything else so a client that attached to a quiet
+            # session can tell "connected, nothing running" apart from "still
+            # connecting" — the two look identical on an inert stream.
+            await response.write(_sse_frame(
+                {
+                    "session_id": session_id,
+                    "running": self._session_events.is_running(session_id),
+                    "ts": time.time(),
+                },
+                event="session.attached",
+                ensure_ascii=False,
+            ))
+            while True:
+                frame = await subscriber.get(self.SESSION_EVENTS_KEEPALIVE_SECONDS)
+                if frame is None:
+                    await response.write(b": keepalive\n\n")
+                    continue
+                await response.write(
+                    _sse_frame(frame["data"], event=frame["event"], ensure_ascii=False)
+                )
+        except (asyncio.CancelledError, ConnectionResetError):
+            raise
+        except Exception as exc:
+            logger.debug("[api_server] session event stream error for %s: %s", session_id, exc)
+        finally:
+            self._session_events.unsubscribe(session_id, subscriber)
+        return response
+
+    async def _handle_sessions_running(self, request: "web.Request") -> "web.Response":
+        """GET /api/sessions/running — which sessions have a turn in flight right now."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        return web.json_response({"running": self._session_events.running()})
+
+    async def _handle_session_events_ingest(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/events/ingest — NDJSON from another process.
+
+        The CLI runs its agent in its own process, and this HTTP API is the only
+        thing the two share, so this is how a CLI-driven turn becomes visible to
+        everyone else. One request carries the whole turn as a stream of lines
+        rather than a request per token.
+
+        Unlike the chat/stream endpoint next door — which is effectively open
+        unless a session key is presented — this requires the API key outright.
+        It writes into every watcher's stream, so it is not a place to inherit a
+        weaker check.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session_id = request.match_info["session_id"]
+        _, err = await self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+
+        accepted = 0
+        started_here = False
+        try:
+            while True:
+                try:
+                    line = await request.content.readline()
+                except ValueError:
+                    # Line longer than aiohttp's buffer: one oversized frame, not
+                    # a reason to drop the rest of the turn.
+                    continue
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("event") or item.get("name")
+                payload = item.get("data")
+                if payload is None:
+                    payload = item.get("payload")
+                if not name or not isinstance(payload, dict):
+                    continue
+                payload.setdefault("session_id", session_id)
+                payload.setdefault("ts", time.time())
+                if name == "run.started":
+                    payload.setdefault("platform", "cli")
+                    started_here = True
+                self._session_events.publish(session_id, str(name), payload)
+                accepted += 1
+        except (asyncio.CancelledError, ConnectionResetError):
+            raise
+        except Exception as exc:
+            logger.debug("[api_server] session event ingest error for %s: %s", session_id, exc)
+        finally:
+            # A producer killed mid-turn cannot retract its own `run.started`.
+            # Without this the session would read as running until the TTL sweep
+            # an hour later, and every watcher would sit on a spinner that never
+            # resolves. `done` rather than `error`: the turn's fate is unknown
+            # here, and claiming a failure that may not have happened is worse
+            # than closing it out quietly.
+            if started_here and self._session_events.is_running(session_id):
+                self._session_events.publish(session_id, "done", {
+                    "session_id": session_id,
+                    "ts": time.time(),
+                    "reason": "producer_disconnected",
+                })
+
+        return web.json_response({"accepted": accepted})
 
     async def _handle_session_model_lock(self, request: "web.Request") -> "web.Response":
         """POST /api/sessions/{session_id}/model — backend-ack a Browser model lock."""
@@ -6187,6 +6370,7 @@ class APIServerAdapter(BasePlatformAdapter):
         user_message: str,
         conversation_history: List[Dict[str, str]],
         ephemeral_system_prompt: Optional[str] = None,
+        soul_identity: Optional[str] = None,
         session_id: Optional[str] = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
@@ -6248,6 +6432,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 try:
                     agent = self._create_agent(
                         ephemeral_system_prompt=ephemeral_system_prompt,
+                        soul_identity=soul_identity,
                         session_id=session_id,
                         stream_delta_callback=stream_delta_callback,
                         tool_progress_callback=tool_progress_callback,

@@ -475,6 +475,7 @@ def init_agent(
     quiet_mode: bool = False,
     tool_progress_mode: str = "all",
     ephemeral_system_prompt: str = None,
+    soul_identity: str = None,
     log_prefix_chars: int = 100,
     log_prefix: str = "",
     providers_allowed: List[str] = None,
@@ -596,6 +597,7 @@ def init_agent(
     agent.quiet_mode = quiet_mode
     agent.tool_progress_mode = tool_progress_mode
     agent.ephemeral_system_prompt = ephemeral_system_prompt
+    agent.soul_identity = soul_identity
     agent._auto_loaded_skill_prompt = auto_loaded_skill_prompt or ""
     agent.enabled_skills = (
         tuple(enabled_skills) if enabled_skills is not None else None

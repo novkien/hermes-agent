@@ -56,6 +56,21 @@ from hermes_cli.cli_commands_mixin import CLICommandsMixin
 from hermes_cli.cli_billing_mixin import CLIBillingMixin
 from agent.interrupt_compat import request_hard_interrupt
 
+# Optional: mirrors a CLI turn to the gateway so other clients can watch it live.
+# Guarded because the CLI must run identically on a machine where the relay
+# module, or the gateway it talks to, simply is not there.
+try:
+    from agent.session_event_relay import (
+        finish_turn_relay as _finish_turn_relay,
+        start_turn_relay as _start_turn_relay,
+    )
+except Exception:  # pragma: no cover
+    def _start_turn_relay(*_args, **_kwargs):
+        return None
+
+    def _finish_turn_relay(*_args, **_kwargs):
+        return None
+
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style as PTStyle
@@ -14363,6 +14378,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     self, "_pending_one_turn_model_restore", None
                 )
                 self._pending_one_turn_model_restore = None
+                # Mirror this turn to anyone watching the same session from
+                # elsewhere (the dashboard's chat view, most obviously). The CLI
+                # runs its agent in its own process and never touches the
+                # gateway, so without this a conversation held here is invisible
+                # to every other client until it ends and its messages are
+                # persisted — which is why a browser watching this session used
+                # to sit still and then show the whole turn at once. Entirely
+                # best-effort: see agent/session_event_relay.py.
+                result = None
+                _event_relay = _start_turn_relay(
+                    self.agent, self.session_id, agent_message
+                )
                 try:
                     result = self.agent.run_conversation(
                         user_message=agent_message,
@@ -14392,6 +14419,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         "error": _summary,
                     }
                 finally:
+                    # Before anything else in this block: a watcher elsewhere is
+                    # holding a live turn view open, and it should close the
+                    # instant the turn is over rather than after the CLI has
+                    # finished its own housekeeping.
+                    _finish_turn_relay(_event_relay, result)
                     if _one_turn_model_restore:
                         self._restore_model_runtime_snapshot(_one_turn_model_restore)
                     # Surface any credit notices queued during the turn (cold-start

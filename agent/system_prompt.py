@@ -190,7 +190,15 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Some execution modes (cron) still want HERMES_HOME persona while keeping
     # cwd project instructions disabled.
     _soul_loaded = False
-    if agent.load_soul_identity or not agent.skip_context_files:
+    # A caller-supplied identity replaces SOUL.md rather than layering on top
+    # of it. A session started on another profile's persona must not also
+    # carry this profile's — two identities in one prompt is not a persona,
+    # it is a contradiction the model resolves by ignoring one of them.
+    _identity_override = getattr(agent, "soul_identity", None)
+    if isinstance(_identity_override, str) and _identity_override.strip():
+        stable_parts.append(_identity_override.strip())
+        _soul_loaded = True
+    elif agent.load_soul_identity or not agent.skip_context_files:
         _soul_content = _r.load_soul_md(_ctx_len)
         if _soul_content:
             stable_parts.append(_soul_content)
