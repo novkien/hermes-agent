@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET_BRANCH: agent/integrate-full-mission-control
-      ARTIFACT_URL: 'https://sdmntprwestus.oaiusercontent.com/files/00000000-4e00-8230-b6ef-82d5d64abfdf/raw?se=2026-08-14T11%3A41%3A24Z&sp=r&sv=2026-02-06&sr=b&scid=57b8d870-4151-5276-8f28-7f096b622f42&skoid=9063adf3-a524-4acf-b70a-8731b33f2f50&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-13T19%3A53%3A38Z&ske=2026-08-14T19%3A53%3A38Z&sks=b&skv=2026-02-06&sig=SHBbayrXa/j/uzvm8vAYjCBn3/dBcIwcVqJENcldKjs%3D'
+      ARTIFACT_URL: 'https://sdmntprwestus2.oaiusercontent.com/files/00000000-655c-81f8-8695-2da4500d7966/raw?se=2026-08-14T11%3A43%3A15Z&sp=r&sv=2026-02-06&sr=b&scid=362f7de0-4de2-50fd-9128-73da1529a1fd&skoid=9063adf3-a524-4acf-b70a-8731b33f2f50&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-13T19%3A41%3A19Z&ske=2026-08-14T19%3A41%3A19Z&sks=b&skv=2026-02-06&sig=66t2vLN8JyccZ5bi75JgfY%2B5xlLpTCipBjbzZ/oaNgg%3D'
       OUTER_ARTIFACT_SHA256: 9d95364cc398d5b67dd2a771825272133cd4e27d5b6b19923e4d0edca2add282
       INNER_TRANSFER_SHA256: e823b7af64f93e151292bb02e7d087b140efa23d9e3f9282cd06f576cd64bd54
       EXPECTED_SOURCE_COMMIT: 42a9c191fdebc66ace4aac98a1e581d9ab7a13d1
@@ -239,6 +239,10 @@ jobs:
           rm -f .github/workflows/one-shot-import-mission-control.yml
           rm -f .github/scripts/integrate_mission_control_once.py
           git add -A
+          # The target repository ignores `.hermes/` globally, but that path is
+          # part of the locked source tree. Force-stage the complete imported app
+          # after runtime-file checks so every manifest entry is retained.
+          git add -f -- apps/mission-control
           python - <<'PY'
           from pathlib import Path
           import os
