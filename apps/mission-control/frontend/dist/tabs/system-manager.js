@@ -64,7 +64,10 @@ export function createSystemManager({ api, profile, toolbar }) {
   let inspectorHost = null;
   let pollTimer = null;
 
-  const table = createTable({
+  // The active sub-tab changes the immutable table schema, so this reference
+  // must follow the replacement table rather than copying its accessor-backed
+  // API onto the old object.
+  let table = createTable({
     rowId: (row) => row.id,
     emptyTitle: 'No System Manager records',
     emptyNote: 'The database will populate as records are created or services are discovered.',
@@ -151,7 +154,7 @@ export function createSystemManager({ api, profile, toolbar }) {
       onSelect: (row) => { selected = row; creating = false; renderSide(); },
     });
     table.node.replaceWith(next.node);
-    Object.assign(table, next);
+    table = next;
   }
 
   async function load(keepSelection = true) {

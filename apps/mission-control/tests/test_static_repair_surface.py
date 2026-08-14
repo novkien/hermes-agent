@@ -69,6 +69,10 @@ def main() -> None:
     require("frontend/dist/tabs/logs.js", "export function createLogs", "logLines(envelope.data)")
     require("frontend/dist/tabs/command-center.js", "export function createCommandCenter", "/api/upstream/api/ops/doctor")
     require("frontend/dist/tabs/llama-proxy.js", "export function createLlamaProxy", "LLaMA_PROXY_URL")
+    # System Manager changes table schemas when selecting Services/API/Accounts/Notes.
+    # createTable returns an accessor-backed selectedId, so copying a replacement
+    # table with Object.assign throws before the selected sub-tab can load.
+    require("frontend/dist/tabs/system-manager.js", "let table = createTable(", "table = next;")
     require("frontend/dist/pure/data-shape.js", "export function listFrom", "export function summarizeSourceHealth")
     # Context-window gauge. The panel must stay INSIDE .chat-composer and above
     # .chat-composer-box: that placement is what makes it expand upward into
@@ -88,6 +92,7 @@ def main() -> None:
     forbid("frontend/dist/tabs/overview.js", "(runningTasks.data || []).slice")
     forbid("frontend/dist/app.js", "capabilities.sources")
     forbid("frontend/dist/pure/hash-router.js", "query.set('profile'")
+    forbid("frontend/dist/tabs/system-manager.js", "Object.assign(table, next)")
 
     expected = [
         "api.js",
