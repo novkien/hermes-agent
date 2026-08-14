@@ -44,6 +44,10 @@ _HERMES_CORE_TOOLS = [
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
     "vision_analyze",
+    # BFL FLUX 3 video generation (runtime-gated by its requirement checks)
+    "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
+    "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
+    "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
     # Skills
     "skills_list", "skill_view", "skill_manage",
     # Browser automation
@@ -71,6 +75,7 @@ _HERMES_CORE_TOOLS = [
     # Cronjob management
     "cronjob",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
+    "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
     # Kanban multi-agent coordination — only in schema when the agent is
     # spawned as a kanban worker (HERMES_KANBAN_TASK env set) or the current
     # profile explicitly enables the kanban toolset. Gated via check_fn in

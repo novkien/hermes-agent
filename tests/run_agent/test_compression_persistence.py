@@ -496,8 +496,8 @@ class TestStoredPromptCwdDrift:
 
 
 
-    def test_built_prompt_contains_platform_line(self):
-        """The built system prompt must carry a Platform: line so drift detection works."""
+    def test_built_prompt_contains_current_date_line(self):
+        """The volatile prompt retains its cache-boundary date metadata."""
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
@@ -521,6 +521,6 @@ class TestStoredPromptCwdDrift:
                 )
             agent.platform = "cli"
             parts = build_system_prompt_parts(agent)
-            assert "Platform: cli" in parts["volatile"], (
-                "Built prompt missing 'Platform: cli' — drift detection cannot read it"
+            assert "Current date:" in parts["volatile"], (
+                "Built prompt missing its volatile current-date boundary"
             )

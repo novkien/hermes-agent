@@ -383,6 +383,10 @@ def agent():
             skip_memory=True,
         )
         a.client = MagicMock()
+        # These integration tests invoke the tool executor directly, outside
+        # run_conversation(). Model a live turn so steer admission matches the
+        # production lifecycle.
+        a._open_steer_window()
         return a
 
 

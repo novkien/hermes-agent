@@ -703,17 +703,19 @@ class TestFTS5Search:
         ]
         assert all("context" in row and row["context"] for row in default)
 
-    def test_search_projection_skips_context_enrichment_queries(self, db):
+    def test_search_projection_skips_context_enrichment_queries(self, db, monkeypatch):
         db.create_session(session_id="s1", source="cli")
         db.append_message("s1", role="user", content="before")
         db.append_message("s1", role="assistant", content="projectionneedle")
         db.append_message("s1", role="user", content="after")
 
         statements = []
-        read_conn = db._get_read_conn() or db._conn
+        # Force this instrumentation test through the writer connection. The
+        # production read pool intentionally checks out a fresh connection per
+        # context; grabbing one directly here would consume (not trace) a pool
+        # permit and the search would correctly use a different connection.
+        monkeypatch.setattr(db, "_checkout_read_conn", lambda: None)
         traced_connections = [db._conn]
-        if read_conn is not db._conn:
-            traced_connections.append(read_conn)
         for conn in traced_connections:
             conn.set_trace_callback(statements.append)
 

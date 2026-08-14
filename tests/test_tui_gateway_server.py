@@ -49,6 +49,13 @@ def _neuter_agent_prewarm_timer(request, monkeypatch):
     exercise the deferred build itself opt back in with
     ``@pytest.mark.real_agent_prewarm``.
     """
+    # Other test modules legitimately reload the gateway module while probing
+    # transport behavior. Keep this large legacy module's imported `server`
+    # object canonical for string-based patch targets and lazy imports during
+    # every test, regardless of collection order.
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", server)
+    monkeypatch.setattr(sys.modules["tui_gateway"], "server", server)
+
     if request.node.get_closest_marker("real_agent_prewarm"):
         yield
         return
@@ -2086,8 +2093,9 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    assert {"kanban", "memory", "project"} <= set(result)
-    assert set(result) - {"kanban", "memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
+    fork_coordination = {"a2a_coordination", "kanban_coordination"}
+    assert {"kanban", "memory", "project", *fork_coordination} <= set(result)
+    assert set(result) - {"kanban", "memory", "project", *fork_coordination} <= _RECENTLY_SHIPPED_TOOLSETS
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -2112,8 +2120,9 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    assert {"kanban", "memory", "project"} <= set(result)
-    assert set(result) - {"kanban", "memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
+    fork_coordination = {"a2a_coordination", "kanban_coordination"}
+    assert {"kanban", "memory", "project", *fork_coordination} <= set(result)
+    assert set(result) - {"kanban", "memory", "project", *fork_coordination} <= _RECENTLY_SHIPPED_TOOLSETS
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 

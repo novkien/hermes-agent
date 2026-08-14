@@ -176,17 +176,15 @@ class TestCreateSkill:
         assert not (tmp_path / "escape").exists()
 
 
-    def test_edit_long_desc_still_allowed_with_preview(self, tmp_path):
-        """Edit/patch paths stay permissive so existing over-limit skills
-        remain maintainable — they warn via system_prompt_preview instead."""
+    def test_edit_description_within_prompt_budget_needs_no_preview(self, tmp_path):
+        """A description inside the expanded prompt budget stays intact."""
         with _skill_dir(tmp_path):
             _create_skill("my-skill", VALID_SKILL_CONTENT)
             result = _edit_skill("my-skill", LONG_DESC_CONTENT)
         assert result["success"] is True
-        assert "system_prompt_preview" in result
-        assert "System prompt will show" in result["system_prompt_preview"]
+        assert "system_prompt_preview" not in result
         fm, _ = parse_frontmatter(LONG_DESC_CONTENT)
-        assert extract_skill_description(fm) in result["system_prompt_preview"]
+        assert extract_skill_description(fm) == fm["description"]
 
 
 class TestEditSkill:

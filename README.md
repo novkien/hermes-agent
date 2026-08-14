@@ -13,6 +13,9 @@ CEO/Manager/Worker multi-agent hierarchy.
 > application architecture while adding Jarvis-owned instruction layers, runtime
 > integrations, profiles, routing, and operational workflows.
 
+Windows users can install from PowerShell with `scripts/install.ps1`; the full
+platform-specific setup and update guidance lives in `website/docs/user-guide/windows-native.md`.
+
 ## System objective
 
 Jarvis/Hermes is designed as an owner-directed multi-agent operating environment:
