@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           ref: agent/integrate-full-mission-control
 
       - name: Import exact source artifact, validate, and push
@@ -42,15 +42,21 @@ jobs:
 
           payload_dir="$(mktemp -d)"
           trap 'rm -rf "$payload_dir"' EXIT
-          curl --fail --location --retry 3 --silent --show-error \
-            "$ARTIFACT_URL" -o "$payload_dir/source-artifact.zip"
+          curl --fail --location --retry 3 --silent --show-error "$ARTIFACT_URL" -o "$payload_dir/source-artifact.zip"
           echo "$ARTIFACT_ZIP_SHA256  $payload_dir/source-artifact.zip" | sha256sum -c -
-          unzip -q "$payload_dir/source-artifact.zip" -d "$payload_dir/export"
-
+          mkdir -p "$payload_dir/export"
+          python -m zipfile -e "$payload_dir/source-artifact.zip" "$payload_dir/export"
           export_dir="$payload_dir/export"
-          test "$(sha256sum "$export_dir/SOURCE_MANIFEST.tsv" | awk '{print $1}')" = "$EXPECTED_MANIFEST_SHA256"
-          test "$(wc -l < "$export_dir/SOURCE_MANIFEST.tsv" | tr -d ' ')" = "$EXPECTED_SOURCE_COUNT"
-          test "$(cat "$export_dir"/archive.b64.part.* | sha256sum | awk '{print $1}')" = "$EXPECTED_ARCHIVE_B64_SHA256"
+          find "$export_dir" -maxdepth 1 -type f -printf '%f %s\n' | sort
+
+          actual_manifest_sha="$(sha256sum "$export_dir/SOURCE_MANIFEST.tsv" | awk '{print $1}')"
+          actual_source_count="$(wc -l < "$export_dir/SOURCE_MANIFEST.tsv" | tr -d ' ')"
+          actual_archive_b64_sha="$(cat "$export_dir"/archive.b64.part.* | sha256sum | awk '{print $1}')"
+          echo "manifest_sha=$actual_manifest_sha source_count=$actual_source_count archive_b64_sha=$actual_archive_b64_sha"
+          test "$actual_manifest_sha" = "$EXPECTED_MANIFEST_SHA256"
+          test "$actual_source_count" = "$EXPECTED_SOURCE_COUNT"
+          test "$actual_archive_b64_sha" = "$EXPECTED_ARCHIVE_B64_SHA256"
+
           python - "$export_dir/EXPORT_METADATA.json" <<'PY_METADATA'
           import json, os, sys
           data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -101,8 +107,8 @@ jobs:
 
           rm -f .github/workflows/one-shot-import-mission-control.yml
           rm -f .github/scripts/integrate_mission_control_once.py
-
           git add -A
+
           while IFS=$'\t' read -r meta path; do
             mode="${meta%% *}"; rest="${meta#* }"; sha="${rest##* }"
             entry="$(git ls-files -s -- "apps/mission-control/$path")"
@@ -114,13 +120,8 @@ jobs:
           forbidden="$(git diff --cached --name-only | grep -E '(^|/)(\.env$|[^/]+\.db$|[^/]+\.db-wal$|[^/]+\.db-shm$|node_modules/|\.venv/|__pycache__/|[^/]+\.log$)' || true)"
           test -z "$forbidden"
 
-          python -m pip install --disable-pip-version-check -q \
-            "fastapi>=0.104,<1" "uvicorn>=0.24,<1" "httpx>=0.28,<1" \
-            "cryptography>=42,<51" "pytest>=8,<10" "pytest-asyncio>=0.23,<2"
-          python -m compileall -q \
-            apps/mission-control/agent_mission_control \
-            hermes_cli/mission_control.py \
-            hermes_cli/subcommands/mission_control.py
+          python -m pip install --disable-pip-version-check -q "fastapi>=0.104,<1" "uvicorn>=0.24,<1" "httpx>=0.28,<1" "cryptography>=42,<51" "pytest>=8,<10" "pytest-asyncio>=0.23,<2"
+          python -m compileall -q apps/mission-control/agent_mission_control hermes_cli/mission_control.py hermes_cli/subcommands/mission_control.py
           (cd apps/mission-control && PYTHONPATH=. python tests/test_runtime_contracts.py)
           (cd apps/mission-control && PYTHONPATH=. python tests/test_static_repair_surface.py)
           (cd apps/mission-control && node tests/frontend_contracts.mjs)
