@@ -67,13 +67,32 @@ class TestEnsureLingerEnabled:
 
 
 def test_systemd_install_calls_linger_helper(monkeypatch, tmp_path, capsys):
-    unit_path = tmp_path / "systemd" / "user" / "hermes-gateway.service"
+    from hermes_cli import mission_control
 
+    unit_path = tmp_path / "systemd" / "user" / "hermes-gateway.service"
+    mission_control_unit_path = (
+        tmp_path / "systemd" / "user" / "hermes-mission-control.service"
+    )
+
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: True)
+    monkeypatch.setattr(gateway, "_preflight_user_systemd", lambda: None)
     monkeypatch.setattr(gateway, "get_systemd_unit_path", lambda system=False: unit_path)
     # Non-temp home so the temp-home write guard (which trips on the
     # hermetic test HERMES_HOME) stays out of the way.
     monkeypatch.setattr(
         gateway,
+        "generate_systemd_unit",
+        lambda system=False, run_as_user=None: (
+            '[Service]\nEnvironment="HERMES_HOME=/home/alice/.hermes"\n'
+        ),
+    )
+    monkeypatch.setattr(
+        mission_control,
+        "get_systemd_unit_path",
+        lambda system=False: mission_control_unit_path,
+    )
+    monkeypatch.setattr(
+        mission_control,
         "generate_systemd_unit",
         lambda system=False, run_as_user=None: (
             '[Service]\nEnvironment="HERMES_HOME=/home/alice/.hermes"\n'
@@ -93,10 +112,16 @@ def test_systemd_install_calls_linger_helper(monkeypatch, tmp_path, capsys):
     gateway.systemd_install(force=False)
 
     out = capsys.readouterr().out
+    command_history = [cmd for cmd, _ in calls]
     assert unit_path.exists()
-    assert [cmd for cmd, _ in calls] == [
-        ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", gateway.get_service_name()],
-    ]
+    assert mission_control_unit_path.exists()
+    assert command_history.count(["systemctl", "--user", "daemon-reload"]) >= 2
+    assert [
+        "systemctl",
+        "--user",
+        "enable",
+        mission_control.SERVICE_NAME,
+    ] in command_history
+    assert ["systemctl", "--user", "enable", gateway.get_service_name()] in command_history
     assert helper_calls == [True]
     assert "User service installed and enabled" in out
