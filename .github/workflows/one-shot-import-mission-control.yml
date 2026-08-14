@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET_BRANCH: agent/integrate-full-mission-control
-      ARTIFACT_URL: 'https://sdmntprseasia.oaiusercontent.com/files/00000000-b66c-8207-b0e1-723136e66f90/raw?se=2026-08-14T11%3A33%3A12Z&sp=r&sv=2026-02-06&sr=b&scid=20595c32-a8f2-52d3-8589-1cde8db8fafc&skoid=9063adf3-a524-4acf-b70a-8731b33f2f50&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-14T01%3A55%3A39Z&ske=2026-08-15T01%3A55%3A39Z&sks=b&skv=2026-02-06&sig=J/BrjwfmXNKbtxph9Oa1f%2BltgvUejgIF6eJfUv1AVZc%3D'
+      ARTIFACT_URL: 'https://sdmntprwestus3.oaiusercontent.com/files/00000000-6e70-81fd-84f6-ed47ea7d14ec/raw?se=2026-08-14T11%3A37%3A13Z&sp=r&sv=2026-02-06&sr=b&scid=34d3be29-9465-522e-b35d-364887319ac1&skoid=9063adf3-a524-4acf-b70a-8731b33f2f50&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-13T19%3A39%3A35Z&ske=2026-08-14T19%3A39%3A35Z&sks=b&skv=2026-02-06&sig=FLjNtVaERp%2BLRQpUi0gEDkoMKiknC6hQhIntcrPm%2Bv8%3D'
       OUTER_ARTIFACT_SHA256: 9d95364cc398d5b67dd2a771825272133cd4e27d5b6b19923e4d0edca2add282
       INNER_TRANSFER_SHA256: e823b7af64f93e151292bb02e7d087b140efa23d9e3f9282cd06f576cd64bd54
       EXPECTED_SOURCE_COMMIT: 42a9c191fdebc66ace4aac98a1e581d9ab7a13d1
@@ -47,12 +47,9 @@ jobs:
           export_dir="$RUNNER_TEMP/mc-export"
           rm -rf "$outer_dir" "$export_dir" "$outer_zip"
           mkdir -p "$outer_dir" "$export_dir"
-
-          curl --fail --location --retry 3 --silent --show-error \
-            "$ARTIFACT_URL" -o "$outer_zip"
+          curl --fail --location --retry 3 --silent --show-error "$ARTIFACT_URL" -o "$outer_zip"
           echo "$OUTER_ARTIFACT_SHA256  $outer_zip" | sha256sum -c -
           python -m zipfile -e "$outer_zip" "$outer_dir"
-
           inner_zip="$outer_dir/mission-control-hermes-import.zip"
           test -f "$inner_zip"
           echo "$INNER_TRANSFER_SHA256  $inner_zip" | sha256sum -c -
@@ -61,11 +58,11 @@ jobs:
           actual_manifest_sha="$(sha256sum "$export_dir/SOURCE_MANIFEST.tsv" | awk '{print $1}')"
           actual_source_count="$(wc -l < "$export_dir/SOURCE_MANIFEST.tsv" | tr -d ' ')"
           actual_archive_b64_sha="$(cat "$export_dir"/archive.b64.part.* | sha256sum | awk '{print $1}')"
-          printf 'manifest_sha=%s\nsource_count=%s\narchive_b64_sha=%s\n' \
-            "$actual_manifest_sha" "$actual_source_count" "$actual_archive_b64_sha"
           test "$actual_manifest_sha" = "$EXPECTED_MANIFEST_SHA256"
           test "$actual_source_count" = "$EXPECTED_SOURCE_COUNT"
           test "$actual_archive_b64_sha" = "$EXPECTED_ARCHIVE_B64_SHA256"
+          printf 'manifest_sha=%s\nsource_count=%s\narchive_b64_sha=%s\n' \
+            "$actual_manifest_sha" "$actual_source_count" "$actual_archive_b64_sha"
 
           python - "$export_dir/EXPORT_METADATA.json" <<'PY'
           import json
@@ -82,10 +79,9 @@ jobs:
               "archive_base64_sha256": os.environ["EXPECTED_ARCHIVE_B64_SHA256"],
           }
           for key, value in expected.items():
-              actual = data.get(key)
-              if actual != value:
+              if data.get(key) != value:
                   raise SystemExit(
-                      f"metadata mismatch {key}: expected {value!r}, found {actual!r}"
+                      f"metadata mismatch {key}: expected {value!r}, found {data.get(key)!r}"
                   )
           print("metadata verification: PASS")
           PY
@@ -95,9 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           export_dir="$RUNNER_TEMP/mc-export"
-          source_root="apps/mission-control"
-          mkdir -p "$source_root"
-
+          mkdir -p apps/mission-control
           python - <<'PY'
           from pathlib import Path
           import os
@@ -111,16 +105,12 @@ jobs:
               if target.exists() or target.is_symlink():
                   collisions.append(rel)
           if collisions:
-              raise SystemExit(
-                  "source-path collision before import: " + ", ".join(collisions[:20])
-              )
+              raise SystemExit("source-path collision before import: " + ", ".join(collisions[:20]))
           print("source-path collision preflight: PASS")
           PY
-
           cat "$export_dir"/archive.b64.part.* | base64 -d > "$RUNNER_TEMP/mc-source.tar.gz"
-          tar -xzf "$RUNNER_TEMP/mc-source.tar.gz" -C "$source_root"
-          cp "$export_dir/SOURCE_MANIFEST.tsv" "$source_root/SOURCE_MANIFEST.tsv"
-
+          tar -xzf "$RUNNER_TEMP/mc-source.tar.gz" -C apps/mission-control
+          cp "$export_dir/SOURCE_MANIFEST.tsv" apps/mission-control/SOURCE_MANIFEST.tsv
           python - <<'PY'
           import json
           import os
@@ -147,7 +137,7 @@ jobs:
           )
           PY
 
-      - name: Verify complete byte and mode parity
+      - name: Verify source parity and independent lifecycle
         shell: bash
         run: |
           set -euo pipefail
@@ -173,9 +163,7 @@ jobs:
               if not target.exists() and not target.is_symlink():
                   missing.append(rel)
                   continue
-              actual_sha = subprocess.check_output(
-                  ["git", "hash-object", str(target)], text=True
-              ).strip()
+              actual_sha = subprocess.check_output(["git", "hash-object", str(target)], text=True).strip()
               if actual_sha != expected_sha:
                   mismatch.append((rel, expected_sha, actual_sha))
               if mode == "100755" and not (target.stat().st_mode & stat.S_IXUSR):
@@ -201,6 +189,17 @@ jobs:
           test -f apps/mission-control/.hermes/proposed-plan/BRAINSTORM-AGENTOS-DASHBOARD-REFACTOR-R2.md
           test -f apps/mission-control/AGENTS.md
           test -f apps/mission-control/CLAUDE.md
+          test -f apps/mission-control/HERMES_INTEGRATION.md
+          test -f apps/mission-control/deploy/hermes-mission-control.env.example
+          test -f hermes_cli/mission_control.py
+          test -f hermes_cli/subcommands/mission_control.py
+
+          wants_count="$(grep -Fc 'Wants=hermes-mission-control.service' hermes_cli/gateway.py)"
+          printf 'gateway Mission Control Wants count=%s\n' "$wants_count"
+          test "$wants_count" = "2"
+          ! grep -Fq 'Requires=hermes-mission-control.service' hermes_cli/gateway.py
+          ! grep -Fq 'PartOf=hermes-mission-control.service' hermes_cli/gateway.py
+          ! grep -Fq 'BindsTo=hermes-mission-control.service' hermes_cli/gateway.py
 
           forbidden="$(find apps/mission-control -type f \
             \( -name '.env' -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '*.log' \) \
@@ -211,20 +210,6 @@ jobs:
           fi
           test ! -d apps/mission-control/node_modules
           test ! -d apps/mission-control/.venv
-
-      - name: Verify independent lifecycle integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f hermes_cli/mission_control.py
-          test -f hermes_cli/subcommands/mission_control.py
-          test -f apps/mission-control/HERMES_INTEGRATION.md
-          test -f apps/mission-control/deploy/hermes-mission-control.service
-          test -f apps/mission-control/deploy/hermes-mission-control.env.example
-          test "$(grep -c '^Wants=hermes-mission-control.service$' hermes_cli/gateway.py)" = "2"
-          ! grep -q '^Requires=hermes-mission-control.service$' hermes_cli/gateway.py
-          ! grep -q '^PartOf=hermes-mission-control.service$' hermes_cli/gateway.py
-          ! grep -q '^BindsTo=hermes-mission-control.service$' hermes_cli/gateway.py
 
       - name: Run Mission Control and integration tests
         shell: bash
@@ -252,7 +237,6 @@ jobs:
           rm -f .github/workflows/one-shot-import-mission-control.yml
           rm -f .github/scripts/integrate_mission_control_once.py
           git add -A
-
           python - <<'PY'
           from pathlib import Path
           import os
@@ -265,13 +249,11 @@ jobs:
               if kind != "blob":
                   raise SystemExit(f"unsupported staged object {kind}: {rel}")
               output = subprocess.check_output(
-                  ["git", "ls-files", "-s", "--", f"apps/mission-control/{rel}"],
-                  text=True,
+                  ["git", "ls-files", "-s", "--", f"apps/mission-control/{rel}"], text=True
               ).strip()
               if not output:
                   raise SystemExit(f"missing staged source path: {rel}")
-              index_meta = output.split("\t", 1)[0].split()
-              mode, sha = index_meta[0], index_meta[1]
+              mode, sha = output.split("\t", 1)[0].split()[:2]
               if mode != expected_mode or sha != expected_sha:
                   raise SystemExit(
                       f"index parity mismatch {rel}: expected {expected_mode} {expected_sha}, "
@@ -279,7 +261,6 @@ jobs:
                   )
           print("staged source parity: PASS")
           PY
-
           git diff --cached --check
           git commit -m "feat: integrate complete AgentOS Mission Control source"
           git push origin "HEAD:$TARGET_BRANCH"
