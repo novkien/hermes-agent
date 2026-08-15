@@ -425,10 +425,7 @@ class RunnerManager:
                 entry.client,
                 process,
                 entry,
-                min(
-                    self._port_announce_timeout_seconds,
-                    self._health_probe_timeout_seconds,
-                ),
+                self._port_announce_timeout_seconds,
             )
             entry.state = RunnerState.READY
             entry.last_active_at = time.monotonic()
