@@ -7,7 +7,7 @@ upstream prefix cache warm.  See ``hermes-agent-dev``'s
 ``references/self-improvement-loop.md`` for how the background-review
 fork inherits the cached prompt verbatim.
 
-Three tiers are joined with ``\\n\\n``:
+Three tiers are joined with ``\n\n``:
 
 * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
   guidance, computer-use guidance, nous subscription block, tool-use
@@ -50,6 +50,7 @@ from agent.prompt_builder import (
     drain_truncation_warnings,
 )
 from agent.runtime_cwd import resolve_context_cwd
+from agent.runtime_invariants import ARTIFACT_FILESYSTEM_CONTRACT
 from hermes_constants import get_hermes_home
 from utils import is_truthy_value
 
@@ -320,6 +321,11 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if not _soul_loaded:
         # Fallback to hardcoded identity
         stable_parts.append(DEFAULT_AGENT_IDENTITY)
+
+    # Universal artifact/filesystem discipline is a runtime invariant. It is
+    # independent of SOUL.md and context-file loading, so every construction
+    # path — including delegated children with skip_context_files=True — gets it.
+    stable_parts.append(ARTIFACT_FILESYSTEM_CONTRACT)
 
     # Topic/channel-bound skills are authoritative session instructions. They
     # are captured once when the agent is built and therefore remain in the
