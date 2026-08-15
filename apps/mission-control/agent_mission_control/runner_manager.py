@@ -113,21 +113,22 @@ async def _probe_health(
     Some Hermes versions expose `/api/health`, while legacy runner wiring may
     still use `/health`. Keep this resilient by trying both.
     """
-    last_exception: Exception | None = None
+    last_issue: Exception | str | None = None
     for path in ("/api/health", "/health"):
         try:
             status, _, _ = await asyncio.wait_for(
                 client.get(path),
                 timeout=timeout_seconds,
             )
-            return status
+            if status < 400:
+                return status
+            last_issue = f"{path} returned {status}"
         except Exception as exc:
-            last_exception = exc
-    if last_exception is None:
+            last_issue = exc
+    if last_issue is None:
         raise RuntimeError("hermes runner health probe did not try any endpoint")
     raise RuntimeError(
-        f"hermes runner health probe failed for endpoints: "
-        f"/api/health and /health: {last_exception}"
+        f"hermes runner health probe failed for /api/health and /health: {last_issue}"
     )
 
 
