@@ -2643,13 +2643,36 @@ class Router:
             execution_mode = "runner"
 
         try:
-            result = await chat_proxy.create_session(gateway, body, idem)
+            upstream_body = dict(body)
+            upstream_body.pop("profile", None)
+            upstream_body.pop("profile_name", None)
+            result = await chat_proxy.create_session(gateway, upstream_body, idem)
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
-            return JSONResponse(
-                status_code=502,
-                content={"error": "upstream error", "upstream_status": exc.status,
-                         "body": exc.body},
+            detail = "upstream error"
+            if isinstance(exc.body, dict):
+                error_field = exc.body.get("error")
+                if isinstance(error_field, dict):
+                    detail = (
+                        error_field.get("message")
+                        or error_field.get("detail")
+                        or error_field.get("code")
+                        or detail
+                    )
+                else:
+                    detail = (
+                        exc.body.get("detail")
+                        or exc.body.get("message")
+                        or exc.body.get("error")
+                        or detail
+                    )
+            else:
+                detail = exc.body if exc.body is not None else detail
+            return _json_error(
+                upstream_error_status(exc.status),
+                "upstream_error",
+                str(detail),
+                rid,
             )
         self._record_audit_result(rid, result["status"], "ok")
         if result["status"] < 400:
