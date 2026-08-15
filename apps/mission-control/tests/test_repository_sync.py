@@ -192,6 +192,18 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertEqual((self.prod / "current-model.json").read_text(encoding="utf-8"), "local model\n")
         self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
 
+    def test_auto_commit_preserves_worktree_version_of_added_file(self):
+        added = self.prod / "current-model.json"
+        added.write_text("staged model\n", encoding="utf-8")
+        git(self.prod, "add", "current-model.json")
+        added.write_text("latest model\n", encoding="utf-8")
+
+        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(added.read_text(encoding="utf-8"), "latest model\n")
+        self.assertEqual(git(self.prod, "show", "HEAD:current-model.json"), "latest model")
+
     def test_commit_local_pushes_to_origin(self):
         (self.prod / "local.txt").write_text("local work\n", encoding="utf-8")
 
