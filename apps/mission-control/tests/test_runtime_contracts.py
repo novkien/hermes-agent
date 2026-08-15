@@ -883,7 +883,7 @@ class _FakeRunnerProcess:
 
     def __init__(self, label: str, *, ready: bool = True, on_stop=None):
         self.pid = (abs(hash(label)) % 60000) + 1
-        self.returncode: int | None = None
+        self.returncode: int | None = None if ready else 1
         self._on_stop = on_stop
         self.stdout = _FakeRunnerStdout(
             [b"HERMES_BACKEND_READY port=54321\n"] if ready else []
@@ -936,9 +936,9 @@ def _patch_runner_health(*, status: int = 200):
 
 async def test_runner_manager_shares_one_spawn_per_profile() -> None:
     """Sequential AND concurrent ensure_profile_gateway() calls for the same
-    not-yet-running profile share one subprocess — never two. --isolated is
-    always present: without it Hermes silently redirects `--profile X serve`
-    into the shared machine dashboard instead of running standalone."""
+    not-yet-running profile share one subprocess — never two. The managed
+    process must be the profile-scoped REST gateway, not Desktop's WebSocket
+    ``serve --isolated`` backend."""
     from agent_mission_control.runner_manager import RunnerManager
 
     spawned: list[list[str]] = []
@@ -953,7 +953,10 @@ async def test_runner_manager_shares_one_spawn_per_profile() -> None:
         c2 = await manager.ensure_profile_gateway("alpha")
         assert c1 is c2
         assert len(spawned) == 1
-        assert "--isolated" in spawned[0]
+        assert spawned[0][-4:] == [
+            "gateway", "run", "--force", "--external-supervisor",
+        ]
+        assert "serve" not in spawned[0]
         assert spawned[0][spawned[0].index("--profile") + 1] == "alpha"
 
         c3, c4 = await asyncio.gather(
@@ -970,8 +973,8 @@ async def test_runner_manager_shares_one_spawn_per_profile() -> None:
 
 
 async def test_runner_manager_fails_closed_when_the_process_exits_early() -> None:
-    """A process that closes stdout without announcing a port (Hermes
-    rejecting an invalid profile, a crash, ...) must raise, not hang or
+    """A process that exits during startup (Hermes rejecting an invalid
+    profile, a crash, ...) must raise, not hang or
     return a broken client — and must not leave a stuck pool entry, so the
     next call retries clean instead of awaiting a dead future forever."""
     from agent_mission_control.runner_manager import RunnerManager, RunnerSpawnError
@@ -987,7 +990,7 @@ async def test_runner_manager_fails_closed_when_the_process_exits_early() -> Non
             await manager.ensure_profile_gateway("ghost")
         except RunnerSpawnError:
             raised = True
-        assert raised, "a process exiting before port announcement must fail closed"
+        assert raised, "a process exiting during startup must fail closed"
         assert len(spawned) == 1
         assert "ghost" not in manager._pool
     finally:

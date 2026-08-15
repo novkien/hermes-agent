@@ -1,25 +1,24 @@
-"""Per-profile pool of isolated Hermes gateway processes.
+"""Per-profile pool of isolated Hermes API gateway processes.
 
 Mirrors Hermes' own desktop app (``apps/desktop/electron/main.ts``'s
 ``backendPool``/``ensureBackend``/``spawnPoolBackend``/``evictLruPoolBackends``/
 ``startPoolIdleReaper``): lazily spawn one
-``hermes --profile <X> serve --isolated --host 127.0.0.1 --port 0`` subprocess
+``hermes --profile <X> gateway run --force --external-supervisor`` subprocess
 per profile the first time a chat session needs it, reuse that process across
 every session of the same profile, LRU-evict past a soft cap (never evicting
 anything touched within the keepalive-fresh window — an active chat is never
 killed just to make room), and reap anything idle past a hard timeout.
 
-``serve --isolated`` speaks the exact same gateway HTTP wire protocol that
-``chat_proxy.py``/``GatewayClient`` already implement for the shared default
-gateway on :8642 — this module owns process lifecycle only and hands back a
-plain ``GatewayClient`` pointed at the spawned process's port/token. Nothing
-about the chat streaming/SSE path changes.
+The Desktop ``serve --isolated`` backend is JSON-RPC over ``/api/ws``. It has
+read-only session REST routes and therefore cannot satisfy Mission Control's
+existing create/chat/SSE contract. ``gateway run`` owns the REST API server
+used by the shared default gateway on :8642, so each managed profile receives
+an ephemeral loopback port and process-scoped API key. This module still owns
+process lifecycle only and hands back a normal ``GatewayClient``.
 
-``--isolated`` is load-bearing: without it (and without ``HERMES_DESKTOP=1``,
-which this module deliberately does not set — see module docstring in the
-project plan), ``hermes --profile X serve`` silently redirects into the
-single shared machine dashboard instead of running standalone scoped to that
-profile. Never spawn without it.
+``--force`` is load-bearing because Mission Control is the external process
+manager for this dedicated child. ``--external-supervisor`` keeps restart and
+update requests from detaching an unmanaged replacement process.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ import re
 import shutil
 import secrets
 import signal
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -71,23 +71,12 @@ def _resolve_runner_executable(raw: str) -> str:
 
     return candidate
 
-# `serve` prints this line to stdout once uvicorn has bound its socket. The
-# legacy `dashboard` alternative spelling is accepted too (older runtimes);
-# see hermes_cli's own port-announcement consumer for the same regex shape.
-_READY_RE = re.compile(r"^HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)")
-
-
 class RunnerSpawnError(RuntimeError):
     """A profile gateway process failed to start or become healthy."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
-
-
-class _ProcessExited(RuntimeError):
-    """The child closed stdout (exited, or the fd went away) before
-    announcing a port."""
 
 
 class RunnerState(str, Enum):
@@ -131,22 +120,23 @@ def _remember_output(entry: _PoolEntry, label: str, raw: bytes) -> str:
     return text
 
 
-async def _read_port_announcement(
-    stdout: "asyncio.StreamReader", entry: _PoolEntry
-) -> int:
-    while True:
-        line = await stdout.readline()
-        if not line:
-            raise _ProcessExited()
-        text = _remember_output(entry, "stdout", line)
-        match = _READY_RE.match(text)
-        if match:
-            return int(match.group(1))
+def _allocate_loopback_port(host: str) -> int:
+    """Ask the kernel for an unused loopback port for the child API server.
+
+    aiohttp accepts port 0 but Hermes does not announce the kernel-selected
+    value. Close the probe socket immediately before spawn; the tiny local
+    bind race is covered by the bounded startup probe and a fail-closed error.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        probe.bind((host, 0))
+        return int(probe.getsockname()[1])
 
 
 async def _wait_until_ready(
     client: "GatewayClient",
     process: "asyncio.subprocess.Process",
+    entry: _PoolEntry,
     timeout_seconds: float,
 ) -> None:
     """Poll the served backend until both readiness and chat auth work.
@@ -157,11 +147,13 @@ async def _wait_until_ready(
     """
     deadline = time.monotonic() + timeout_seconds
     last_issue = "no readiness response"
+    health_seen = False
     while time.monotonic() < deadline:
         if process.returncode is not None:
-            raise RunnerSpawnError(
-                "runner_exited",
-                f"hermes serve exited during startup ({process.returncode})",
+            raise _failure_from_output(
+                entry,
+                f"Hermes for {entry.profile!r} exited during startup "
+                f"({process.returncode})",
             )
 
         remaining = max(0.05, deadline - time.monotonic())
@@ -185,6 +177,7 @@ async def _wait_until_ready(
                 )
             if status < 400:
                 healthy = True
+                health_seen = True
             else:
                 last_issue = f"{path} returned {status}"
             break
@@ -209,9 +202,10 @@ async def _wait_until_ready(
 
         await asyncio.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
+    code = "runner_unhealthy" if health_seen else "runner_start_timeout"
     raise RunnerSpawnError(
-        "runner_unhealthy",
-        f"hermes runner did not become ready within {timeout_seconds}s: {last_issue}",
+        code,
+        f"Hermes runner did not become ready within {timeout_seconds}s: {last_issue}",
     )
 
 
@@ -304,7 +298,7 @@ def _failure_from_output(entry: _PoolEntry, fallback: str) -> RunnerSpawnError:
 
 
 class RunnerManager:
-    """Per-profile pool of isolated ``hermes serve`` gateway processes."""
+    """Per-profile pool of managed ``hermes gateway run`` processes."""
 
     def __init__(
         self,
@@ -381,15 +375,24 @@ class RunnerManager:
 
     async def _spawn(self, entry: _PoolEntry) -> GatewayClient:
         token = secrets.token_urlsafe(32)
+        try:
+            port = _allocate_loopback_port(self._host)
+        except OSError as exc:
+            raise RunnerSpawnError(
+                "runner_start_timeout",
+                f"could not allocate a loopback port for {entry.profile!r}: {exc}",
+            ) from exc
         argv = [
             self._hermes_executable,
             "--profile", entry.profile,
-            "serve", "--isolated",
-            "--host", self._host,
-            "--port", "0",
+            "gateway", "run",
+            "--force",
+            "--external-supervisor",
         ]
         env = dict(os.environ)
-        env["HERMES_DASHBOARD_SESSION_TOKEN"] = token
+        env["API_SERVER_HOST"] = self._host
+        env["API_SERVER_PORT"] = str(port)
+        env["API_SERVER_KEY"] = token
         env["HERMES_PARENT_PID"] = str(os.getpid())
 
         entry.state = RunnerState.STARTING
@@ -412,31 +415,20 @@ class RunnerManager:
             ) from exc
 
         entry.process = process
+        entry.port = port
+        entry.client = GatewayClient(f"http://{self._host}:{port}", token)
+        entry.drain_tasks.append(_drain_stream(process.stdout, entry, "stdout"))
         entry.drain_tasks.append(_drain_stream(process.stderr, entry, "stderr"))
 
         try:
-            try:
-                port = await asyncio.wait_for(
-                    _read_port_announcement(process.stdout, entry),
-                    timeout=self._port_announce_timeout_seconds,
-                )
-            except asyncio.TimeoutError as exc:
-                raise RunnerSpawnError(
-                    "runner_start_timeout",
-                    f"Hermes for {entry.profile!r} did not announce a port "
-                    f"within {self._port_announce_timeout_seconds}s",
-                ) from exc
-            except _ProcessExited as exc:
-                await asyncio.sleep(0)
-                raise _failure_from_output(
-                    entry, f"Hermes for {entry.profile!r} exited before announcing a port"
-                ) from exc
-
-            entry.drain_tasks.append(_drain_stream(process.stdout, entry, "stdout"))
-            entry.port = port
-            entry.client = GatewayClient(f"http://{self._host}:{port}", token)
             await _wait_until_ready(
-                entry.client, process, self._health_probe_timeout_seconds
+                entry.client,
+                process,
+                entry,
+                min(
+                    self._port_announce_timeout_seconds,
+                    self._health_probe_timeout_seconds,
+                ),
             )
             entry.state = RunnerState.READY
             entry.last_active_at = time.monotonic()
