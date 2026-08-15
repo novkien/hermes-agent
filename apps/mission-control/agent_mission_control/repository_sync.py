@@ -580,7 +580,14 @@ class RepositorySyncService:
             "porcelain": rows[:100],
         }
 
-    def status(self, name: str, *, fetch: bool = True, include_github: bool = True) -> dict[str, Any]:
+    def status(
+        self,
+        name: str,
+        *,
+        fetch: bool = True,
+        include_github: bool = True,
+        include_last_operation: bool = True,
+    ) -> dict[str, Any]:
         spec = self.spec(name)
         started = time.monotonic()
         base: dict[str, Any] = {
@@ -663,7 +670,8 @@ class RepositorySyncService:
                 }
             )
 
-        base["last_operation"] = self.store.last(name)
+        if include_last_operation:
+            base["last_operation"] = self.store.last(name)
         if include_github:
             try:
                 base["pull_requests"] = self.github.open_pulls(spec)
@@ -869,7 +877,9 @@ class RepositorySyncService:
         stash_sha: str | None = None
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
-                before = self.status(name, fetch=True, include_github=False)
+                before = self.status(
+                    name, fetch=True, include_github=False, include_last_operation=False
+                )
                 event["before"] = before
                 if not before.get("ok"):
                     error = before.get("error") or {}
@@ -957,7 +967,9 @@ class RepositorySyncService:
                             )
                         committed_sha = self._run_ok(spec, "rev-parse", "HEAD")
 
-                after = self.status(name, fetch=False, include_github=False)
+                after = self.status(
+                    name, fetch=False, include_github=False, include_last_operation=False
+                )
                 return self._finish_event(
                     event,
                     ok=True,
@@ -1000,7 +1012,9 @@ class RepositorySyncService:
         event = self._event_base(spec, "commit", trigger)
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
-                before = self.status(name, fetch=False, include_github=False)
+                before = self.status(
+                    name, fetch=False, include_github=False, include_last_operation=False
+                )
                 event["before"] = before
                 if not before.get("ok"):
                     raise RepositorySyncError("status_failed", "repository status failed", details=before)
@@ -1021,7 +1035,9 @@ class RepositorySyncService:
                 if commit.returncode != 0:
                     raise RepositorySyncError("commit_failed", commit.stderr or commit.stdout or "git commit failed")
                 sha = self._run_ok(spec, "rev-parse", "HEAD")
-                after = self.status(name, fetch=False, include_github=False)
+                after = self.status(
+                    name, fetch=False, include_github=False, include_last_operation=False
+                )
                 return self._finish_event(event, ok=True, status="ok", committed_sha=sha, after=after)
         except RepositorySyncError as exc:
             return self._finish_event(
