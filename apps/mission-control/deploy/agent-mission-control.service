@@ -20,7 +20,9 @@ ProtectSystem=strict
 ProtectHome=true
 # Profile-scoped API gateway children need their lock and session state under
 # the selected Hermes profile while the rest of $HOME remains read-only.
-ReadWritePaths=/home/pi/agent-mission-control /etc/agent-mission-control /home/pi/.hermes/profiles
+ReadWritePaths=/home/pi/agent-mission-control /etc/agent-mission-control \
+/home/pi/.hermes/profiles /home/pi/.hermes/hermes-plugins /home/pi/agents \
+/home/pi/.hermes/repos /home/pi/.hermes/repos/hermes-skills.git
 # Do not leak environment into the access log
 Environment=PYTHONUNBUFFERED=1
 
