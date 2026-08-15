@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import shlex
 
-from .repository_sync import GitRunner, RepoSpec, RepositorySyncError
+from .repository_sync import GitRunner, RepoSpec, RepositorySyncError, _ssh_arg_list
 
 
 class RepositoryGitRunner(GitRunner):
@@ -21,13 +21,7 @@ class RepositoryGitRunner(GitRunner):
                 "ssh_target_missing", f"no SSH target configured for {spec.name}"
             )
         return self._run_process(
-            [
-                "ssh",
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=10",
-                spec.ssh_target,
-                command,
-            ],
+            ["ssh", *_ssh_arg_list(), spec.ssh_target, "bash", "-c", shlex.quote(command)],
             timeout=timeout,
         )
 

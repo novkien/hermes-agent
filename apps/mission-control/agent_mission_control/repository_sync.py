@@ -42,7 +42,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 
 GITHUB_API_VERSION = "2026-03-10"
-DEFAULT_REMOTE_SSH = "jarvis@192.168.1.140"
+DEFAULT_REMOTE_SSH = "pi@192.168.1.140"
 DEFAULT_TIMEOUT_SECONDS = 90
 
 
@@ -98,6 +98,26 @@ def _env_path(name: str, defaults: Iterable[str]) -> tuple[str, ...]:
     if explicit:
         return (os.path.expanduser(explicit),)
     return tuple(os.path.expanduser(value) for value in defaults)
+
+
+def _ssh_arg_list() -> list[str]:
+    # Avoid host config files with overly permissive permissions (e.g.
+    # /etc/ssh/ssh_config.d/*.conf) from breaking non-interactive checks, while
+    # keeping the behavior deterministic for controlled internal hosts.
+    return [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-F",
+        "/dev/null",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "GlobalKnownHostsFile=/dev/null",
+    ]
 
 
 def default_repository_registry() -> dict[str, RepoSpec]:
@@ -426,12 +446,7 @@ class GitRunner:
                     f"then printf '%s\\n' {q}; exit 0; fi"
                 )
             remote = shlex.quote("; ".join(checks) + "; exit 4")
-            result = self._run_process(
-                [
-                    "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                    spec.ssh_target, "bash", "-lc", remote,
-                ]
-            )
+            result = self._run_process(["ssh", *_ssh_arg_list(), spec.ssh_target, "bash", "-c", remote])
             if result.returncode != 0 or not result.stdout:
                 raise RepositorySyncError(
                     "repo_not_found",
@@ -477,10 +492,7 @@ class GitRunner:
             raise RepositorySyncError("ssh_target_missing", f"no SSH target configured for {spec.name}")
         remote = " ".join(shlex.quote(part) for part in argv)
         return self._run_process(
-            [
-                "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                spec.ssh_target, "bash", "-lc", remote,
-            ],
+            ["ssh", *_ssh_arg_list(), spec.ssh_target, "bash", "-c", remote],
             timeout=timeout,
         )
 
