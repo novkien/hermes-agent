@@ -472,6 +472,27 @@ async def test_create_session_respects_browser_source_and_model_lock(adapter, se
 
 
 @pytest.mark.asyncio
+async def test_create_session_without_model_uses_profile_default_not_advertised_name(
+    adapter,
+    session_db,
+):
+    adapter._model_name = "comfyui-worker"
+    app = _create_session_app(adapter)
+
+    with patch("gateway.run._resolve_gateway_model", return_value="normal"):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/api/sessions",
+                json={"id": "profile-default-session", "source": "api_server"},
+            )
+            assert resp.status == 201, await resp.text()
+            payload = await resp.json()
+
+    assert payload["session"]["model"] == "normal"
+    assert session_db.get_session("profile-default-session")["model"] == "normal"
+
+
+@pytest.mark.asyncio
 async def test_session_model_lock_endpoint_then_chat_reuses_persisted_lock_and_provider_credentials(
     adapter,
     session_db,

@@ -3624,7 +3624,18 @@ class APIServerAdapter(BasePlatformAdapter):
         if len(session_id) > self._MAX_SESSION_HEADER_LEN:
             return web.json_response(_openai_error("Session ID too long", code="invalid_session_id"), status=400)
 
-        model = body.get("model") or self._model_name
+        requested_model = body.get("model")
+        if requested_model:
+            model = requested_model
+        else:
+            # ``self._model_name`` is the OpenAI-compatible advertised model.
+            # For a named profile it intentionally resolves to the profile
+            # name (for example ``comfyui-worker``), which is not necessarily
+            # a runnable model or smart-routing alias. Empty session creates
+            # must instead inherit the profile's actual ``model.default``.
+            from gateway.run import _resolve_gateway_model
+
+            model = _resolve_gateway_model() or self._model_name
         system_prompt = body.get("system_prompt")
         if system_prompt is not None and not isinstance(system_prompt, str):
             return web.json_response(_openai_error("system_prompt must be a string", code="invalid_system_prompt"), status=400)
