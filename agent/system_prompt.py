@@ -31,6 +31,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from agent.artifact_filesystem_contract import ARTIFACT_FILESYSTEM_CONTRACT
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
@@ -299,6 +300,11 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts: List[str] = []
+
+    # Universal operational invariant. This is intentionally outside SOUL and
+    # context-file loading so profile-less, delegated, scheduled, and
+    # skip_context_files agents receive the same filesystem discipline.
+    stable_parts.append(ARTIFACT_FILESYSTEM_CONTRACT)
 
     # Try SOUL.md as primary identity unless the caller explicitly skipped it.
     # Some execution modes (cron) still want HERMES_HOME persona while keeping
