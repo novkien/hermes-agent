@@ -910,9 +910,9 @@ def _patch_runner_spawn(
     Returns (restore_fn,); caller MUST call restore in a finally block —
     this patches the real stdlib asyncio module, shared process-wide."""
 
-    async def fake_create_subprocess_exec(*argv, **_kwargs):
+    async def fake_create_subprocess_exec(*argv, **kwargs):
         spawned.append(list(argv))
-        profile = argv[argv.index("--profile") + 1]
+        profile = str(kwargs["env"]["HERMES_HOME"]).rsplit("/", 1)[-1]
         process = _FakeRunnerProcess(profile, ready=ready, on_stop=on_stop)
         if processes is not None:
             processes.append(process)
@@ -957,7 +957,7 @@ async def test_runner_manager_shares_one_spawn_per_profile() -> None:
             "gateway", "run", "--force", "--external-supervisor",
         ]
         assert "serve" not in spawned[0]
-        assert spawned[0][spawned[0].index("--profile") + 1] == "alpha"
+        assert "--profile" not in spawned[0]
 
         c3, c4 = await asyncio.gather(
             manager.ensure_profile_gateway("beta"),

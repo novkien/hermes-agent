@@ -2761,5 +2761,21 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         relay_config = _enable_from_env(Platform.RELAY)
         relay_config.extra["relay_url"] = relay_url_val.rstrip("/")
 
+    # Mission Control runner children expose only the authenticated loopback
+    # API server. Do not duplicate messaging listeners, webhooks, multiplexed
+    # adapters, or profile background dispatchers already owned by the main
+    # Hermes gateway.
+    if os.getenv("HERMES_MISSION_CONTROL_RUNNER") == "1":
+        api_config = config.platforms.setdefault(
+            Platform.API_SERVER, PlatformConfig()
+        )
+        api_config.enabled = True
+        api_config.extra["host"] = os.environ["API_SERVER_HOST"]
+        api_config.extra["port"] = int(os.environ["API_SERVER_PORT"])
+        api_config.extra["key"] = os.environ["API_SERVER_KEY"]
+        for platform, platform_config in config.platforms.items():
+            if platform != Platform.API_SERVER:
+                platform_config.enabled = False
+
     for platform_config in config.platforms.values():
         platform_config.extra.pop("_enabled_explicit", None)

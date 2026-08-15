@@ -1899,6 +1899,21 @@ from hermes_cli.env_loader import load_hermes_dotenv
 _env_path = _hermes_home / '.env'
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve().parents[1] / '.env')
 
+# Mission Control owns short-lived, profile-scoped API gateway children. A
+# profile's .env intentionally overrides inherited values, but the child's
+# loopback port and one-time API key belong to its process manager and must not
+# be replaced by that profile's machine-level API server settings. Restore the
+# private aliases after dotenv loading; gateway.config applies the API-only
+# platform filter behind the same opt-in marker.
+if os.environ.get("HERMES_MISSION_CONTROL_RUNNER") == "1":
+    for _api_name in ("HOST", "PORT", "KEY"):
+        _managed_value = os.environ.get(
+            f"HERMES_MISSION_CONTROL_API_SERVER_{_api_name}"
+        )
+        if _managed_value is not None:
+            os.environ[f"API_SERVER_{_api_name}"] = _managed_value
+    os.environ["HERMES_KANBAN_DISPATCH_IN_GATEWAY"] = "false"
+
 
 def _reload_runtime_env_preserving_config_authority() -> None:
     """Reload .env for fresh credentials without letting stale .env override config.

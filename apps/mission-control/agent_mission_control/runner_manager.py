@@ -36,6 +36,7 @@ import socket
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from .clients import GatewayClient
@@ -384,15 +385,26 @@ class RunnerManager:
             ) from exc
         argv = [
             self._hermes_executable,
-            "--profile", entry.profile,
             "gateway", "run",
             "--force",
             "--external-supervisor",
         ]
         env = dict(os.environ)
+        hermes_home = Path(
+            os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+        ).expanduser()
+        profile_home = hermes_home / "profiles" / entry.profile
+        env["HERMES_HOME"] = str(profile_home)
+        env["HERMES_MISSION_CONTROL_RUNNER"] = "1"
         env["API_SERVER_HOST"] = self._host
         env["API_SERVER_PORT"] = str(port)
         env["API_SERVER_KEY"] = token
+        # Hermes deliberately lets a profile's .env override inherited shell
+        # values. Preserve private aliases so gateway.run can restore these
+        # process-owned values after loading that file.
+        env["HERMES_MISSION_CONTROL_API_SERVER_HOST"] = self._host
+        env["HERMES_MISSION_CONTROL_API_SERVER_PORT"] = str(port)
+        env["HERMES_MISSION_CONTROL_API_SERVER_KEY"] = token
         env["HERMES_PARENT_PID"] = str(os.getpid())
 
         entry.state = RunnerState.STARTING
