@@ -298,6 +298,8 @@ export function createRepositories({ api, profile, toolbar }) {
     actionError = null;
     actionNotice = null;
     renderToolbar(toolbar);
+    renderMain();
+    renderSide();
     try {
       const response = await api.post(
         '/api/repositories/sync-all', { auto_commit: autoCommit }, { profile },
