@@ -67,7 +67,10 @@ class RepositoryRegistryTests(unittest.TestCase):
         self.assertEqual(registry["9router"].upstream_repo, "decolua/9router")
         self.assertEqual(registry["hermes-agent"].upstream_repo, "NousResearch/hermes-agent")
         self.assertEqual(registry["llama-proxy"].transport, "ssh")
-        self.assertEqual(registry["hermes-skills"].branch, "main")
+        self.assertEqual(registry["hermes-skills"].branch, "master")
+        self.assertEqual(registry["hermes-plugins"].branch, "master")
+        self.assertEqual(registry["agents"].branch, "master")
+        self.assertEqual(registry["llama-proxy"].branch, "master")
 
     def test_dirty_summary_reports_modified_staged_and_untracked(self):
         summary = RepositorySyncService._dirty_summary(

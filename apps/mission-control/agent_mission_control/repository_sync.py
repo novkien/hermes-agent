@@ -185,7 +185,7 @@ def default_repository_registry() -> dict[str, RepoSpec]:
         "hermes-skills": RepoSpec(
             name="hermes-skills",
             repo_full_name="novkien/hermes-skills",
-            branch="main",
+            branch="master",
             # Canonical split git-dir/work-tree layout.
             git_dir=os.path.expanduser(
                 os.getenv("REPO_SYNC_HERMES_SKILLS_GIT_DIR", "~/.hermes/repos/hermes-skills.git")
@@ -198,21 +198,21 @@ def default_repository_registry() -> dict[str, RepoSpec]:
         "hermes-plugins": RepoSpec(
             name="hermes-plugins",
             repo_full_name="novkien/hermes-plugins",
-            branch="main",
+            branch="master",
             path_candidates=plugins_paths,
             private=True,
         ),
         "agents": RepoSpec(
             name="agents",
             repo_full_name="novkien/agents",
-            branch="main",
+            branch="master",
             path_candidates=agents_paths,
             private=True,
         ),
         "llama-proxy": RepoSpec(
             name="llama-proxy",
             repo_full_name="novkien/llama-proxy",
-            branch="main",
+            branch="master",
             transport="ssh",
             path_candidates=proxy_paths,
             ssh_target=proxy_ssh,
