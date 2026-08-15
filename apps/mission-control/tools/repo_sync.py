@@ -51,7 +51,6 @@ def build_parser() -> argparse.ArgumentParser:
     action.add_argument("--status", action="store_true", help="inspect state only (default action)")
     action.add_argument("--sync", action="store_true", help="safe fetch + pull --rebase")
     action.add_argument("--commit-only", action="store_true", help="commit current local changes without pulling")
-    action.add_argument("--sync-upstream", action="store_true", help="sync configured fork from upstream and then safe-pull")
     action.add_argument("--merge-pr", type=int, metavar="NUMBER", help="rebase-merge one GitHub pull request then safe-pull")
 
     parser.add_argument(
@@ -88,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-pull-after", action="store_true",
-        help="for upstream/PR actions, do not safe-pull production after the GitHub mutation",
+        help="for --merge-pr, do not safe-pull production after the GitHub merge",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -109,8 +108,6 @@ def _planned_action(args: argparse.Namespace) -> str:
         return "sync"
     if args.commit_only:
         return "commit"
-    if args.sync_upstream:
-        return "sync_upstream"
     if args.merge_pr is not None:
         return "rebase_merge_pr"
     return "status"
@@ -130,12 +127,6 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
     if args.merge_pr is not None and len(names) != 1:
         raise RepositorySyncError("scope_invalid", "--merge-pr requires exactly one --repo")
-    if args.sync_upstream and any(not service.spec(name).is_fork for name in names):
-        bad = [name for name in names if not service.spec(name).is_fork]
-        raise RepositorySyncError(
-            "scope_invalid", f"--sync-upstream only supports configured forks: {', '.join(bad)}"
-        )
-
     if args.dry_run:
         rows = [
             {
@@ -188,16 +179,6 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     message=args.commit_message,
                     trigger=args.trigger,
                     wait_seconds=args.lock_wait,
-                )
-            )
-    elif action == "sync_upstream":
-        for name in names:
-            results.append(
-                service.sync_upstream(
-                    name,
-                    trigger=args.trigger,
-                    pull_after=not args.no_pull_after,
-                    auto_commit=args.auto_commit,
                 )
             )
     else:
