@@ -241,7 +241,7 @@ export function createRepositories({ api, profile, toolbar }) {
 
   function repoCard(repo) {
     const selected = repo.name === selectedName;
-    const isBusy = busy.has(repo.name) || busy.has('__all__');
+    const isBusy = busy.has(repo.name);
     const dirty = repo.working_tree || {};
     const failures = conflictFiles(repo);
     const error = repoError(repo);
