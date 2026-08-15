@@ -1,6 +1,9 @@
 name: AgentOS Repository Sync PR
 
 on:
+  push:
+    branches:
+      - agent/agentos-repositories-git-sync
   pull_request:
     paths:
       - 'apps/mission-control/**'
