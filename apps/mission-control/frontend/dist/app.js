@@ -38,6 +38,7 @@ const PRIMARY_MODULES = {
   activity: () => import('./tabs/activity.js').then((m) => m.createActivity),
   alerts: () => import('./tabs/alerts.js').then((m) => m.createAlerts),
   analytics: () => import('./tabs/analytics.js').then((m) => m.createAnalytics),
+  repositories: () => import('./tabs/repositories.js').then((m) => m.createRepositories),
   'system-manager': () => import('./tabs/system-manager.js').then((m) => m.createSystemManager),
 };
 
