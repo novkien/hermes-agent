@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from fastapi import APIRouter, Request, Response
@@ -192,15 +193,30 @@ def build_repository_router(core: Any) -> APIRouter:
             return _json_error(400, "invalid_body", str(exc), rid)
 
         def run() -> dict[str, Any]:
-            results = [
-                service.sync(
-                    name,
-                    auto_commit=auto_commit,
-                    commit_message=message,
-                    trigger="dashboard",
-                )
-                for name in service.registry
-            ]
+            def _run_sync(name: str) -> dict[str, Any]:
+                try:
+                    return service.sync(
+                        name,
+                        auto_commit=auto_commit,
+                        commit_message=message,
+                        trigger="dashboard",
+                    )
+                except Exception as exc:  # noqa: BLE001 - sync failures should be per-repo and reported together
+                    return {
+                        "repo": name,
+                        "action": "sync",
+                        "trigger": "dashboard",
+                        "ok": False,
+                        "error": {
+                            "code": "sync_failed",
+                            "message": f"{type(exc).__name__}: {exc}",
+                        },
+                    }
+
+            names = list(service.registry)
+            max_workers = max(1, min(len(names), 6))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(_run_sync, names))
             return {
                 "repo": "all",
                 "action": "sync_all",

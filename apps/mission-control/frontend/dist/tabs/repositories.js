@@ -20,6 +20,32 @@ const TONES = Object.freeze({
   wrong_branch: 'danger',
   error: 'danger',
 });
+const REPOSITORY_CACHE_TTL_MS = 60_000;
+const REPOSITORIES_CACHE = new Map();
+
+function safeClone(value) {
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function cacheKeyForProfile(profile) {
+  return `repositories:${String(profile || 'default')}`;
+}
+
+function readRepositoryCache(profile) {
+  const key = cacheKeyForProfile(profile);
+  const cached = REPOSITORIES_CACHE.get(key);
+  if (!cached) return null;
+  if (!cached.loaded_at || (Date.now() - cached.loaded_at) > REPOSITORY_CACHE_TTL_MS) return null;
+  return cached;
+}
+
+function writeRepositoryCache(profile, payload) {
+  REPOSITORIES_CACHE.set(cacheKeyForProfile(profile), {
+    ...payload,
+    loaded_at: Date.now(),
+  });
+}
 
 function shortSha(value) {
   return value ? String(value).slice(0, 9) : '—';
@@ -76,7 +102,7 @@ export function createRepositories({ api, profile, toolbar }) {
   let actionError = null;
   let inspectorHost = null;
   let pollTimer = null;
-  const busy = new Set();
+  let refreshing = false;
 
   function selectedRepo() {
     return repositories.find((repo) => repo.name === selectedName) || repositories[0] || null;
@@ -108,10 +134,15 @@ export function createRepositories({ api, profile, toolbar }) {
     return { attention, dirty, openPrs, remoteHosts };
   }
 
-  async function load({ refresh = true } = {}) {
-    loading = true;
-    loadError = null;
-    renderMain();
+  async function load({ refresh = true, background = false } = {}) {
+    if (refreshing) return;
+    const hadData = repositories.length > 0;
+    if (!background) {
+      loadError = null;
+      loading = true;
+      renderMain();
+    }
+    refreshing = true;
     try {
       const response = await api.get(
         `/api/repositories?refresh=${refresh ? '1' : '0'}&github=1`, { profile },
@@ -120,23 +151,49 @@ export function createRepositories({ api, profile, toolbar }) {
       repositories = Array.isArray(payload.repositories) ? payload.repositories : [];
       operations = Array.isArray(payload.recent_operations) ? payload.recent_operations : [];
       automation = payload.automation || {};
+      selectedName = selectedName || null;
       if (!selectedName || !repositories.some((repo) => repo.name === selectedName)) {
         selectedName = repositories[0]?.name || null;
       }
+      writeRepositoryCache(profile, {
+        repositories: safeClone(repositories),
+        operations: safeClone(operations),
+        automation: safeClone(automation),
+        selected_name: selectedName,
+      });
       actionError = null;
     } catch (err) {
-      loadError = err;
+      if (!hadData) loadError = err;
     } finally {
-      loading = false;
+      refreshing = false;
+      if (!background) loading = false;
       renderToolbar(toolbar);
       renderMain();
       renderSide();
     }
   }
 
+  function hydrateFromCache() {
+    const cached = readRepositoryCache(profile);
+    if (!cached) return false;
+    if (!Array.isArray(cached.repositories) || !cached.repositories.length) return false;
+    repositories = safeClone(cached.repositories);
+    operations = safeClone(cached.operations || []);
+    automation = safeClone(cached.automation || {});
+    selectedName = cached.selected_name || null;
+    if (!selectedName || !repositories.some((repo) => repo.name === selectedName)) {
+      selectedName = repositories[0]?.name || null;
+    }
+    loadError = null;
+    actionError = null;
+    renderToolbar(toolbar);
+    renderMain();
+    renderSide();
+    return true;
+  }
+
   async function runRepoAction(repo, action, extra = {}) {
-    if (!repo || busy.has(repo.name)) return;
-    busy.add(repo.name);
+    if (!repo) return;
     selectedName = repo.name;
     actionError = null;
     renderMain();
@@ -162,19 +219,17 @@ export function createRepositories({ api, profile, toolbar }) {
       };
       renderSide();
     } finally {
-      busy.delete(repo.name);
       renderMain();
       renderSide();
     }
   }
 
   async function rebaseMerge(repo, pull) {
-    if (!repo || !pull || busy.has(repo.name)) return;
+    if (!repo || !pull || pull.draft) return;
     const confirmed = window.confirm(
       `Rebase and merge PR #${pull.number} into ${repo.repo_full_name}:${repo.branch}?`,
     );
     if (!confirmed) return;
-    busy.add(repo.name);
     selectedName = repo.name;
     actionError = null;
     renderMain();
@@ -197,15 +252,12 @@ export function createRepositories({ api, profile, toolbar }) {
         details: err?.payload?.error?.details || null,
       };
     } finally {
-      busy.delete(repo.name);
       renderMain();
       renderSide();
     }
   }
 
   async function syncAll() {
-    if (busy.has('__all__')) return;
-    busy.add('__all__');
     actionError = null;
     renderToolbar(toolbar);
     try {
@@ -225,7 +277,6 @@ export function createRepositories({ api, profile, toolbar }) {
     } catch (err) {
       actionError = { code: 'request_failed', message: err.message || 'sync all failed' };
     } finally {
-      busy.delete('__all__');
       renderToolbar(toolbar);
       renderSide();
     }
@@ -241,7 +292,6 @@ export function createRepositories({ api, profile, toolbar }) {
 
   function repoCard(repo) {
     const selected = repo.name === selectedName;
-    const isBusy = busy.has(repo.name);
     const dirty = repo.working_tree || {};
     const failures = conflictFiles(repo);
     const error = repoError(repo);
@@ -351,15 +401,15 @@ export function createRepositories({ api, profile, toolbar }) {
       ]),
       el('div', { class: 'repo-card-actions' }, [
         el('button', {
-          class: 'btn btn-sm btn-primary', type: 'button', disabled: isBusy,
+          class: 'btn btn-sm btn-primary', type: 'button',
           onclick: () => runRepoAction(repo, 'sync'),
-        }, isBusy ? 'Running…' : 'Safe sync'),
+        }, 'Safe sync'),
         dirty.dirty ? el('button', {
-          class: 'btn btn-sm', type: 'button', disabled: isBusy,
+          class: 'btn btn-sm', type: 'button',
           onclick: () => runRepoAction(repo, 'commit', {}),
         }, 'Commit local') : null,
         repo.fork ? el('button', {
-          class: 'btn btn-sm btn-accent', type: 'button', disabled: isBusy,
+          class: 'btn btn-sm btn-accent', type: 'button',
           onclick: () => runRepoAction(repo, 'upstream'),
         }, 'Sync upstream') : null,
       ].filter(Boolean)),
@@ -452,14 +502,14 @@ export function createRepositories({ api, profile, toolbar }) {
       filterSelect,
       searchInput,
       toolbarSelect('Auto-commit', autoCommit, (value) => { autoCommit = value; renderSide(); }),
-      toolbarSelect('30s refresh', autoRefresh, (value) => {
+      toolbarSelect('1m refresh', autoRefresh, (value) => {
         autoRefresh = value;
         schedulePoll();
       }),
       el('button', {
-        class: 'btn btn-sm btn-primary', type: 'button', disabled: busy.has('__all__'),
+        class: 'btn btn-sm btn-primary', type: 'button',
         onclick: () => syncAll(),
-      }, busy.has('__all__') ? 'Syncing…' : 'Sync all'),
+      }, 'Sync all'),
     );
   }
 
@@ -510,7 +560,7 @@ export function createRepositories({ api, profile, toolbar }) {
         el('span', { text: `${pull.draft ? 'Draft · ' : ''}${fmtWhen(pull.updated_at)}` }),
       ]),
       el('button', {
-        class: 'btn btn-sm btn-accent', type: 'button', disabled: busy.has(repo.name) || pull.draft,
+        class: 'btn btn-sm btn-accent', type: 'button', disabled: pull.draft,
         onclick: () => rebaseMerge(repo, pull),
       }, 'Rebase & merge'),
     ])) : [el('div', { class: 'repo-side-empty', text: 'No open pull requests.' })];
@@ -556,7 +606,7 @@ export function createRepositories({ api, profile, toolbar }) {
         kv('Fork ahead', drift?.ahead_by ?? '—'),
         kv('Fork behind', drift?.behind_by ?? '—', { tone: Number(drift?.behind_by || 0) > 0 ? 'is-warn' : '' }),
         el('button', {
-          class: 'btn btn-sm btn-accent repo-side-action', type: 'button', disabled: busy.has(repo.name),
+          class: 'btn btn-sm btn-accent repo-side-action', type: 'button',
           onclick: () => runRepoAction(repo, 'upstream'),
         }, 'Sync fork from upstream'),
       ]) : null,
@@ -604,11 +654,11 @@ export function createRepositories({ api, profile, toolbar }) {
         ])) : [el('div', { class: 'repo-side-empty', text: 'No recent activity.' })]),
       el('div', { class: 'repo-side-footer-actions' }, [
         el('button', {
-          class: 'btn btn-sm btn-primary', type: 'button', disabled: busy.has(repo.name),
+          class: 'btn btn-sm btn-primary', type: 'button',
           onclick: () => runRepoAction(repo, 'sync'),
-        }, busy.has(repo.name) ? 'Running…' : 'Safe sync now'),
+        }, 'Safe sync now'),
         dirty.dirty ? el('button', {
-          class: 'btn btn-sm', type: 'button', disabled: busy.has(repo.name),
+          class: 'btn btn-sm', type: 'button',
           onclick: () => runRepoAction(repo, 'commit'),
         }, 'Commit local changes') : null,
       ].filter(Boolean)),
@@ -627,8 +677,8 @@ export function createRepositories({ api, profile, toolbar }) {
     }
     if (autoRefresh) {
       pollTimer = setInterval(() => {
-        if (!busy.size) load({ refresh: true }).catch(() => null);
-      }, 30000);
+        load({ refresh: true, background: true }).catch(() => null);
+      }, 60_000);
     }
   }
 
@@ -639,7 +689,12 @@ export function createRepositories({ api, profile, toolbar }) {
     },
     async activate() {
       renderToolbar(toolbar);
-      await load({ refresh: true });
+      const hydrated = hydrateFromCache();
+      if (hydrated) {
+        load({ refresh: true, background: true }).catch(() => null);
+      } else {
+        await load({ refresh: true });
+      }
       schedulePoll();
     },
     deactivate() {

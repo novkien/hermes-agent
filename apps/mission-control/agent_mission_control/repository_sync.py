@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import json
 import os
@@ -666,10 +667,31 @@ class RepositorySyncService:
         return base
 
     def status_all(self, *, fetch: bool = True, include_github: bool = True) -> list[dict[str, Any]]:
-        # Keep execution deterministic and low-pressure on SSH/GitHub. Six repos are
-        # small enough that sequential status is easier to diagnose than interleaved
-        # subprocess output.
-        return [self.status(name, fetch=fetch, include_github=include_github) for name in self.registry]
+        names = list(self.registry)
+
+        def _run(name: str) -> dict[str, Any]:
+            try:
+                return self.status(name, fetch=fetch, include_github=include_github)
+            except Exception as exc:  # noqa: BLE001 - status must report, not crash the dashboard
+                spec = self.spec(name)
+                return {
+                    "name": spec.name,
+                    "repo_full_name": spec.repo_full_name,
+                    "branch": spec.branch,
+                    "transport": spec.transport,
+                    "host": spec.ssh_target if spec.transport == "ssh" else "local",
+                    "fork": spec.is_fork,
+                    "upstream_repo": spec.upstream_repo,
+                    "private": spec.private,
+                    "ok": False,
+                    "state": "error",
+                    "error": {"code": "status_failed", "message": str(exc), "details": None},
+                    "duration_ms": 0,
+                }
+
+        max_workers = max(1, min(len(names), 6))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(executor.map(_run, names))
 
     def _event_base(self, spec: RepoSpec, action: str, trigger: str) -> dict[str, Any]:
         return {
