@@ -189,6 +189,38 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertTrue(git(self.prod, "stash", "list"))
         self.assertTrue(git(self.prod, "diff", "--name-only", "--diff-filter=U"))
 
+    def test_tracked_deployment_preserves_runtime_and_skips_fastcontext(self):
+        live = Path(self.tmp.name) / "live"
+        (self.prod / "skills" / "example").mkdir(parents=True)
+        (self.prod / "skills" / "example" / "SKILL.md").write_text("source\n", encoding="utf-8")
+        (self.prod / "skills" / "example" / ".fastcontext").mkdir()
+        (self.prod / "skills" / "example" / ".fastcontext" / "trace.json").write_text(
+            "ignored\n", encoding="utf-8"
+        )
+        git(self.prod, "add", "skills")
+        git(self.prod, "commit", "-m", "add deployable source")
+        deployed = RepoSpec(
+            name="demo",
+            repo_full_name="example/demo",
+            branch="main",
+            path_candidates=(str(self.prod),),
+            deployment_root=str(live),
+            deployment_paths=("skills",),
+        )
+        service = RepositorySyncService(
+            {"demo": deployed},
+            runner=RepositoryGitRunner(timeout=20),
+            store=OperationStore(self.state),
+            github=OfflineGithub(),
+            timeout=20,
+        )
+
+        result = service._deploy_work_tree(deployed)
+
+        self.assertEqual(result["copied"], 1)
+        self.assertEqual((live / "skills" / "example" / "SKILL.md").read_text(encoding="utf-8"), "source\n")
+        self.assertFalse((live / "skills" / "example" / ".fastcontext" / "trace.json").exists())
+
     def test_automation_commands_share_one_entrypoint_and_trigger_labels(self):
         commands = self.service.automation_commands()
         self.assertIn("--all --sync --auto-commit --json --trigger cron", commands["cron"])

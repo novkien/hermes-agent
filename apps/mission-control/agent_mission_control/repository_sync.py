@@ -34,6 +34,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import time
 from typing import Any, Iterable, Iterator
@@ -56,6 +57,8 @@ class RepoSpec:
     path_candidates: tuple[str, ...] = ()
     git_dir: str | None = None
     work_tree: str | None = None
+    deployment_root: str | None = None
+    deployment_paths: tuple[str, ...] = ()
     ssh_target: str | None = None
     upstream_repo: str | None = None
     private: bool = True
@@ -163,6 +166,7 @@ def default_repository_registry() -> dict[str, RepoSpec]:
         "REPO_SYNC_9ROUTER_PATH",
         ("/home/jarvis/9router", "/opt/9router", "/home/pi/9router"),
     )
+    skills_deployment_root = (os.getenv("REPO_SYNC_HERMES_SKILLS_DEPLOY_ROOT") or "").strip()
 
     return {
         "9router": RepoSpec(
@@ -194,6 +198,13 @@ def default_repository_registry() -> dict[str, RepoSpec]:
             work_tree=os.path.expanduser(
                 os.getenv("REPO_SYNC_HERMES_SKILLS_WORK_TREE", "~/.hermes")
             ),
+            # The Git checkout may be an isolated staging tree because the live
+            # Hermes home also contains mutable service data.  When configured,
+            # Safe sync deploys only the tracked source trees into that live home.
+            deployment_root=os.path.expanduser(skills_deployment_root)
+            if skills_deployment_root
+            else None,
+            deployment_paths=("skills", "workspace/skills-pack"),
             private=True,
         ),
         "hermes-plugins": RepoSpec(
@@ -755,6 +766,93 @@ class RepositorySyncService:
         preserved = current.stdout if current.returncode == 0 else None
         return False, conflicts, preserved
 
+    @staticmethod
+    def _safe_deployment_path(relative: str) -> bool:
+        path = Path(relative)
+        return (
+            bool(relative)
+            and not path.is_absolute()
+            and ".." not in path.parts
+            and ".git" not in path.parts
+            and ".fastcontext" not in path.parts
+        )
+
+    def _deployment_state_path(self, spec: RepoSpec) -> Path:
+        return self.store.root / "deployments" / f"{spec.name}.json"
+
+    def _deploy_work_tree(self, spec: RepoSpec) -> dict[str, Any] | None:
+        """Deploy tracked source files from an isolated checkout to production.
+
+        This intentionally does not run ``git reset`` or ``rsync --delete`` against
+        Hermes home.  Generated runtime directories are not Git deployment targets;
+        only previously deployed tracked files may be removed on later deployments.
+        """
+        if not spec.deployment_root or not spec.deployment_paths:
+            return None
+        manifest_result = self.runner.git(
+            spec, "ls-files", "-z", "--", *spec.deployment_paths
+        )
+        if manifest_result.returncode != 0:
+            raise RepositorySyncError(
+                "deployment_manifest_failed",
+                manifest_result.stderr or manifest_result.stdout or "could not list deployment files",
+            )
+        files = sorted(
+            item
+            for item in manifest_result.stdout.split("\0")
+            if self._safe_deployment_path(item)
+        )
+        source_root = Path(spec.work_tree or self.runner.resolve_path(spec)).resolve()
+        target_root = Path(spec.deployment_root).expanduser().resolve()
+        state_path = self._deployment_state_path(spec)
+        previous: list[str] = []
+        try:
+            previous_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            previous = [
+                item for item in previous_payload.get("files", []) if self._safe_deployment_path(item)
+            ]
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError) as exc:
+            raise RepositorySyncError("deployment_state_invalid", str(exc)) from exc
+
+        copied = 0
+        for relative in files:
+            source = source_root / relative
+            destination = target_root / relative
+            if not source.exists() and not source.is_symlink():
+                raise RepositorySyncError("deployment_source_missing", f"tracked source is missing: {relative}")
+            if destination.exists() and destination.is_dir() and not source.is_dir():
+                raise RepositorySyncError(
+                    "deployment_path_conflict",
+                    f"production path is a directory where a file is required: {relative}",
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.is_symlink() or destination.is_file():
+                destination.unlink()
+            if source.is_symlink():
+                destination.symlink_to(os.readlink(source))
+            else:
+                shutil.copy2(source, destination)
+            copied += 1
+
+        removed = 0
+        current = set(files)
+        for relative in sorted(set(previous) - current, reverse=True):
+            destination = target_root / relative
+            if destination.is_symlink() or destination.is_file():
+                destination.unlink()
+                removed += 1
+
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = state_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps({"files": files, "source_sha": self._run_ok(spec, "rev-parse", "HEAD")}),
+            encoding="utf-8",
+        )
+        temporary.replace(state_path)
+        return {"root": str(target_root), "copied": copied, "removed": removed, "skipped_fastcontext": True}
+
     def sync(
         self,
         name: str,
@@ -835,6 +933,8 @@ class RepositorySyncService:
                         },
                     )
 
+                deployment = self._deploy_work_tree(spec)
+
                 committed_sha = None
                 if auto_commit:
                     after_restore = self._run_ok(spec, "status", "--porcelain=v1", "-uall")
@@ -866,6 +966,7 @@ class RepositorySyncService:
                     stash_sha=None,
                     auto_commit=auto_commit,
                     committed_sha=committed_sha,
+                    deployment=deployment,
                     after=after,
                 )
         except RepositorySyncError as exc:
