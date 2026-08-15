@@ -1,9 +1,12 @@
 """Shared SKILL.md preprocessing helpers."""
 
+from __future__ import annotations
+
+import json
 import logging
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from hermes_cli._subprocess_compat import IS_WINDOWS, windows_hide_flags
 
@@ -20,6 +23,12 @@ _INLINE_SHELL_RE = re.compile(r"!`([^`\n]+)`")
 
 # Cap inline-shell output so a runaway command can't blow out the context.
 _INLINE_SHELL_MAX_OUTPUT = 4000
+
+_ARTIFACT_CONTRACT_FILENAME = "ARTIFACTS.md"
+_ARTIFACT_REGISTRY_DIRNAME = ".artifact-contracts"
+_ARTIFACT_REGISTRY_FILENAME = "registry.json"
+_ARTIFACT_CONTRACT_MAX_CHARS = 12_000
+_ARTIFACT_REGISTRY_SEARCH_DEPTH = 12
 
 
 def load_skills_config() -> dict:
@@ -74,7 +83,7 @@ def run_inline_shell(command: str, cwd: Path | None, timeout: int) -> str:
             ["bash", "-c", command],
             cwd=str(cwd) if cwd else None,
             capture_output=True,
-            text=True, encoding='utf-8', errors='replace',
+            text=True, encoding="utf-8", errors="replace",
             timeout=max(1, int(timeout)),
             check=False,
             stdin=subprocess.DEVNULL,
@@ -85,10 +94,6 @@ def run_inline_shell(command: str, cwd: Path | None, timeout: int) -> str:
     except FileNotFoundError:
         return "[inline-shell error: bash not found]"
     except RuntimeError as exc:
-        # tests/conftest.py installs a live-system guard that blocks real
-        # os.kill on out-of-tree PIDs. subprocess.run(timeout=...) may trip
-        # that guard while trying to clean up the timed-out shell; treat that
-        # as the same timeout outcome instead of surfacing the guard error.
         if "live-system guard: blocked os.kill" in str(exc):
             return f"[inline-shell timeout after {timeout}s: {command}]"
         return f"[inline-shell error: {exc}]"
@@ -125,16 +130,164 @@ def expand_inline_shell(
     return _INLINE_SHELL_RE.sub(_replace, content)
 
 
+def _read_artifact_contract(path: Path) -> str:
+    """Read one bounded UTF-8 Artifact Contract, returning empty on failure."""
+    try:
+        if not path.is_file():
+            return ""
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        logger.warning("Could not read Artifact Contract: %s", path, exc_info=True)
+        return ""
+
+    content = content.strip()
+    if not content:
+        return ""
+    if len(content) > _ARTIFACT_CONTRACT_MAX_CHARS:
+        logger.warning(
+            "Artifact Contract exceeds %d characters and was ignored: %s",
+            _ARTIFACT_CONTRACT_MAX_CHARS,
+            path,
+        )
+        return ""
+
+    try:
+        from tools.threat_patterns import scan_for_threats
+
+        findings = scan_for_threats(content, scope="context")
+    except Exception:
+        logger.warning("Artifact Contract threat scan failed: %s", path, exc_info=True)
+        return ""
+    if findings:
+        logger.warning(
+            "Artifact Contract blocked by context threat scan (%s): %s",
+            ", ".join(findings),
+            path,
+        )
+        return ""
+    return content
+
+
+def _safe_registry_target(value: object) -> PurePosixPath | None:
+    """Validate one registry target as a bounded relative POSIX path."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    if not path.parts or path.parts[0] != _ARTIFACT_REGISTRY_DIRNAME:
+        return None
+    return path
+
+
+def _find_artifact_registry(skill_dir: Path) -> Path | None:
+    """Find the nearest bounded artifact-contract registry above a skill."""
+    try:
+        current = skill_dir.resolve()
+    except OSError:
+        current = skill_dir.absolute()
+
+    candidates = (current, *current.parents)
+    for directory in candidates[:_ARTIFACT_REGISTRY_SEARCH_DEPTH]:
+        candidate = directory / _ARTIFACT_REGISTRY_DIRNAME / _ARTIFACT_REGISTRY_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _match_registry_contract(registry: dict, relative_skill_path: str) -> object:
+    """Return the exact or longest-prefix registry target for one skill."""
+    exact = registry.get("contracts")
+    if isinstance(exact, dict) and relative_skill_path in exact:
+        return exact[relative_skill_path]
+
+    prefixes = registry.get("prefix_contracts")
+    if not isinstance(prefixes, dict):
+        return None
+
+    matches: list[tuple[int, object]] = []
+    for raw_prefix, target in prefixes.items():
+        if not isinstance(raw_prefix, str) or not raw_prefix:
+            continue
+        prefix = raw_prefix.rstrip("/")
+        if relative_skill_path == prefix or relative_skill_path.startswith(prefix + "/"):
+            matches.append((len(prefix), target))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return matches[0][1]
+
+
+def load_artifact_contract(skill_dir: Path | None) -> str:
+    """Resolve a local sidecar or repository registry Artifact Contract.
+
+    ``ARTIFACTS.md`` inside the skill package is authoritative. Otherwise the
+    nearest ``.artifact-contracts/registry.json`` may map the exact skill path
+    or a path prefix to a contract stored under that registry directory.
+    Malformed, missing, oversized, unsafe, or blocked data is a no-op so skill
+    loading remains available.
+    """
+    if skill_dir is None:
+        return ""
+    skill_dir = Path(skill_dir)
+
+    local_contract = _read_artifact_contract(skill_dir / _ARTIFACT_CONTRACT_FILENAME)
+    if local_contract:
+        return local_contract
+
+    registry_path = _find_artifact_registry(skill_dir)
+    if registry_path is None:
+        return ""
+
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logger.warning("Could not load Artifact Contract registry: %s", registry_path, exc_info=True)
+        return ""
+    if not isinstance(registry, dict) or registry.get("schema_version") != 1:
+        logger.warning("Unsupported Artifact Contract registry: %s", registry_path)
+        return ""
+
+    registry_root = registry_path.parent.parent
+    try:
+        relative_skill_path = skill_dir.resolve().relative_to(registry_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return ""
+
+    target_value = _match_registry_contract(registry, relative_skill_path)
+    target = _safe_registry_target(target_value)
+    if target is None:
+        return ""
+
+    try:
+        contract_path = (registry_root / Path(*target.parts)).resolve()
+        allowed_root = registry_path.parent.resolve()
+        contract_path.relative_to(allowed_root)
+    except (OSError, ValueError):
+        logger.warning("Unsafe Artifact Contract registry target ignored: %r", target_value)
+        return ""
+    return _read_artifact_contract(contract_path)
+
+
+def append_artifact_contract(content: str, skill_dir: Path | None) -> str:
+    """Append the resolved Artifact Contract exactly once."""
+    contract = load_artifact_contract(skill_dir)
+    if not contract or contract in content:
+        return content
+    return f"{content.rstrip()}\n\n{contract}\n"
+
+
 def preprocess_skill_content(
     content: str,
     skill_dir: Path | None,
     session_id: str | None = None,
     skills_cfg: dict | None = None,
 ) -> str:
-    """Apply configured SKILL.md template and inline-shell preprocessing."""
+    """Apply Artifact Contract, template, and inline-shell preprocessing."""
     if not content:
         return content
 
+    content = append_artifact_contract(content, skill_dir)
     cfg = skills_cfg if isinstance(skills_cfg, dict) else load_skills_config()
     if cfg.get("template_vars", True):
         content = substitute_template_vars(content, skill_dir, session_id)
