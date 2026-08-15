@@ -778,7 +778,10 @@ class RepositorySyncService:
     def _restore_stash(self, spec: RepoSpec, stash_ref: str | None) -> tuple[bool, list[str], str | None]:
         if not stash_ref:
             return True, [], None
-        restored = self.runner.git(spec, "stash", "pop", "--index", stash_ref)
+        # Safe sync commits restored work when auto-commit is enabled, so restoring
+        # the exact pre-sync index is unnecessary and can fail for an added file
+        # whose untracked copy Git restores first. Restore content reliably instead.
+        restored = self.runner.git(spec, "stash", "pop", stash_ref)
         if restored.returncode == 0:
             return True, [], None
         conflicts = self._conflicts(spec)

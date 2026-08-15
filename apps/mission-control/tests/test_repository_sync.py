@@ -180,6 +180,18 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertEqual(result["pushed_sha"], result["committed_sha"])
         self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
 
+    def test_auto_commit_pushes_staged_and_untracked_local_changes(self):
+        (self.prod / "base.txt").write_text("base\nstaged work\n", encoding="utf-8")
+        git(self.prod, "add", "base.txt")
+        (self.prod / "current-model.json").write_text("local model\n", encoding="utf-8")
+
+        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["pushed_sha"], result["committed_sha"])
+        self.assertEqual((self.prod / "current-model.json").read_text(encoding="utf-8"), "local model\n")
+        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+
     def test_commit_local_pushes_to_origin(self):
         (self.prod / "local.txt").write_text("local work\n", encoding="utf-8")
 
