@@ -27,6 +27,9 @@ import {
 } from '../pure/data-shape.js';
 import { compressionThresholdFrom } from '../pure/context-window.js';
 import { buildTranscriptMarkdown } from '../pure/chat-export.js';
+import {
+  buildDraftSessionRequest, draftSessionProfile, resolveDraftRuntimeProfile,
+} from '../pure/chat-draft.js';
 import { buildHash } from '../pure/hash-router.js';
 import { copyText } from '../markdown-render.js';
 import { toast } from '../components/toast.js';
@@ -386,13 +389,67 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       ]));
     }
     hero.append(el('button', {
-      class: 'btn btn-sm chat-hero-cta', type: 'button', onclick: () => createSession(),
+      class: 'btn btn-sm chat-hero-cta', type: 'button', onclick: () => renderDraft(),
       disabled: gatewayAvailable ? null : 'disabled',
     }, [icon('spark', { size: 13 }), ' New session']));
     threadPane.append(hero);
   }
 
   /* -------------------------------------------------------------- thread -- */
+
+  function renderDraft(selectedProfile = undefined) {
+    if (!gatewayAvailable) return;
+    const runtimeProfile = resolveDraftRuntimeProfile(profile, selectedProfile);
+    const sessionProfile = draftSessionProfile(runtimeProfile);
+    const draftKey = `__draft__:${sessionProfile}`;
+    selectedSessionId = null;
+    selectedSession = null;
+    stopStream();
+    stopMirror();
+    clear(threadPane);
+
+    const head = el('div', { class: 'chat-thread-head' });
+    head.append(
+      el('div', { class: 'chat-thread-title', text: 'New session' }),
+      el('div', { class: 'chat-thread-meta' }, [
+        el('span', { class: 'chip', text: sessionProfile }),
+        el('span', { class: 'chat-thread-stat', text: 'draft · not created yet' }),
+      ]),
+    );
+    threadPane.append(head);
+
+    const list = el('div', { class: 'thread-list' });
+    list.append(emptyState({
+      title: `New session in ${sessionProfile}`,
+      note: 'The session and profile runner start when you send the first message.',
+    }));
+    threadList = list;
+    threadPane.append(list);
+
+    const draftPrefs = composerPrefsFor(draftKey, null);
+    composerHandle = createComposer({
+      api,
+      profile,
+      disabled: false,
+      placeholder: 'Give Hermes a task…',
+      list,
+      sessionId: null,
+      sessionProfile,
+      session: { profile: sessionProfile },
+      prefs: draftPrefs,
+      modelOptions: runtimeProfile ? null : modelOptions,
+      instructionsStore,
+      draftStore,
+      draftKey,
+      onDraftSubmit: () => materializeDraft(runtimeProfile, draftPrefs),
+    });
+    threadPane.append(composerHandle.node);
+
+    const url = new URL(window.location.href);
+    url.hash = buildHash('/chat', {});
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    notifyInspector();
+  }
 
   async function openThread(sessionId, { navigate = true } = {}) {
     if (!sessionId) return;
@@ -1036,20 +1093,17 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
 
   /* ---------------------------------------------------- session mutations -- */
 
-  /** Ask which profile to start on, then create. With nothing else to offer,
-   * skip the menu and behave exactly like every other entry point. */
+  /** Ask which profile the draft will run on. No backend session exists yet. */
   function startSession(anchor) {
     if (!gatewayAvailable) return;
     const others = (profilesList || []).filter((row) => (row?.name ?? row?.id) !== profile);
-    if (!anchor || !others.length) { createSession(); return; }
-    openMenu(anchor, buildProfileMenu(profilesList, profile, (picked) => createSession(picked)), {
+    if (!anchor || !others.length) { renderDraft(); return; }
+    openMenu(anchor, buildProfileMenu(profilesList, profile, (picked) => renderDraft(picked)), {
       placement: 'below', align: 'start',
     });
   }
 
-  async function createSession(runtimeProfile = null) {
-    if (!gatewayAvailable) return;
-    try {
+  async function materializeDraft(runtimeProfile, draftPrefs) {
       // Say which model this session is for.
       //
       // `POST /api/sessions` falls back to the gateway's own internal default
@@ -1066,18 +1120,19 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       // surface would go on disagreeing about which model it runs. In that
       // case say nothing and let the gateway resolve its own default — the
       // first turn reports what it truly ran on, and that is what sticks.
-      const created0 = { profile };
+      const view = effectiveModel(draftPrefs, modelOptions);
+      const created0 = buildDraftSessionRequest({
+        documentProfile: profile,
+        runtimeProfile,
+        model: view.model,
+        provider: view.provider,
+        modelAllowed: !runtimeProfile && catalogHas(modelOptions, view.provider, view.model),
+      });
       // A picked profile runs on its OWN isolated gateway (runner_manager,
       // BFF-side) — its own SOUL.md, model, credentials, memory and
       // state.db, not text borrowed into a session still running on this
       // tab's default gateway. The BFF resolves model/provider from that
       // profile itself; nothing to inject here beyond the name.
-      if (runtimeProfile) {
-        created0.profile_name = runtimeProfile;
-      } else if (catalogHas(modelOptions, modelOptions?.provider, modelOptions?.model)) {
-        created0.model = modelOptions.model;
-        created0.provider = modelOptions.provider;
-      }
       const response = await api.post('/api/chat/sessions', created0, { profile });
       const created = createdSession(response.data || response);
       if (!created) throw new Error('gateway returned no session id');
@@ -1088,16 +1143,13 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       // which has not indexed this row yet. Waiting for it is what used to
       // leave a brand-new session showing a bare id and no composer state.
       allSessions = withOptimisticSession(allSessions, {
-        ...created, profile, source: created.source || 'api_server',
+        ...created, profile: draftSessionProfile(runtimeProfile), source: created.source || 'api_server',
         last_activity_at: created.started_at || Math.floor(Date.now() / 1000),
       });
       notifyInspector();
       await openThread(created.id);
       if (composerHandle) composerHandle.focus();
-    } catch (err) {
-      clear(threadPane);
-      threadPane.append(unavailableState({ reason: `Create session failed: ${err.message}`, requestId: err.request_id }));
-    }
+      return composerHandle;
   }
 
   async function renameSession(session) {
@@ -1368,7 +1420,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
 
   function commands() {
     const rows = [
-      { group: 'Chat', icon: 'spark', label: 'New session', hint: '⌘⇧O', run: () => createSession() },
+      { group: 'Chat', icon: 'spark', label: 'New session', hint: '⌘⇧O', run: () => renderDraft() },
       { group: 'Chat', icon: 'search', label: 'Find in conversation', hint: '⌘F', run: () => threadSearch && threadSearch.show() },
       { group: 'Chat', icon: 'stop', label: 'Stop the running turn', hint: 'Esc', run: () => composerHandle && composerHandle.stop() },
       { group: 'Chat', icon: 'refresh', label: 'Reload sessions', run: () => load() },
@@ -1402,7 +1454,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     }
     if (meta && event.shiftKey && event.key.toLowerCase() === 'o') {
       event.preventDefault();
-      createSession();
+      renderDraft();
       return;
     }
     if (meta && event.key.toLowerCase() === 'f' && threadSearch) {

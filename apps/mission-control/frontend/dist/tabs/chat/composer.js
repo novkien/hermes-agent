@@ -31,8 +31,9 @@ export function createComposer(ctx) {
     api, profile, disabled, placeholder, list, sessionId, sessionProfile, session,
     prefs, contextState, compressionThreshold, modelOptions, unavailableReason,
     instructionsStore, draftStore, onTurnSettled, onNeedsReload, onModelChanged, onPickModel,
-    onRunningChange, onRemoteSettled,
+    onRunningChange, onRemoteSettled, onDraftSubmit, draftKey,
   } = ctx;
+  const storeKey = draftKey ?? sessionId;
 
   const box = el('div', { class: 'chat-composer' });
   const attachRow = el('div', { class: 'chat-attach-row' });
@@ -53,7 +54,7 @@ export function createComposer(ctx) {
     'aria-label': 'Message',
   });
   if (disabled) input.setAttribute('disabled', 'disabled');
-  if (draftStore && draftStore.get(sessionId)) input.value = draftStore.get(sessionId);
+  if (draftStore && draftStore.get(storeKey)) input.value = draftStore.get(storeKey);
 
   const sendButton = el('button', {
     class: 'chat-send',
@@ -65,11 +66,15 @@ export function createComposer(ctx) {
 
   const queueRow = el('div', { class: 'chat-queue' });
   queueRow.hidden = true;
+  const draftStatus = el('div', { class: 'chat-attach-error chat-draft-status' });
+  draftStatus.hidden = true;
 
   /* ---- turn controller ---- */
 
   let controller = null;      // AbortController once the stream has opened
   let localActive = false;    // claimed before CSRF/fetch begins
+  let preparing = false;
+  let destroyed = false;
   let stopRequested = false;
   let activeStopRunId = null;
   let activeStopPromise = null;
@@ -87,6 +92,10 @@ export function createComposer(ctx) {
     // so callers (especially the history mirror) must treat the earlier
     // `localActive` claim as running too or they can append the persisted copy.
     return Boolean(localActive || controller);
+  }
+
+  function busy() {
+    return Boolean(preparing || running());
   }
 
   /* ---- watching a turn this tab did not start ---- */
@@ -439,22 +448,67 @@ export function createComposer(ctx) {
 
   /* ---- submit ---- */
 
-  function submit() {
-    const text = input.value.trim();
-    if ((!text && !attachments.length) || disabled || !list) return;
-    const outgoing = attachments;
+  function clearSubmittedDraft() {
     input.value = '';
     attachments = [];
     attachErrors = [];
-    if (draftStore) draftStore.set(sessionId, '');
+    if (draftStore) draftStore.set(storeKey, '');
     renderAttachments();
     autoGrow();
+  }
 
-    if (running()) {
+  function setPreparingUi(active, message = '') {
+    preparing = active;
+    box.classList.toggle('is-running', active);
+    sendButton.disabled = active;
+    sendButton.classList.toggle('is-running', active);
+    sendButton.title = active ? message : 'Send message';
+    draftStatus.hidden = !message;
+    if (message) draftStatus.replaceChildren(el('span', { text: message }));
+  }
+
+  function showDraftError(error) {
+    const message = error?.message || 'Could not create the session';
+    draftStatus.hidden = false;
+    draftStatus.replaceChildren(
+      el('span', { text: `Create session failed: ${message}` }),
+      el('button', {
+        class: 'btn btn-xs', type: 'button', text: 'Retry', onclick: () => submit(),
+      }),
+    );
+  }
+
+  async function submit() {
+    const text = input.value.trim();
+    if ((!text && !attachments.length) || disabled || !list) return;
+    const outgoing = attachments;
+
+    if (busy()) {
+      if (preparing) return;
       queue.push({ text, attachments: outgoing });
       renderQueue();
       return;
     }
+
+    if (!sessionId && typeof onDraftSubmit === 'function') {
+      setPreparingUi(true, `Starting ${sessionProfile || 'default'}…`);
+      try {
+        const nextComposer = await onDraftSubmit({ text, attachments: outgoing, prefs });
+        if (!nextComposer || typeof nextComposer.sendPrepared !== 'function') {
+          throw new Error('session was created without an active composer');
+        }
+        clearSubmittedDraft();
+        nextComposer.sendPrepared(text, outgoing);
+      } catch (error) {
+        if (!destroyed) {
+          setPreparingUi(false);
+          showDraftError(error);
+        }
+      }
+      return;
+    }
+
+    clearSubmittedDraft();
     runTurn(text, outgoing).catch(() => null);
   }
 
@@ -613,7 +667,7 @@ export function createComposer(ctx) {
       ? 'Reasoning effort'
       : `${displayModelName(view.model)} does not report reasoning support`;
 
-    const saved = instructionsStore ? instructionsStore.get(sessionId) : '';
+    const saved = instructionsStore ? instructionsStore.get(storeKey) : '';
     instructionsButton.classList.toggle('is-active', Boolean(saved));
     instructionsButton.title = saved
       ? 'Per-session instructions (set)' : 'Per-session instructions';
@@ -654,7 +708,7 @@ export function createComposer(ctx) {
 
   input.addEventListener('input', () => {
     autoGrow();
-    if (draftStore) draftStore.set(sessionId, input.value);
+    if (draftStore) draftStore.set(storeKey, input.value);
     if (contextPanel) contextPanel.setDraftTokens(estimateTokens(input.value));
     // `/` on an otherwise empty composer opens the skill catalogue, the
     // interaction every chat client has trained operators to expect.
@@ -690,6 +744,7 @@ export function createComposer(ctx) {
   if (contextPanel) box.append(contextPanel.node);
   box.append(latestPill);
   box.append(queueRow);
+  box.append(draftStatus);
   box.append(attachRow);
   box.append(el('div', { class: 'chat-composer-box' }, [input, sendButton]));
   box.append(el('div', { class: 'chat-composer-bar' }, [
@@ -728,6 +783,10 @@ export function createComposer(ctx) {
     /** Repaint after the tab learned something new about the session's model. */
     refreshModel: () => paintPills(),
     refreshContext: () => (contextPanel ? contextPanel.refresh().catch(() => null) : null),
+    sendPrepared(text, outgoing = []) {
+      if (!sessionId || busy()) return;
+      runTurn(String(text || ''), outgoing).catch(() => null);
+    },
     /** Pre-fill the composer, e.g. when the palette inserts a command. */
     setText(text) {
       input.value = String(text || '');
@@ -735,6 +794,7 @@ export function createComposer(ctx) {
       input.focus();
     },
     destroy() {
+      destroyed = true;
       if (view) view.destroy();
       if (controller) controller.abort();
       discardRemote();

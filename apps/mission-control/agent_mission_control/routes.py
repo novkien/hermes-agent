@@ -19,6 +19,7 @@ import logging
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -56,6 +57,23 @@ from .session_persona_store import SessionPersonaStore
 from .store import Store
 
 logger = logging.getLogger("agent_mission_control.routes")
+
+
+@dataclass(frozen=True)
+class SessionExecutionTarget:
+    execution_mode: str
+    profile_name: str | None
+    client: GatewayClient
+
+
+_RUNNER_ERROR_STATUS = {
+    "runner_profile_missing": 400,
+    "runner_executable_missing": 503,
+    "runner_start_timeout": 504,
+    "runner_auth_failed": 502,
+    "runner_unhealthy": 502,
+    "runner_exited": 502,
+}
 
 # --------------------------------------------------------------------------
 # Read allowlist — derived from stage1-evidence u02-dashboard-routes.json
@@ -997,7 +1015,9 @@ class Router:
             raise ApiError(429, "rate_limited", "mutation rate limit exceeded")
         return session
 
-    async def _gateway_client_for_session(self, session_id: str) -> GatewayClient:
+    async def _execution_target_for_session(
+        self, session_id: str
+    ) -> SessionExecutionTarget:
         """Resolve the right GatewayClient for an existing session.
 
         Runner-backed sessions (execution_mode='runner') talk to their own
@@ -1009,20 +1029,23 @@ class Router:
         unrecorded) — 'gateway' is the correct default, not an error.
         """
         if self.dashboard_store is None or self.runner_manager is None:
-            return self.gateway
+            return SessionExecutionTarget("gateway", None, self.gateway)
         mode = self.dashboard_store.get_execution_mode(session_id)
         if mode != "runner":
-            return self.gateway
+            return SessionExecutionTarget("gateway", None, self.gateway)
         profile_name = self.dashboard_store.get_persona(session_id)
         if not profile_name:
             # Recorded as runner-backed but the profile pointer is missing —
             # fail back to the shared gateway rather than erroring the turn;
             # this should not happen (set_persona always writes both), but
             # a stale/corrupt row must not break an existing chat.
-            return self.gateway
+            return SessionExecutionTarget("gateway", None, self.gateway)
         client = await self.runner_manager.ensure_profile_gateway(profile_name)
         self.runner_manager.touch(profile_name)
-        return client
+        return SessionExecutionTarget("runner", profile_name, client)
+
+    async def _gateway_client_for_session(self, session_id: str) -> GatewayClient:
+        return (await self._execution_target_for_session(session_id)).client
 
     async def _profile_exists(self, profile_name: str) -> bool:
         """True when profile_name is in the dashboard's current profile
@@ -2595,8 +2618,7 @@ class Router:
         # the default profile's gateway). Absent profile_name, behavior is
         # unchanged: the shared default gateway, execution_mode='gateway'.
         profile_name = body.get("profile_name")
-        gateway = self.gateway
-        execution_mode = "gateway"
+        execution_target = SessionExecutionTarget("gateway", None, self.gateway)
         wants_runner = isinstance(profile_name, str) and bool(profile_name.strip())
 
         # AUDIT FIRST — before ANY upstream effect. The profile-inventory
@@ -2624,29 +2646,31 @@ class Router:
         if wants_runner:
             profile_name = profile_name.strip()
             if self.runner_manager is None:
-                self._record_audit_result(rid, None, "error:runner_unavailable")
-                return _json_error(503, "runner_unavailable",
+                self._record_audit_result(rid, None, "error:runner_unhealthy")
+                return _json_error(503, "runner_unhealthy",
                                    "profile-scoped chat runner not configured", rid)
             # Fail closed on an unknown profile before ever touching a
             # process spawn — a garbage/injected name still cannot reach
             # argv (create_subprocess_exec never shells out), but there is
             # no reason to pay for a spawn attempt Hermes would only reject.
             if not await self._profile_exists(profile_name):
-                self._record_audit_result(rid, None, "error:unknown_profile")
-                return _json_error(400, "unknown_profile",
+                self._record_audit_result(rid, None, "error:runner_profile_missing")
+                return _json_error(400, "runner_profile_missing",
                                    f"no such profile: {profile_name!r}", rid)
             try:
-                gateway = await self.runner_manager.ensure_profile_gateway(profile_name)
+                client = await self.runner_manager.ensure_profile_gateway(profile_name)
             except RunnerSpawnError as exc:
-                self._record_audit_result(rid, None, "error:runner_spawn_failed")
-                return _json_error(502, "runner_spawn_failed", str(exc), rid)
-            execution_mode = "runner"
+                self._record_audit_result(rid, None, f"error:{exc.code}")
+                return _json_error(
+                    _RUNNER_ERROR_STATUS.get(exc.code, 502), exc.code, str(exc), rid
+                )
+            execution_target = SessionExecutionTarget("runner", profile_name, client)
 
         try:
             upstream_body = dict(body)
             upstream_body.pop("profile", None)
             upstream_body.pop("profile_name", None)
-            result = await chat_proxy.create_session(gateway, upstream_body, idem)
+            result = await chat_proxy.create_session(execution_target.client, upstream_body, idem)
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
             detail = "upstream error"
@@ -2680,11 +2704,11 @@ class Router:
             sid = self._created_session_id(body_data)
             if profile_name and sid and self.dashboard_store is not None:
                 self.dashboard_store.set_persona(
-                    sid, profile_name, execution_mode=execution_mode
+                    sid, profile_name, execution_mode=execution_target.execution_mode
                 )
                 body_data = dict(body_data)
                 body_data["profile_name"] = profile_name
-                body_data["execution_mode"] = execution_mode
+                body_data["execution_mode"] = execution_target.execution_mode
                 result = {**result, "body": body_data}
             bus = getattr(self, "event_bus", None)
             if bus is not None:

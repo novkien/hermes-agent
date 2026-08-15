@@ -903,7 +903,9 @@ class _FakeRunnerProcess:
         self.returncode = -15
 
 
-def _patch_runner_spawn(spawned: list, *, ready: bool = True, on_stop=None):
+def _patch_runner_spawn(
+    spawned: list, *, ready: bool = True, on_stop=None, processes=None
+):
     """Monkeypatch asyncio.create_subprocess_exec for runner_manager tests.
     Returns (restore_fn,); caller MUST call restore in a finally block —
     this patches the real stdlib asyncio module, shared process-wide."""
@@ -911,7 +913,10 @@ def _patch_runner_spawn(spawned: list, *, ready: bool = True, on_stop=None):
     async def fake_create_subprocess_exec(*argv, **_kwargs):
         spawned.append(list(argv))
         profile = argv[argv.index("--profile") + 1]
-        return _FakeRunnerProcess(profile, ready=ready, on_stop=on_stop)
+        process = _FakeRunnerProcess(profile, ready=ready, on_stop=on_stop)
+        if processes is not None:
+            processes.append(process)
+        return process
 
     original = asyncio.create_subprocess_exec
     asyncio.create_subprocess_exec = fake_create_subprocess_exec
@@ -987,6 +992,67 @@ async def test_runner_manager_fails_closed_when_the_process_exits_early() -> Non
         assert "ghost" not in manager._pool
     finally:
         asyncio.create_subprocess_exec = original_spawn
+
+
+async def test_runner_manager_uses_health_fallback_and_authenticated_probe() -> None:
+    from agent_mission_control.clients import GatewayClient
+    from agent_mission_control.runner_manager import RunnerManager
+
+    spawned: list[list[str]] = []
+    calls: list[str] = []
+    original_spawn = _patch_runner_spawn(spawned)
+
+    async def fake_get(self, path, *, params=None, inbound_request_id=None, raw=False):
+        calls.append(path)
+        if path == "/api/health":
+            return 404, {}, {}
+        return 200, {}, {}
+
+    original_get = GatewayClient.get
+    GatewayClient.get = fake_get
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes",
+            port_announce_timeout_seconds=2,
+            health_probe_timeout_seconds=2,
+        )
+        await manager.ensure_profile_gateway("alpha")
+        assert calls[:3] == ["/api/health", "/api/status", "/api/sessions"]
+        await manager.stop_all()
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+        GatewayClient.get = original_get
+
+
+async def test_runner_manager_auth_failure_cleans_up_process() -> None:
+    from agent_mission_control.clients import GatewayClient
+    from agent_mission_control.runner_manager import RunnerManager, RunnerSpawnError
+
+    spawned: list[list[str]] = []
+    processes: list[_FakeRunnerProcess] = []
+    original_spawn = _patch_runner_spawn(spawned, processes=processes)
+
+    async def fake_get(self, path, *, params=None, inbound_request_id=None, raw=False):
+        return (401 if path == "/api/sessions" else 200), {}, {}
+
+    original_get = GatewayClient.get
+    GatewayClient.get = fake_get
+    try:
+        manager = RunnerManager(
+            hermes_executable="fake-hermes",
+            port_announce_timeout_seconds=2,
+            health_probe_timeout_seconds=2,
+        )
+        try:
+            await manager.ensure_profile_gateway("alpha")
+            assert False, "runner auth rejection must fail closed"
+        except RunnerSpawnError as exc:
+            assert exc.code == "runner_auth_failed"
+        assert processes[0].returncode is not None
+        assert "alpha" not in manager._pool
+    finally:
+        asyncio.create_subprocess_exec = original_spawn
+        GatewayClient.get = original_get
 
 
 async def test_runner_manager_lru_eviction_spares_fresh_backends() -> None:
@@ -1291,7 +1357,7 @@ async def test_chat_create_session_audits_before_any_upstream_effect() -> None:
     assert order == [
         "audit:pending",          # BEFORE any upstream call, not after
         "upstream:profiles",
-        "result:error:unknown_profile",
+        "result:error:runner_profile_missing",
     ], f"audit must precede every upstream effect, got {order}"
 
 
@@ -1884,6 +1950,8 @@ async def main() -> None:
     await test_session_persona_stores_only_the_profile_name()
     await test_runner_manager_shares_one_spawn_per_profile()
     await test_runner_manager_fails_closed_when_the_process_exits_early()
+    await test_runner_manager_uses_health_fallback_and_authenticated_probe()
+    await test_runner_manager_auth_failure_cleans_up_process()
     await test_runner_manager_lru_eviction_spares_fresh_backends()
     await test_runner_manager_idle_reap_allows_a_clean_respawn()
     await test_gateway_client_for_session_resolves_by_execution_mode()

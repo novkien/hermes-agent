@@ -42,7 +42,7 @@ export function buildProfileMenu(profiles, currentProfile, onPick) {
   function paint(query) {
     const needle = query.trim().toLowerCase();
     body.replaceChildren();
-    if (!needle) body.append(item(currentProfile, 'this profile', null, true));
+    if (!needle) body.append(item(currentProfile, 'this profile', currentProfile, true));
     let shown = 0;
     for (const row of rows) {
       const name = row.name || row.id;

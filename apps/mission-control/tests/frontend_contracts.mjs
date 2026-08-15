@@ -6,6 +6,11 @@ import { filterRows, filterSummary, queryTerms } from '../frontend/dist/pure/tex
 import { fitPopover, POPOVER_GAP, POPOVER_MIN_HEIGHT } from '../frontend/dist/pure/popover-fit.js';
 import { buildTranscriptMarkdown } from '../frontend/dist/pure/chat-export.js';
 import {
+  buildDraftSessionRequest,
+  draftSessionProfile,
+  resolveDraftRuntimeProfile,
+} from '../frontend/dist/pure/chat-draft.js';
+import {
   alertRows,
   capabilityRegistry,
   listFrom,
@@ -728,6 +733,25 @@ assert.equal(createdSession({ id: 'flat_1' }).id, 'flat_1');
 assert.equal(createdSession({ session_key: 'k' }).id, 'k');
 assert.equal(createdSession({}), null);
 assert.equal(createdSession(null), null);
+
+// New Session is a local draft. The active document profile chooses its
+// runtime by default, while `default` remains the shared-gateway path.
+assert.equal(resolveDraftRuntimeProfile('default'), null);
+assert.equal(resolveDraftRuntimeProfile('default', 'comfyui-worker'), 'comfyui-worker');
+assert.equal(resolveDraftRuntimeProfile('analyst'), 'analyst');
+assert.equal(draftSessionProfile(null), 'default');
+assert.deepEqual(buildDraftSessionRequest({
+  documentProfile: 'default', runtimeProfile: 'comfyui-worker',
+  model: 'ignored', provider: 'ignored', modelAllowed: true,
+}), { profile: 'default', profile_name: 'comfyui-worker' });
+assert.deepEqual(buildDraftSessionRequest({
+  documentProfile: 'default', runtimeProfile: null,
+  model: 'local-model', provider: 'local', modelAllowed: true,
+}), { profile: 'default', model: 'local-model', provider: 'local' });
+
+const chatSource = readFileSync(new URL('../frontend/dist/tabs/chat.js', import.meta.url), 'utf8');
+assert.match(chatSource, /onDraftSubmit:\s*\(\) => materializeDraft/);
+assert.match(chatSource, /draft · not created yet/);
 
 // --- chain-tip resolution ---------------------------------------------------
 //
