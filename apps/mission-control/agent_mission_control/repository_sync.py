@@ -745,6 +745,20 @@ class RepositorySyncService:
             )
         return name
 
+    def _push_if_ahead(self, spec: RepoSpec) -> str | None:
+        """Push synchronized local commits only when this checkout is ahead."""
+        count = self._run_ok(spec, "rev-list", "--count", f"origin/{spec.branch}..HEAD")
+        if int(count.strip() or "0") <= 0:
+            return None
+        pushed = self.runner.git(spec, "push", "origin", spec.branch)
+        if pushed.returncode != 0:
+            raise RepositorySyncError(
+                "push_failed",
+                pushed.stderr or pushed.stdout or "git push failed",
+                details={"branch": spec.branch, "returncode": pushed.returncode},
+            )
+        return self._run_ok(spec, "rev-parse", "HEAD")
+
     def _stash(self, spec: RepoSpec, trigger: str) -> tuple[str | None, str | None]:
         before = self.runner.git(spec, "rev-parse", "--verify", "stash@{0}")
         before_sha = before.stdout if before.returncode == 0 else None
@@ -946,6 +960,7 @@ class RepositorySyncService:
                 deployment = self._deploy_work_tree(spec)
 
                 committed_sha = None
+                pushed_sha = None
                 if auto_commit:
                     after_restore = self._run_ok(spec, "status", "--porcelain=v1", "-uall")
                     if after_restore.strip():
@@ -966,6 +981,7 @@ class RepositorySyncService:
                                 details={"returncode": committed.returncode},
                             )
                         committed_sha = self._run_ok(spec, "rev-parse", "HEAD")
+                    pushed_sha = self._push_if_ahead(spec)
 
                 after = self.status(
                     name, fetch=False, include_github=False, include_last_operation=False
@@ -978,6 +994,7 @@ class RepositorySyncService:
                     stash_sha=None,
                     auto_commit=auto_commit,
                     committed_sha=committed_sha,
+                    pushed_sha=pushed_sha,
                     deployment=deployment,
                     after=after,
                 )
@@ -1035,10 +1052,13 @@ class RepositorySyncService:
                 if commit.returncode != 0:
                     raise RepositorySyncError("commit_failed", commit.stderr or commit.stdout or "git commit failed")
                 sha = self._run_ok(spec, "rev-parse", "HEAD")
+                pushed_sha = self._push_if_ahead(spec)
                 after = self.status(
                     name, fetch=False, include_github=False, include_last_operation=False
                 )
-                return self._finish_event(event, ok=True, status="ok", committed_sha=sha, after=after)
+                return self._finish_event(
+                    event, ok=True, status="ok", committed_sha=sha, pushed_sha=pushed_sha, after=after
+                )
         except RepositorySyncError as exc:
             return self._finish_event(
                 event, ok=False, status="error",

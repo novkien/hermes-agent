@@ -170,6 +170,26 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertEqual(status["ahead"], 1)
         self.assertNotEqual(git(self.prod, "rev-parse", "HEAD"), remote_head)
 
+    def test_auto_commit_pushes_restored_local_changes_after_safe_sync(self):
+        (self.prod / "base.txt").write_text("base\nlocal work\n", encoding="utf-8")
+
+        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["committed_sha"])
+        self.assertEqual(result["pushed_sha"], result["committed_sha"])
+        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+
+    def test_commit_local_pushes_to_origin(self):
+        (self.prod / "local.txt").write_text("local work\n", encoding="utf-8")
+
+        result = self.service.commit_local("demo", trigger="dashboard")
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["committed_sha"])
+        self.assertEqual(result["pushed_sha"], result["committed_sha"])
+        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+
     def test_stash_restore_conflict_is_reported_without_clean_or_reset(self):
         # Same tracked line changes remotely and locally: pull itself is clean after
         # the stash, but restoring local M must conflict and the stash must remain.
