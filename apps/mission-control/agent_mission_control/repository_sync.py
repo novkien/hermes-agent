@@ -112,6 +112,9 @@ def default_repository_registry() -> dict[str, RepoSpec]:
     remote_ssh = (os.getenv("REPO_SYNC_REMOTE_SSH") or DEFAULT_REMOTE_SSH).strip()
     router_ssh = (os.getenv("REPO_SYNC_9ROUTER_SSH") or remote_ssh).strip()
     proxy_ssh = (os.getenv("REPO_SYNC_LLAMA_PROXY_SSH") or remote_ssh).strip()
+    hermes_agent_branch = (
+        (os.getenv("REPO_SYNC_HERMES_AGENT_BRANCH") or "master").strip() or "master"
+    )
 
     hermes_root = _repo_root()
     hermes_agent_paths = _env_path("REPO_SYNC_HERMES_AGENT_PATH", (str(hermes_root),))
@@ -154,7 +157,7 @@ def default_repository_registry() -> dict[str, RepoSpec]:
         "hermes-agent": RepoSpec(
             name="hermes-agent",
             repo_full_name="novkien/hermes-agent",
-            branch="main",
+            branch=hermes_agent_branch,
             path_candidates=hermes_agent_paths,
             upstream_repo="NousResearch/hermes-agent",
             private=False,
