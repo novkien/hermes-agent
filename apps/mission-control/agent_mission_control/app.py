@@ -31,6 +31,7 @@ from .correlation_providers import build_correlation_providers
 from .event_bus import EventBus
 from .ip_utils import resolve_client_ip
 from .pulse import Pulse
+from .repository_routes import build_repository_router
 from .routes import ApiError, Router
 from .run_inspector import RunInspector
 from .runner_manager import RunnerManager
@@ -306,10 +307,11 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
     # FIRST on request, so this is the outermost gate.
     app.middleware("http")(_AllowlistGate(deps.router).__call__)
 
-    # System Manager owns a dedicated BFF namespace. Register it before the
-    # core router because Router.build() contains a generic /api/{path:path}
-    # dashboard-read catch-all near the end of its route table.
+    # Dedicated native namespaces must be registered before the core router,
+    # whose generic /api/{path:path} dashboard-read catch-all appears near the
+    # end of its route table.
     app.include_router(build_system_manager_router(deps.router))
+    app.include_router(build_repository_router(deps.router))
     app.include_router(deps.router.build())
 
     # Lifespan: start source workers + alert tick + registry probe; stop
