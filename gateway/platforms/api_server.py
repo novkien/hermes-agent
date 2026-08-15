@@ -2947,11 +2947,15 @@ class APIServerAdapter(BasePlatformAdapter):
         # instead -- every custom provider collapses to "custom" -- so the two
         # are not comparable.  The confirmed-lock check in ``_run_agent`` used
         # to compare them anyway; see the note there.
-        applied_provider_name = _clean_request_string(runtime_kwargs.get("provider"))
+        runtime_provider_name = (
+            _clean_request_string(runtime_kwargs.get("requested_provider"))
+            or _clean_request_string(runtime_kwargs.get("provider"))
+        )
+        applied_provider_name = runtime_provider_name
         if session_override:
             override_model = resolve_effective_model(session_override, None, model)
             session_provider = _clean_request_string(session_override.get("provider"))
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            current_provider = runtime_provider_name
             provider_runtime = _resolve_provider_runtime(
                 session_provider or current_provider,
                 target_model=override_model,
@@ -2974,7 +2978,7 @@ class APIServerAdapter(BasePlatformAdapter):
             # alias).  Pins this session's turns ahead of per-request body
             # values — a session's chosen model is a standing selection,
             # matching the native gateway's session-model semantics.
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            current_provider = runtime_provider_name
             provider_runtime = _resolve_provider_runtime(
                 current_provider,
                 target_model=session_row_model,
@@ -2998,7 +3002,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 effective_model = route_model or model
             else:
                 effective_model = request_model or model
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            current_provider = runtime_provider_name
             effective_provider = request_provider or route_provider or current_provider
             provider_runtime = None
             if effective_provider and (

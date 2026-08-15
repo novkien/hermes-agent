@@ -438,6 +438,55 @@ def _patch_api_server_runtime(monkeypatch):
     )
 
 
+def test_session_model_refreshes_named_custom_provider_not_bare_kind(
+    adapter,
+    monkeypatch,
+):
+    _patch_api_server_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "gateway.run._resolve_runtime_agent_kwargs",
+        lambda: {
+            "provider": "custom",
+            "requested_provider": "9router",
+            "api_key": "profile-key",
+            "base_url": "http://9router.example/v1",
+            "api_mode": "chat_completions",
+        },
+    )
+    resolved = MagicMock(
+        return_value={
+            "provider": "custom",
+            "api_key": "profile-key",
+            "base_url": "http://9router.example/v1",
+            "api_mode": "chat_completions",
+        }
+    )
+    monkeypatch.setattr(
+        "gateway.platforms.api_server._resolve_request_runtime_agent_kwargs",
+        resolved,
+    )
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.provider = kwargs.get("provider")
+            self.model = kwargs.get("model")
+
+    monkeypatch.setattr("run_agent.AIAgent", FakeAgent)
+
+    adapter._create_agent(
+        session_id="profile-default-session",
+        requested_model="normal",
+        session_model="normal",
+    )
+
+    resolved.assert_called_once_with("9router", target_model="normal")
+    assert captured["provider"] == "custom"
+    assert captured["base_url"] == "http://9router.example/v1"
+    assert captured["api_key"] == "profile-key"
+
+
 @pytest.mark.asyncio
 async def test_create_session_respects_browser_source_and_model_lock(adapter, session_db):
     app = _create_session_app(adapter)
