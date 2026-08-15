@@ -129,7 +129,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-{identity}WorkingDirectory={_systemd_quote(ctx.data_root)}
+{identity}WorkingDirectory={ctx.data_root}
 {environment}ExecStart={_systemd_quote(ctx.python_path)} -m hermes_cli.mission_control
 Restart=on-failure
 RestartSec=3
@@ -138,7 +138,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths={_systemd_quote(ctx.data_root)}
+ReadWritePaths={ctx.data_root}
 StandardOutput=journal
 StandardError=journal
 

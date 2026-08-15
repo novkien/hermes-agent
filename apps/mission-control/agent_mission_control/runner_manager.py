@@ -28,8 +28,10 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import secrets
 import signal
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -37,6 +39,35 @@ from typing import Optional
 from .clients import GatewayClient
 
 logger = logging.getLogger("agent_mission_control.runner_manager")
+
+
+def _resolve_runner_executable(raw: str) -> str:
+    """Resolve a hermes executable safely for non-interactive service env.
+
+    Real deployments often start mission-control with a minimal PATH, so plain
+    ``hermes`` may be unavailable even when the active virtual environment has a
+    local binary. Fall back to the current interpreter's ``bin/hermes`` when PATH
+    resolution fails. This preserves compatibility with the simple env var while
+    making subprocess launch robust on services.
+    """
+    candidate = (raw or "").strip() or "hermes"
+    if os.path.isabs(candidate):
+        return candidate
+
+    found = shutil.which(candidate)
+    if found:
+        return found
+
+    local_in_venv = os.path.join(os.path.dirname(sys.executable), "hermes")
+    if os.path.isfile(local_in_venv) and os.access(local_in_venv, os.X_OK):
+        return local_in_venv
+
+    user_local = os.path.expanduser("~/") or ""
+    local_bin_candidate = os.path.join(user_local, ".local", "bin", "hermes")
+    if os.path.isfile(local_bin_candidate) and os.access(local_bin_candidate, os.X_OK):
+        return local_bin_candidate
+
+    return candidate
 
 # `serve` prints this line to stdout once uvicorn has bound its socket. The
 # legacy `dashboard` alternative spelling is accepted too (older runtimes);
@@ -72,6 +103,32 @@ async def _read_port_announcement(stdout: "asyncio.StreamReader") -> int:
         match = _READY_RE.match(text)
         if match:
             return int(match.group(1))
+
+
+async def _probe_health(
+    client: "GatewayClient", timeout_seconds: float
+) -> int:
+    """Probe health endpoints for isolated Hermes runner.
+
+    Some Hermes versions expose `/api/health`, while legacy runner wiring may
+    still use `/health`. Keep this resilient by trying both.
+    """
+    last_exception: Exception | None = None
+    for path in ("/api/health", "/health"):
+        try:
+            status, _, _ = await asyncio.wait_for(
+                client.get(path),
+                timeout=timeout_seconds,
+            )
+            return status
+        except Exception as exc:
+            last_exception = exc
+    if last_exception is None:
+        raise RuntimeError("hermes runner health probe did not try any endpoint")
+    raise RuntimeError(
+        f"hermes runner health probe failed for endpoints: "
+        f"/api/health and /health: {last_exception}"
+    )
 
 
 def _drain_stream(stream: "asyncio.StreamReader", label: str) -> "asyncio.Task":
@@ -120,7 +177,7 @@ class RunnerManager:
         reap_interval_seconds: float = 60.0,
         stop_grace_seconds: float = 5.0,
     ):
-        self._hermes_executable = hermes_executable
+        self._hermes_executable = _resolve_runner_executable(hermes_executable)
         self._host = host
         self._pool_max = max(1, pool_max)
         self._idle_seconds = idle_seconds
@@ -199,7 +256,8 @@ class RunnerManager:
             )
         except OSError as exc:
             raise RunnerSpawnError(
-                f"failed to spawn hermes serve for {entry.profile!r}: {exc}"
+                f"failed to spawn hermes serve for {entry.profile!r} "
+                f"using executable {self._hermes_executable!r}: {exc}"
             ) from exc
 
         entry.process = process
@@ -229,8 +287,8 @@ class RunnerManager:
         client = GatewayClient(base_url, token)
 
         try:
-            status, _, _ = await asyncio.wait_for(
-                client.get("/health"), timeout=self._health_probe_timeout_seconds
+            status = await _probe_health(
+                client, timeout_seconds=self._health_probe_timeout_seconds
             )
             if status >= 400:
                 raise RunnerSpawnError(
