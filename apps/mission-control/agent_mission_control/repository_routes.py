@@ -8,6 +8,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
+from .repository_runner import RepositoryGitRunner
 from .repository_sync import RepositorySyncError, RepositorySyncService
 from .security import build_request_summary
 
@@ -47,7 +48,7 @@ def build_repository_router(core: Any) -> APIRouter:
     """Build the six-repository control surface ahead of the generic catch-all."""
 
     router = APIRouter()
-    service = RepositorySyncService()
+    service = RepositorySyncService(runner=RepositoryGitRunner())
 
     def envelope(data: Any, request: Request, *, read_only: bool) -> JSONResponse:
         return JSONResponse(
