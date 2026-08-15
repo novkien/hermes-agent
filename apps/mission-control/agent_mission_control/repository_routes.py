@@ -63,7 +63,7 @@ def build_repository_router(core: Any) -> APIRouter:
                 mutations_supported=(
                     []
                     if read_only
-                    else ["sync", "commit", "sync_upstream", "rebase_merge_pr"]
+                    else ["sync", "commit", "rebase_merge_pr"]
                 ),
             )
         )
@@ -287,22 +287,11 @@ def build_repository_router(core: Any) -> APIRouter:
         rid = request.state.request_id
         if repo not in service.registry:
             return _json_error(404, "repo_unknown", "unknown repository", rid)
-        if not service.spec(repo).is_fork:
-            return _json_error(400, "not_a_fork", "repository has no configured upstream", rid)
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-        if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "JSON object required", rid)
-        auto_commit = _bool(body.get("auto_commit"), True)
-        return await run_mutation(
-            request,
-            action="repository.sync_upstream",
-            target=f"/api/repositories/{repo}/upstream-sync",
-            call=lambda: service.sync_upstream(
-                repo, trigger="dashboard", pull_after=True, auto_commit=auto_commit
-            ),
+        return _json_error(
+            409,
+            "upstream_disabled",
+            "upstream synchronization is disabled; only the configured fork origin may be pulled or pushed",
+            rid,
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/rebase-merge")

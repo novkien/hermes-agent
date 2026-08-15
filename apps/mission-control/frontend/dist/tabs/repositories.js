@@ -96,7 +96,7 @@ function operationNotice(action, operation) {
   if (!operation || operation.ok === false) return null;
   const after = operationAfter(operation);
   const ahead = Number(after?.ahead || 0);
-  if ((action === 'sync' || action === 'upstream') && ahead > 0 && !operationPushedSha(operation)) {
+  if (action === 'sync' && ahead > 0 && !operationPushedSha(operation)) {
     return {
       tone: 'warn',
       message: `Sync completed, but ${ahead} local commit${ahead === 1 ? '' : 's'} remain unpushed. Enable Auto-commit and run Safe sync again.`,
@@ -143,7 +143,7 @@ export function createRepositories({ api, profile, toolbar }) {
       if (!term) return true;
       const haystack = [
         repo.name, repo.repo_full_name, repo.branch, repo.path, repo.host,
-        repo.state, repo.upstream_repo, repo.origin_url,
+        repo.state, repo.origin_url,
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(term);
     });
@@ -340,7 +340,6 @@ export function createRepositories({ api, profile, toolbar }) {
     const failures = conflictFiles(repo);
     const error = repoError(repo);
     const prs = Array.isArray(repo.pull_requests) ? repo.pull_requests : [];
-    const drift = repo.upstream_drift;
     const card = el('article', {
       class: `repo-card${selected ? ' is-selected' : ''}${ATTENTION_STATES.has(repo.state) ? ' has-attention' : ''}`,
       tabindex: '0',
@@ -431,11 +430,6 @@ export function createRepositories({ api, profile, toolbar }) {
         el('strong', { text: error.code || 'Repository error' }),
         el('span', { text: error.message || 'Open inspector for details' }),
       ]));
-    } else if (repo.fork && drift && Number(drift.behind_by || 0) > 0) {
-      notices.push(el('div', { class: 'repo-notice repo-notice-warn' }, [
-        el('strong', { text: 'Upstream update available' }),
-        el('span', { text: `${drift.behind_by} commit${drift.behind_by === 1 ? '' : 's'} behind ${repo.upstream_repo}` }),
-      ]));
     }
 
     const foot = el('div', { class: 'repo-card-foot' }, [
@@ -453,10 +447,6 @@ export function createRepositories({ api, profile, toolbar }) {
           class: 'btn btn-sm', type: 'button', disabled: pending ? '' : undefined,
           onclick: () => runRepoAction(repo, 'commit', {}),
         }, 'Commit local') : null,
-        repo.fork ? el('button', {
-          class: 'btn btn-sm btn-accent', type: 'button', disabled: pending ? '' : undefined,
-          onclick: () => runRepoAction(repo, 'upstream'),
-        }, 'Sync upstream') : null,
       ].filter(Boolean)),
     ]);
 
@@ -634,7 +624,6 @@ export function createRepositories({ api, profile, toolbar }) {
     }
     const dirty = repo.working_tree || {};
     const op = repo.last_operation || null;
-    const drift = repo.upstream_drift;
     const pending = activeRepos.has(repo.name) || syncingAll;
 
     inspectorHost.append(
@@ -658,17 +647,6 @@ export function createRepositories({ api, profile, toolbar }) {
           : 'Clean'),
       ]),
       conflictPanel(repo),
-      repo.fork ? sideSection('Fork upstream', [
-        kv('Upstream', repo.upstream_repo, { mono: true }),
-        kv('Fork ahead', drift?.ahead_by ?? '—'),
-        kv('Fork behind', drift?.behind_by ?? '—', { tone: Number(drift?.behind_by || 0) > 0 ? 'is-warn' : '' }),
-        el('button', {
-          class: 'btn btn-sm btn-accent repo-side-action', type: 'button',
-          disabled: pending ? '' : undefined,
-          'aria-busy': pending ? 'true' : undefined,
-          onclick: () => runRepoAction(repo, 'upstream'),
-        }, pending && activeRepos.has(repo.name) ? 'Syncing…' : 'Sync fork from upstream'),
-      ]) : null,
       pullRequestSection(repo),
       pending ? sideSection('Operation in progress', [
         el('div', { class: 'repo-side-alert repo-side-alert-info' }, [

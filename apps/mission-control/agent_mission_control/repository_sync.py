@@ -8,6 +8,11 @@ The same engine is used by:
 - ``tools/repo_sync.py`` for cron/manual execution;
 - a future hook that can invoke the CLI early with ``--trigger hook``.
 
+Fork safety contract:
+- Git fetch/pull/push and ahead/behind comparisons use only ``origin/<branch>``;
+- GitHub PR reads and merges target the configured fork repository;
+- upstream GitHub compare and merge-upstream operations are disabled.
+
 Safety contract for ``sync``:
 1. fetch the configured default branch;
 2. refuse pre-existing merge conflicts or the wrong checked-out branch;
@@ -39,7 +44,7 @@ import subprocess
 import time
 from typing import Any, Iterable, Iterator
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 
 
@@ -379,31 +384,15 @@ class GitHubRestClient:
         return payload
 
     def sync_fork(self, spec: RepoSpec) -> dict[str, Any]:
-        if not spec.upstream_repo:
-            raise RepositorySyncError("not_a_fork", f"{spec.name} has no configured upstream")
-        payload = self.request(
-            "POST", f"/repos/{spec.repo_full_name}/merge-upstream", {"branch": spec.branch}
+        raise RepositorySyncError(
+            "upstream_disabled",
+            "upstream synchronization is disabled; only the configured fork origin may be pulled or pushed",
         )
-        return payload if isinstance(payload, dict) else {"result": payload}
 
     def fork_drift(self, spec: RepoSpec) -> dict[str, Any] | None:
-        if not spec.upstream_repo:
-            return None
-        upstream_owner, _ = spec.upstream_repo.split("/", 1)
-        base = quote(spec.branch, safe="")
-        head = quote(f"{spec.repo_full_name.split('/', 1)[0]}:{spec.branch}", safe=":")
-        try:
-            payload = self.request(
-                "GET", f"/repos/{spec.upstream_repo}/compare/{base}...{head}"
-            )
-        except GitHubApiError as exc:
-            return {"status": "unavailable", "error": exc.code, "message": str(exc)}
-        return {
-            "status": payload.get("status"),
-            "ahead_by": payload.get("ahead_by"),
-            "behind_by": payload.get("behind_by"),
-            "total_commits": payload.get("total_commits"),
-        }
+        # Upstream comparisons are intentionally disabled. Repository status
+        # already reports ahead/behind against origin/<branch>, the fork remote.
+        return None
 
 
 class GitRunner:
@@ -676,7 +665,10 @@ class RepositorySyncService:
             try:
                 base["pull_requests"] = self.github.open_pulls(spec)
                 base["github_available"] = True
-                base["upstream_drift"] = self.github.fork_drift(spec)
+                # Never compare against or contact an upstream repository. Git
+                # ahead/behind above is calculated exclusively from origin/<branch>,
+                # which is the configured fork remote for forked repositories.
+                base["upstream_drift"] = None
             except RepositorySyncError as exc:
                 base["github_available"] = False
                 base["github_error"] = {"code": exc.code, "message": str(exc)}
@@ -1078,20 +1070,16 @@ class RepositorySyncService:
     ) -> dict[str, Any]:
         spec = self.spec(name)
         event = self._event_base(spec, "sync_upstream", trigger)
-        try:
-            payload = self.github.sync_fork(spec)
-            event = self._finish_event(event, ok=True, status="ok", github=payload)
-        except RepositorySyncError as exc:
-            return self._finish_event(
-                event, ok=False, status="error",
-                error={"code": exc.code, "message": str(exc), "details": exc.details},
-            )
-        if pull_after:
-            event["production_sync"] = self.sync(
-                name, auto_commit=auto_commit, trigger=f"{trigger}:upstream-sync"
-            )
-            event["ok"] = bool(event["ok"] and event["production_sync"].get("ok"))
-        return event
+        return self._finish_event(
+            event,
+            ok=False,
+            status="error",
+            error={
+                "code": "upstream_disabled",
+                "message": "upstream synchronization is disabled; only the configured fork origin may be pulled or pushed",
+                "details": {"repo": spec.repo_full_name, "branch": spec.branch},
+            },
+        )
 
     def merge_pull_request_rebase(
         self,

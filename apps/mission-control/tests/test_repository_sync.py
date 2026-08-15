@@ -32,7 +32,7 @@ class OfflineGithub:
         return []
 
     def fork_drift(self, _spec):
-        return None
+        raise AssertionError("upstream drift must never be queried")
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -179,6 +179,15 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertTrue(result["committed_sha"])
         self.assertEqual(result["pushed_sha"], result["committed_sha"])
         self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+
+    def test_status_does_not_query_upstream_drift(self):
+        status = self.service.status("demo", fetch=False, include_github=True)
+        self.assertIsNone(status["upstream_drift"])
+
+    def test_upstream_sync_is_blocked_without_github_call(self):
+        result = self.service.sync_upstream("demo")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "upstream_disabled")
 
     def test_auto_commit_pushes_staged_and_untracked_local_changes(self):
         (self.prod / "base.txt").write_text("base\nstaged work\n", encoding="utf-8")
