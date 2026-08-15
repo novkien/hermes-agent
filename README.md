@@ -317,13 +317,13 @@ The private repository maps directly to the existing runtime skill paths:
 | `workspace/skills-pack/` | `/home/jarvis/.hermes/workspace/skills-pack/` |
 
 Normal repository-tracked skill work uses a branch and pull request. After an
-authorized merge, Bridge deploys the selected `main` commit using:
+authorized merge, Bridge deploys the selected `master` commit using:
 
 ```bash
 git \
   --git-dir=/home/jarvis/.hermes/repos/hermes-skills.git \
   --work-tree=/home/jarvis/.hermes \
-  pull --ff-only origin main
+  pull --ff-only origin master
 ```
 
 The linked worktree must be clean and the update must be a fast-forward. Bridge must
