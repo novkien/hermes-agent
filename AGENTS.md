@@ -114,9 +114,9 @@ separate standalone BFF-health implementation.
 Systemd operations:
 
 ```bash
-sudo systemctl restart agent-mission-control
-sudo systemctl status agent-mission-control --no-pager
-sudo journalctl -u agent-mission-control -f
+systemctl --user restart hermes-mission-control
+systemctl --user status hermes-mission-control --no-pager
+journalctl --user -u hermes-mission-control -f
 ```
 
 Do not claim a restart or healthy deployment without the corresponding runtime result.
