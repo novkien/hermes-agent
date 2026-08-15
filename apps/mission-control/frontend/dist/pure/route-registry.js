@@ -28,7 +28,7 @@ export const ROUTES = Object.freeze({
   threads: route('threads', 'Threads', { group: 'GOVERN', module: 'tabs/threads.js', readOnly: false }),
   'action-audit': route('action-audit', 'Action Audit', { group: 'GOVERN', placeholder: true }),
 
-  // BUILD & INTEGRATE — Stage 7 placeholders
+  // BUILD & INTEGRATE — Stage 7 placeholders + repository control surface
   skills: route('skills', 'Skills', { group: 'BUILD & INTEGRATE', placeholder: true }),
   memory: route('memory', 'Memory', { group: 'BUILD & INTEGRATE', placeholder: true }),
   profiles: route('profiles', 'Profiles', { group: 'BUILD & INTEGRATE', placeholder: true }),
@@ -36,6 +36,9 @@ export const ROUTES = Object.freeze({
   tools: route('tools', 'Tools / Toolsets', { group: 'BUILD & INTEGRATE', placeholder: true }),
   mcp: route('mcp', 'MCP', { group: 'BUILD & INTEGRATE', placeholder: true }),
   plugins: route('plugins', 'Plugins', { group: 'BUILD & INTEGRATE', placeholder: true }),
+  repositories: route('repositories', 'Repositories', {
+    group: 'BUILD & INTEGRATE', module: 'tabs/repositories.js', readOnly: false,
+  }),
   webhooks: route('webhooks', 'Webhooks', { group: 'BUILD & INTEGRATE', placeholder: true }),
   channels: route('channels', 'Channels / Messaging', { group: 'BUILD & INTEGRATE', placeholder: true }),
   artifacts: route('artifacts', 'Artifacts', { group: 'BUILD & INTEGRATE', placeholder: true }),
