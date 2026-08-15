@@ -84,6 +84,30 @@ function operationFailure(operation) {
   return operation.error || operation.production_sync?.error || null;
 }
 
+function operationAfter(operation) {
+  return operation?.after || operation?.production_sync?.after || null;
+}
+
+function operationPushedSha(operation) {
+  return operation?.pushed_sha || operation?.production_sync?.pushed_sha || null;
+}
+
+function operationNotice(action, operation) {
+  if (!operation || operation.ok === false) return null;
+  const after = operationAfter(operation);
+  const ahead = Number(after?.ahead || 0);
+  if ((action === 'sync' || action === 'upstream') && ahead > 0 && !operationPushedSha(operation)) {
+    return {
+      tone: 'warn',
+      message: `Sync completed, but ${ahead} local commit${ahead === 1 ? '' : 's'} remain unpushed. Enable Auto-commit and run Safe sync again.`,
+    };
+  }
+  if (action === 'sync' && operationPushedSha(operation)) {
+    return { tone: 'ok', message: 'Safe sync completed and local commits were pushed to origin.' };
+  }
+  return { tone: 'ok', message: 'Repository operation completed successfully.' };
+}
+
 export function createRepositories({ api, profile, toolbar }) {
   const root = el('div', { class: 'tab tab-repositories' });
   const page = el('div', { class: 'repo-page' });
@@ -100,9 +124,12 @@ export function createRepositories({ api, profile, toolbar }) {
   let loading = false;
   let loadError = null;
   let actionError = null;
+  let actionNotice = null;
   let inspectorHost = null;
   let pollTimer = null;
   let refreshing = false;
+  let syncingAll = false;
+  const activeRepos = new Set();
 
   function selectedRepo() {
     return repositories.find((repo) => repo.name === selectedName) || repositories[0] || null;
@@ -193,9 +220,11 @@ export function createRepositories({ api, profile, toolbar }) {
   }
 
   async function runRepoAction(repo, action, extra = {}) {
-    if (!repo) return;
+    if (!repo || activeRepos.has(repo.name) || syncingAll) return;
     selectedName = repo.name;
     actionError = null;
+    actionNotice = null;
+    activeRepos.add(repo.name);
     renderMain();
     renderSide();
     try {
@@ -209,8 +238,10 @@ export function createRepositories({ api, profile, toolbar }) {
       const operation = response.data || {};
       const failed = operationFailure(operation);
       if (failed) actionError = failed;
+      const notice = operationNotice(action, operation);
       await load({ refresh: true });
       if (failed) actionError = failed;
+      else actionNotice = notice;
     } catch (err) {
       actionError = {
         code: err?.payload?.error?.code || 'request_failed',
@@ -219,19 +250,22 @@ export function createRepositories({ api, profile, toolbar }) {
       };
       renderSide();
     } finally {
+      activeRepos.delete(repo.name);
       renderMain();
       renderSide();
     }
   }
 
   async function rebaseMerge(repo, pull) {
-    if (!repo || !pull || pull.draft) return;
+    if (!repo || !pull || pull.draft || activeRepos.has(repo.name) || syncingAll) return;
     const confirmed = window.confirm(
       `Rebase and merge PR #${pull.number} into ${repo.repo_full_name}:${repo.branch}?`,
     );
     if (!confirmed) return;
     selectedName = repo.name;
     actionError = null;
+    actionNotice = null;
+    activeRepos.add(repo.name);
     renderMain();
     renderSide();
     try {
@@ -252,13 +286,17 @@ export function createRepositories({ api, profile, toolbar }) {
         details: err?.payload?.error?.details || null,
       };
     } finally {
+      activeRepos.delete(repo.name);
       renderMain();
       renderSide();
     }
   }
 
   async function syncAll() {
+    if (syncingAll || activeRepos.size) return;
+    syncingAll = true;
     actionError = null;
+    actionNotice = null;
     renderToolbar(toolbar);
     try {
       const response = await api.post(
@@ -274,11 +312,14 @@ export function createRepositories({ api, profile, toolbar }) {
       }
       await load({ refresh: true });
       if (failed) actionError = failed.error || actionError;
+      else actionNotice = { tone: 'ok', message: 'Sync all completed successfully.' };
     } catch (err) {
       actionError = { code: 'request_failed', message: err.message || 'sync all failed' };
     } finally {
+      syncingAll = false;
       renderToolbar(toolbar);
       renderSide();
+      renderMain();
     }
   }
 
@@ -292,6 +333,7 @@ export function createRepositories({ api, profile, toolbar }) {
 
   function repoCard(repo) {
     const selected = repo.name === selectedName;
+    const pending = activeRepos.has(repo.name) || syncingAll;
     const dirty = repo.working_tree || {};
     const failures = conflictFiles(repo);
     const error = repoError(repo);
@@ -401,15 +443,16 @@ export function createRepositories({ api, profile, toolbar }) {
       ]),
       el('div', { class: 'repo-card-actions' }, [
         el('button', {
-          class: 'btn btn-sm btn-primary', type: 'button',
+          class: 'btn btn-sm btn-primary', type: 'button', disabled: pending ? '' : undefined,
+          'aria-busy': pending ? 'true' : undefined,
           onclick: () => runRepoAction(repo, 'sync'),
-        }, 'Safe sync'),
+        }, pending && activeRepos.has(repo.name) ? 'Syncing…' : 'Safe sync'),
         dirty.dirty ? el('button', {
-          class: 'btn btn-sm', type: 'button',
+          class: 'btn btn-sm', type: 'button', disabled: pending ? '' : undefined,
           onclick: () => runRepoAction(repo, 'commit', {}),
         }, 'Commit local') : null,
         repo.fork ? el('button', {
-          class: 'btn btn-sm btn-accent', type: 'button',
+          class: 'btn btn-sm btn-accent', type: 'button', disabled: pending ? '' : undefined,
           onclick: () => runRepoAction(repo, 'upstream'),
         }, 'Sync upstream') : null,
       ].filter(Boolean)),
@@ -462,6 +505,12 @@ export function createRepositories({ api, profile, toolbar }) {
         el('span', { text: loadError.message || 'The last refresh failed; showing retained state.' }),
       ]));
     }
+    if (actionNotice) {
+      page.append(el('div', { class: `repo-banner repo-banner-${actionNotice.tone || 'info'}` }, [
+        el('strong', { text: actionNotice.tone === 'warn' ? 'Action needs attention' : 'Repository action' }),
+        el('span', { text: actionNotice.message }),
+      ]));
+    }
 
     const visible = visibleRepos();
     if (!visible.length) {
@@ -475,9 +524,12 @@ export function createRepositories({ api, profile, toolbar }) {
 
   function toolbarSelect(label, checked, onChange) {
     const input = el('input', {
-      type: 'checkbox', checked,
+      type: 'checkbox',
       onchange: (event) => onChange(Boolean(event.target.checked)),
     });
+    // `checked="false"` is still a checked HTML boolean attribute. Set the
+    // property so the visual control cannot drift from the closure state.
+    input.checked = Boolean(checked);
     return el('label', { class: 'repo-toolbar-toggle' }, [input, el('span', { text: label })]);
   }
 
@@ -508,8 +560,10 @@ export function createRepositories({ api, profile, toolbar }) {
       }),
       el('button', {
         class: 'btn btn-sm btn-primary', type: 'button',
+        disabled: syncingAll || activeRepos.size ? '' : undefined,
+        'aria-busy': syncingAll ? 'true' : undefined,
         onclick: () => syncAll(),
-      }, 'Sync all'),
+      }, syncingAll ? 'Syncing…' : 'Sync all'),
     );
   }
 
@@ -579,6 +633,7 @@ export function createRepositories({ api, profile, toolbar }) {
     const dirty = repo.working_tree || {};
     const op = repo.last_operation || null;
     const drift = repo.upstream_drift;
+    const pending = activeRepos.has(repo.name) || syncingAll;
 
     inspectorHost.append(
       el('div', { class: 'repo-side-head' }, [
@@ -607,10 +662,18 @@ export function createRepositories({ api, profile, toolbar }) {
         kv('Fork behind', drift?.behind_by ?? '—', { tone: Number(drift?.behind_by || 0) > 0 ? 'is-warn' : '' }),
         el('button', {
           class: 'btn btn-sm btn-accent repo-side-action', type: 'button',
+          disabled: pending ? '' : undefined,
+          'aria-busy': pending ? 'true' : undefined,
           onclick: () => runRepoAction(repo, 'upstream'),
-        }, 'Sync fork from upstream'),
+        }, pending && activeRepos.has(repo.name) ? 'Syncing…' : 'Sync fork from upstream'),
       ]) : null,
       pullRequestSection(repo),
+      pending ? sideSection('Operation in progress', [
+        el('div', { class: 'repo-side-alert repo-side-alert-info' }, [
+          el('strong', { text: 'Working…' }),
+          el('div', { text: 'Safe sync is running. Duplicate clicks are disabled until it finishes.' }),
+        ]),
+      ]) : null,
       sideSection('Latest operation', op ? [
         kv('Action', op.action),
         kv('Trigger', op.trigger),
@@ -655,10 +718,12 @@ export function createRepositories({ api, profile, toolbar }) {
       el('div', { class: 'repo-side-footer-actions' }, [
         el('button', {
           class: 'btn btn-sm btn-primary', type: 'button',
+          disabled: pending ? '' : undefined,
+          'aria-busy': pending ? 'true' : undefined,
           onclick: () => runRepoAction(repo, 'sync'),
-        }, 'Safe sync now'),
+        }, pending && activeRepos.has(repo.name) ? 'Syncing…' : 'Safe sync now'),
         dirty.dirty ? el('button', {
-          class: 'btn btn-sm', type: 'button',
+          class: 'btn btn-sm', type: 'button', disabled: pending ? '' : undefined,
           onclick: () => runRepoAction(repo, 'commit'),
         }, 'Commit local changes') : null,
       ].filter(Boolean)),
