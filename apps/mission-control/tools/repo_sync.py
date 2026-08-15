@@ -14,8 +14,8 @@ MISSION_CONTROL_ROOT = Path(__file__).resolve().parents[1]
 if str(MISSION_CONTROL_ROOT) not in sys.path:
     sys.path.insert(0, str(MISSION_CONTROL_ROOT))
 
+from agent_mission_control.repository_runner import RepositoryGitRunner  # noqa: E402
 from agent_mission_control.repository_sync import (  # noqa: E402
-    GitRunner,
     GitHubRestClient,
     OperationStore,
     RepositorySyncError,
@@ -120,7 +120,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     registry = default_repository_registry()
     service = RepositorySyncService(
         registry,
-        runner=GitRunner(timeout=args.timeout),
+        runner=RepositoryGitRunner(timeout=args.timeout),
         store=OperationStore(),
         github=GitHubRestClient(timeout=min(args.timeout, 30)),
         timeout=args.timeout,
