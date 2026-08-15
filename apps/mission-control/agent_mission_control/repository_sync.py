@@ -425,7 +425,7 @@ class GitRunner:
                     f"if git -C {q} rev-parse --is-inside-work-tree >/dev/null 2>&1; "
                     f"then printf '%s\\n' {q}; exit 0; fi"
                 )
-            remote = "; ".join(checks) + "; exit 4"
+            remote = shlex.quote("; ".join(checks) + "; exit 4")
             result = self._run_process(
                 [
                     "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
