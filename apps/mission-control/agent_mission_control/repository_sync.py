@@ -976,7 +976,11 @@ class RepositorySyncService:
                                 details={"returncode": committed.returncode},
                             )
                         committed_sha = self._run_ok(spec, "rev-parse", "HEAD")
-                    pushed_sha = self._push_if_ahead(spec)
+
+                # Safe sync always publishes commits that already exist locally.
+                # `auto_commit` only governs whether restored working-tree changes
+                # are turned into a new commit automatically.
+                pushed_sha = self._push_if_ahead(spec)
 
                 after = self.status(
                     name, fetch=False, include_github=False, include_last_operation=False

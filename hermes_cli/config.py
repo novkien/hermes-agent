@@ -246,7 +246,7 @@ _LAST_EXPANDED_CONFIG_BY_PATH: Dict[str, Any] = {}
 # editing the managed-scope config.yaml invalidates the cache (see
 # managed_scope), and the env snapshot invalidates it when a referenced ${VAR}
 # changes value (late .env load, in-process rotation — #58514).
-_LOAD_CONFIG_CACHE: Dict[str, Tuple[int, int, int, int, Dict[str, Any], Dict[str, Optional[str]]]] = {}
+_LOAD_CONFIG_CACHE: Dict[str, Tuple[int, int, int, int, int, int, Dict[str, Any], Dict[str, Optional[str]]]] = {}
 # (path, mtime_ns, size) -> cached raw yaml dict. Same pattern as
 # _LOAD_CONFIG_CACHE but for read_raw_config() — used when callers want
 # the user's on-disk values without defaults merged in.
@@ -696,6 +696,74 @@ from utils import atomic_replace, fast_safe_load
 def get_config_path() -> Path:
     """Get the main config file path."""
     return get_hermes_home() / "config.yaml"
+
+
+# Keys that profiles must NOT inherit from the root config.yaml.  Telegram
+# room wiring, per-channel prompt overrides and per-thread model overrides
+# belong to the root gateway; profiles keep their own ``telegram`` block and
+# never inherit root channel/prompt overrides.
+_PROFILE_INHERIT_STRIPPED_KEYS = ("telegram", "platforms", "session")
+
+
+def _profile_root_config_path() -> Optional[Path]:
+    """Return the root config.yaml path when the active home is a named profile.
+
+    A named profile lives under ``<root>/profiles/<name>/``; the root config is
+    the sibling ``<root>/config.yaml``. Returns None for the root home itself
+    and for any other layout.
+    """
+    home = get_hermes_home()
+    try:
+        parent = home.parent
+        if parent.name != "profiles":
+            return None
+        root_config = parent.parent / "config.yaml"
+        return root_config if root_config.exists() else None
+    except Exception:
+        return None
+
+
+def _strip_inherited_root_keys(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove telegram-scoped keys from an inherited root config layer.
+
+    Profiles inherit general config keys from root but keep their own
+    ``telegram`` block; root channel/prompt overrides and per-thread model
+    overrides must never leak into a profile's effective config.
+    """
+    out = {k: v for k, v in cfg.items() if k not in _PROFILE_INHERIT_STRIPPED_KEYS}
+    sessions = out.get("sessions")
+    if isinstance(sessions, dict):
+        out["sessions"] = {
+            k: v
+            for k, v in sessions.items()
+            if k != "channel_overrides" and not (isinstance(k, str) and k.isdigit())
+        }
+    return out
+
+
+def _config_inherits_root(user_config: Any) -> bool:
+    """True when a profile config opts into root inheritance.
+
+    Absence of ``inherit_root_config`` means inherit (default). A profile can
+    opt out with ``inherit_root_config: false``.
+    """
+    return bool(user_config.get("inherit_root_config", True)) if isinstance(user_config, dict) else True
+
+
+def _load_profile_root_layer() -> Optional[Dict[str, Any]]:
+    """Load the stripped root config layer for profile inheritance, or None."""
+    root_path = _profile_root_config_path()
+    if root_path is None:
+        return None
+    try:
+        with open(root_path, encoding="utf-8") as f:
+            raw = fast_safe_load(f) or {}
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return _strip_inherited_root_keys(raw)
+
 
 def get_env_path() -> Path:
     """Get the .env file path (for API keys)."""
@@ -2480,6 +2548,40 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     return results
 
 
+def _strip_inherited_values(
+    profile_cfg: Dict[str, Any],
+    root_layer: Dict[str, Any],
+    explicit_paths: Set[Tuple[str, ...]],
+) -> Dict[str, Any]:
+    """Remove root-inherited values from a profile config before saving.
+
+    Values equal to the inherited root layer are dropped so a profile save
+    (``hermes config set`` etc.) does not materialize root keys into the
+    profile's own config.yaml. Paths the profile explicitly set are always
+    preserved.
+    """
+
+    def _walk(cfg: Any, root: Any, prefix: Tuple[str, ...]) -> Any:
+        if not isinstance(cfg, dict) or not isinstance(root, dict):
+            return cfg
+        result: Dict[str, Any] = {}
+        for k, v in cfg.items():
+            path = prefix + (k,)
+            if path in explicit_paths or k not in root:
+                result[k] = v
+                continue
+            rv = root[k]
+            if isinstance(v, dict) and isinstance(rv, dict):
+                sub = _walk(v, rv, path)
+                if sub:
+                    result[k] = sub
+            elif v != rv:
+                result[k] = v
+        return result
+
+    return _walk(profile_cfg, root_layer, ())  # type: ignore[return-value]
+
+
 def _merge_partial_save(raw: dict, override: dict) -> dict:
     """Merge *override* over *raw* for partial ``save_config`` writes.
 
@@ -3431,30 +3533,46 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
         except OSError:
             managed_sig = (0, 0)
 
-        # Combined cache signature: user file + managed file. None only when the
-        # user config is absent AND no managed file exists (nothing to cache on).
+        # Profile inheritance: a profile's effective config also depends on the
+        # root config.yaml layer (non-telegram keys), so fold the root file's
+        # (mtime, size) into the cache signature too.
+        inherit_root_path = _profile_root_config_path()
+        if inherit_root_path is not None:
+            try:
+                rst = inherit_root_path.stat()
+                root_sig = (rst.st_mtime_ns, rst.st_size)
+            except OSError:
+                root_sig = (0, 0)
+        else:
+            root_sig = (0, 0)
+
+        # Combined cache signature: user file + managed file + root layer.
+        # None only when the user config is absent AND no managed file exists
+        # (nothing to cache on).
         if user_sig is not None:
-            cache_sig: Optional[Tuple[int, int, int, int]] = (
+            cache_sig: Optional[Tuple[int, int, int, int, int, int]] = (
                 user_sig[0],
                 user_sig[1],
                 managed_sig[0],
                 managed_sig[1],
+                root_sig[0],
+                root_sig[1],
             )
         elif managed_sig != (0, 0):
-            cache_sig = (0, 0, managed_sig[0], managed_sig[1])
+            cache_sig = (0, 0, managed_sig[0], managed_sig[1], 0, 0)
         else:
             cache_sig = None
 
         cached = _LOAD_CONFIG_CACHE.get(path_key)
-        if cached is not None and cache_sig is not None and cached[:4] == cache_sig:
+        if cached is not None and cache_sig is not None and cached[:len(cache_sig)] == cache_sig:
             # File signatures match, but the cached expansion is only valid if
             # every ${VAR} it was expanded against still has the same value.
             # Without this, a load_config() that ran before load_hermes_dotenv()
             # pins unexpanded literals (e.g. auxiliary.<task>.api_key) for the
             # life of the process (#58514).
-            env_snapshot = cached[5] if len(cached) > 5 else {}
+            env_snapshot = cached[7] if len(cached) > 7 else {}
             if all(os.environ.get(k) == v for k, v in env_snapshot.items()):
-                return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
+                return copy.deepcopy(cached[6]) if want_deepcopy else cached[6]
 
         config = copy.deepcopy(DEFAULT_CONFIG)
 
@@ -3471,6 +3589,17 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                     user_config.pop("max_turns", None)
 
                 config = _deep_merge(config, user_config)
+
+                # Profile inheritance: profiles inherit every non-telegram key
+                # from the root config.yaml, with their own file winning on
+                # conflict. Root channel/prompt overrides and per-thread model
+                # overrides are stripped so they never leak into profiles.
+                # A profile opts out with ``inherit_root_config: false``.
+                if _config_inherits_root(user_config):
+                    root_layer = _load_profile_root_layer()
+                    if root_layer:
+                        config = _deep_merge(config, root_layer)
+                        config = _deep_merge(config, user_config)
             except Exception as e:
                 # Last-known-good fallback (port of openai/codex#31188's
                 # invariant: a parse failure in a policy/config file must not
@@ -3508,6 +3637,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                         _LOAD_CONFIG_CACHE[path_key] = (
                             cache_sig[0], cache_sig[1],
                             cache_sig[2], cache_sig[3],
+                            cache_sig[4], cache_sig[5],
                             lkg_copy, _empty_env,
                         )
                     return copy.deepcopy(lkg_copy) if want_deepcopy else lkg_copy
@@ -3529,10 +3659,11 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # (deepcopy=True) callers can mutate freely without affecting the
             # cached value, and ``load_config_readonly()`` (deepcopy=False)
             # callers all see the same stable cached object. The cached tuple is
-            # (user_mtime, user_size, managed_mtime, managed_size, value,
-            # env_ref_snapshot). The snapshot records the environment values
-            # this expansion was made against so later loads can detect env
-            # drift (late .env load, in-process rotation) — see cache hit above.
+            # (user_mtime, user_size, managed_mtime, managed_size, root_mtime,
+            # root_size, value, env_ref_snapshot). The snapshot records the
+            # environment values this expansion was made against so later loads
+            # can detect env drift (late .env load, in-process rotation) — see
+            # cache hit above.
             cached_copy = copy.deepcopy(expanded)
             env_snapshot = _env_ref_snapshot(normalized)
             if managed_config:
@@ -3718,6 +3849,21 @@ def save_config(
                 DEFAULT_CONFIG,
                 preserve_keys=effective_preserve_keys,
             )
+
+        # Profile inheritance: drop values that came from the root layer so a
+        # save does not materialize inherited keys into the profile's own
+        # config.yaml (keeps the inheritance durable). Explicitly-set profile
+        # paths are always preserved.
+        if isinstance(normalized, dict) and _config_inherits_root(
+            _raw_for_paths if isinstance(_raw_for_paths, dict) else {}
+        ):
+            root_layer = _load_profile_root_layer()
+            if root_layer:
+                normalized = _strip_inherited_values(
+                    normalized,
+                    root_layer,
+                    explicit_raw_paths or set(),
+                )
 
         # Build optional commented-out sections for features that are off by
         # default or only relevant when explicitly configured.

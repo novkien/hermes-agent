@@ -167,8 +167,10 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertTrue((self.prod / "remote.txt").exists())
         status = self.service.status("demo", fetch=False, include_github=False)
         self.assertEqual(status["behind"], 0)
-        self.assertEqual(status["ahead"], 1)
+        self.assertEqual(status["ahead"], 0)
+        self.assertEqual(result["pushed_sha"], git(self.prod, "rev-parse", "HEAD"))
         self.assertNotEqual(git(self.prod, "rev-parse", "HEAD"), remote_head)
+        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
 
     def test_auto_commit_pushes_restored_local_changes_after_safe_sync(self):
         (self.prod / "base.txt").write_text("base\nlocal work\n", encoding="utf-8")
