@@ -397,7 +397,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
       svgEl('text', { class: 'topo-room-sub', x: roomX + 14, y: roomY + 31, text: model.roomChatId || 'unknown chat id' }),
       svgEl('text', {
         class: 'topo-room-sub', x: roomX + roomW - 14, y: roomY + 24, 'text-anchor': 'end',
-        text: `${model.totals.live} live · ${model.totals.occupied}/${model.totals.seats} seats`,
+        text: `${model.totals.live} open sessions · ${model.totals.occupied}/${model.totals.seats} seats`,
       }),
     ]));
     const roomCx = roomX + roomW / 2;
@@ -581,7 +581,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
           text: `${model.slotTrees.length} slots · CEO → 3 managers → developers/cards`,
         }),
         el('span', { class: 'legend' }, [
-          el('span', { class: 'legend-item legend-live', text: 'live' }),
+          el('span', { class: 'legend-item legend-live', text: 'open session' }),
           el('span', { class: 'legend-item legend-idle', text: 'occupied' }),
           el('span', { class: 'legend-item legend-free', text: 'free' }),
         ]),
@@ -707,7 +707,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
     paint(inspectorHost, createDetail({
       title,
       chips: [
-        statusChip(seat.live ? 'ok' : session ? 'info' : 'idle', seat.live ? 'live' : session ? 'occupied' : 'free'),
+        statusChip(seat.live ? 'ok' : session ? 'info' : 'idle', seat.live ? 'open' : session ? 'occupied' : 'free'),
         seat.running ? statusChip('accent', `${seat.running} running`) : null,
         binding?.task_id ? statusChip(binding.live ? 'accent' : 'idle', binding.live ? 'task bound' : 'idle slot') : null,
       ].filter(Boolean),
@@ -767,7 +767,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
     if (!selected) {
       paint(inspectorHost, sideHint('Room topology', [
         'Each slot is a CEO over three managers (coder, research, system); a manager branches into its developers and the kanban cards it created.',
-        'A seat is occupied when a session exists on its thread, and live when that session is still active upstream.',
+        'A seat is occupied when a session exists on its thread, and open when that session is still active upstream. This is not an in-flight run indicator.',
         'Drag to pan, scroll to zoom. Select any node to see its detail here.',
       ]));
       return;
@@ -942,7 +942,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
     paint(host, tabToolbar({
       title: 'Fleet / Topology',
       subtitle: model
-        ? `${model.totals.live} live · ${model.totals.occupied}/${model.totals.seats} seats · ${model.totals.tasks} tasks`
+        ? `${model.totals.live} open sessions · ${model.totals.occupied}/${model.totals.seats} seats · ${model.totals.tasks} tasks`
         : 'room slots, seats, sessions and their tasks',
       onRefresh: () => load(),
       meta,

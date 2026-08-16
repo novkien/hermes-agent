@@ -18,6 +18,8 @@ import {
 import { sessionRows, taskRows } from '../pure/data-shape.js';
 import { createDetail } from '../components/detail.js';
 import { sideHint, paint, tabToolbar, loadEnvelope } from './_kit.js';
+import { fetchWorkerLinks, mergeTaskChanged } from '../pure/session-operational-context.js';
+import { workerContextNodes } from '../components/session-operational-context.js';
 
 export const ROUTE = 'run-inspector';
 export const LABEL = 'Run Inspector';
@@ -49,7 +51,6 @@ const EVENT_TONE = {
 export function nodeKey(node) {
   return `${node.type}:${node.id}`;
 }
-
 /**
  * Pure: group nodes into type lanes and index the edges by endpoint.
  *
@@ -135,6 +136,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
   let selectedNode = null;
   let candidates = { task: [], session: [] };
   let unsubscribe = null;
+  const workerLinks = new Map();
 
   // ------------------------------------------------------------------ picker
 
@@ -406,6 +408,13 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
     }
 
     const node = selectedNode;
+    if (node.type === 'session' && !workerLinks.has(node.id)) {
+      workerLinks.set(node.id, null);
+      fetchWorkerLinks({ api, profile, sessionIds: [node.id] }).then((links) => {
+        if (links.has(node.id)) workerLinks.set(node.id, links.get(node.id));
+        if (selectedNode?.id === node.id) renderSide();
+      }).catch(() => null);
+    }
     const { edgesByNode } = buildGraph(payload.tree);
     const related = edgesByNode.get(nodeKey(node)) || [];
 
@@ -452,6 +461,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
       chips: [
         el('span', { class: 'chip', text: node.type }),
         node.status ? statusChip(node.status === 'done' ? 'ok' : 'info', node.status) : null,
+        ...workerContextNodes(workerLinks.get(node.id) || null),
         related.length ? el('span', { class: 'chip', text: `${related.length} edge${related.length === 1 ? '' : 's'}` }) : null,
       ].filter(Boolean),
       fields,
@@ -469,6 +479,14 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
     // so the run case matches against nodes already in the graph rather than
     // against the entity being inspected.
     const handles = SSE_EVENTS.map((name) => sse.on(name, (event) => {
+      if (name === 'task.changed') {
+        let changed = false;
+        for (const [id, link] of workerLinks) {
+          const next = mergeTaskChanged(link, event);
+          if (next !== link) { workerLinks.set(id, next); changed = true; }
+        }
+        if (changed) renderSide();
+      }
       if (!root.isConnected || !currentId || !payload) return;
       const id = String(event?.entity_id || '');
       const hit = id === String(currentId)

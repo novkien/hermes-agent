@@ -11,6 +11,7 @@ import {
   platformLabel, relativeTime, sessionId as idOf, sessionTimestamp, sessionTitle,
   sortByActivity, threadIdentity,
 } from '../../pure/chat-session.js';
+import { workerContextNodes } from '../../components/session-operational-context.js';
 
 // How many extra rows one "Show more" reveals inside a platform group. Small
 // enough that the DOM stays proportional to what is on screen even when the
@@ -33,6 +34,7 @@ export function renderSider(container, ctx) {
     // the fleet runs turns from the CLI, Telegram and cron at the same time,
     // and the sider shows all of them.
     runningIds = new Set(),
+    workerLinks = new Map(),
     loadedTotal = 0, sessionTotal = 0, pagingComplete = true, loadingMore = false,
     loadAllRequested = false, onLoadMore, onLoadAll, onStopLoading,
   } = ctx;
@@ -235,6 +237,7 @@ export function renderSider(container, ctx) {
     if (preview) row.append(el('div', { class: 'chat-sider-item-preview', text: String(preview).slice(0, 90) }));
 
     const foot = el('div', { class: 'chat-sider-item-foot' });
+    const workerLink = workerLinks.get(openId) || workerLinks.get(id) || null;
     // "running" means a turn is in flight on this session THIS SECOND — the
     // agent is thinking, calling a tool or writing, whoever set it going. It
     // replaced an "active" chip that meant only "this session record has not
@@ -245,6 +248,7 @@ export function renderSider(container, ctx) {
     } else if (session.archived) {
       foot.append(el('span', { class: 'chip chip-paused', text: 'archived' }));
     }
+    foot.append(...workerContextNodes(workerLink, { compact: true }));
     const messageCount = session.tip?.message_count ?? session.message_count;
     if (messageCount) foot.append(el('span', { class: 'chat-sider-item-stat', text: `${messageCount} msgs` }));
     const thread = threadIdentity(session);

@@ -8,8 +8,10 @@ import { attachChainTips } from '../pure/session-chain.js';
 import { fetchChainTips, filterInput, sideHint, paint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
 import { renderSessionDetail } from './session-detail.js';
+import { fetchWorkerLinks, mergeTaskChanged } from '../pure/session-operational-context.js';
+import { workerContextNodes } from '../components/session-operational-context.js';
 
-export const SSE_EVENTS = Object.freeze(['session.changed']);
+export const SSE_EVENTS = Object.freeze(['session.changed', 'task.changed']);
 
 // The dashboard is the session list authority — it owns the curation (archived,
 // delegate exclusion, source filters), the paging and every mutation. But it
@@ -42,6 +44,7 @@ export function createSessions({ api, profile, sse }) {
   let openSessionId = null;
   let loading = false;
   let lastLoadedAt = 0;
+  let workerLinks = new Map();
   const pageSize = 20;
   // Search is over the LOADED window, not the server: /api/sessions has no
   // text filter, and the palette's own session search already covers the whole
@@ -64,18 +67,18 @@ export function createSessions({ api, profile, sse }) {
         load();
       },
     });
-    for (const [value, label] of [['', 'Status: all'], ['active', 'live only'], ['archived', 'archived']]) {
+    for (const [value, label] of [['', 'Status: all'], ['active', 'open only'], ['archived', 'archived']]) {
       const option = el('option', { value, text: label });
       option.selected = filters.status === value;
       statusSelect.append(option);
     }
-    const live = windowRows.filter(isLive).length;
+    const open = windowRows.filter(isLive).length;
     const shown = visibleRows().length;
     paint(toolbarHost, tabToolbar({
       title: 'Sessions',
       subtitle: windowRows.length
-        ? `${live} live · ${filterSummary(shown, windowRows.length, 'loaded row')}`
-        : 'Hermes conversations, resolved to their live successor',
+        ? `${open} open sessions · ${filterSummary(shown, windowRows.length, 'loaded row')}`
+        : 'Hermes conversations, resolved to their current successor',
       filters: [statusSelect, filterInput({
         value: filters.query,
         placeholder: 'Filter loaded sessions…',
@@ -111,7 +114,7 @@ export function createSessions({ api, profile, sse }) {
     clear(kpiRow);
     if (!windowRows.length) return;
     const metrics = [
-      ['live', windowRows.filter(isLive).length, 'ok'],
+      ['open sessions', windowRows.filter(isLive).length, 'ok'],
       ['loaded', windowRows.length, ''],
       ['reset chains', windowRows.filter((row) => row.tip).length, ''],
       ['archived', windowRows.filter((row) => row.archived === true).length, ''],
@@ -166,6 +169,13 @@ export function createSessions({ api, profile, sse }) {
     const tips = await fetchChainTips({ api, profile, ids: rows.map(idOf) });
     windowRows = attachChainTips(rows, tips, idOf);
     windowRows.sort((a, b) => chainActivity(b) - chainActivity(a));
+    const candidates = windowRows.filter((row) => (row.tip?.source || row.source) === 'kanban')
+      .map((row) => row.tip?.tip_id || idOf(row));
+    workerLinks = new Map();
+    for (let index = 0; index < candidates.length; index += 50) {
+      const batch = await fetchWorkerLinks({ api, profile, sessionIds: candidates.slice(index, index + 50) }).catch(() => new Map());
+      batch.forEach((link, id) => workerLinks.set(id, link));
+    }
 
     render();
   }
@@ -210,6 +220,7 @@ export function createSessions({ api, profile, sse }) {
         const live = isLive(session);
         const messageCount = session.tip?.message_count ?? session.message_count;
         const activity = chainActivity(session);
+        const workerLink = workerLinks.get(id) || null;
 
         const identity = el('div', { class: 'session-identity' }, [
           el('span', { class: 'session-name', text: session.tip?.title || session.title || session.display_name || id || 'session' }),
@@ -225,6 +236,7 @@ export function createSessions({ api, profile, sse }) {
             text: `↳ chain root ${rootId} · depth ${session.tip.chain_depth}`,
           }));
         }
+        identity.append(...workerContextNodes(workerLink, { compact: true }));
 
         const row = el('tr', {
           tabindex: '0',
@@ -236,7 +248,7 @@ export function createSessions({ api, profile, sse }) {
           el('td', {}, [identity]),
           el('td', {}, [el('span', {
             class: `chip chip-${live ? 'running' : session.archived ? 'paused' : 'unknown'}`,
-            text: live ? 'live' : session.archived ? 'archived' : session.end_reason || 'idle',
+            text: live ? 'open' : session.archived ? 'archived' : session.end_reason || 'ended',
           })]),
           el('td', { class: 'mono', text: session.tip?.thread_id || session.thread_id || '—' }),
           el('td', { class: 'mono right', text: Number.isFinite(Number(messageCount)) ? String(messageCount) : '—' }),
@@ -311,6 +323,15 @@ export function createSessions({ api, profile, sse }) {
       // A load costs two upstream reads (dashboard page + tip resolution), and
       // the stream replays its buffer on connect, so an event that lands while
       // a load is in flight or right after one would just duplicate it.
+      if (name === 'task.changed') {
+        let changed = false;
+        for (const [id, link] of workerLinks) {
+          const next = mergeTaskChanged(link, event);
+          if (next !== link) { workerLinks.set(id, next); changed = true; }
+        }
+        if (changed) render();
+        return;
+      }
       if (loading || Date.now() - lastLoadedAt < 2000) return;
       load().catch(() => null);
     }));
@@ -330,10 +351,10 @@ export function createSessions({ api, profile, sse }) {
     const live = windowRows.filter((row) => (row.tip ? row.tip.is_active : row.is_active === true)).length;
     paint(inspectorHost, sideHint('Sessions', [
       'Pick a session to load its transcript and timeline below the list — a transcript needs the full width, so it does not render here.',
-      windowRows.length ? `${windowRows.length} session${windowRows.length === 1 ? '' : 's'} loaded, ${live} live.` : 'No sessions loaded.',
+      windowRows.length ? `${windowRows.length} session${windowRows.length === 1 ? '' : 's'} loaded, ${live} open.` : 'No sessions loaded.',
       resolved
-        ? `${resolved} row${resolved === 1 ? ' was' : 's were'} listed under a reset chain root; each shows its live successor instead.`
-        : 'No reset chains on this page — every row is its own live session.',
+        ? `${resolved} row${resolved === 1 ? ' was' : 's were'} listed under a reset chain root; each shows its current successor instead.`
+        : 'No reset chains on this page — every row is its own session.',
       'Rows re-sort by real activity, so a thread working right now stays at the top.',
     ]));
   }

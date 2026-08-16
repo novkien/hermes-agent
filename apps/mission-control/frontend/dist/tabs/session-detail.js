@@ -7,6 +7,8 @@
 import { el, clear, skeleton, emptyState, errorPanel, fmtTime } from '../ui.js';
 import { provenanceBadge } from '../provenance.js';
 import { listFrom } from '../pure/data-shape.js';
+import { fetchWorkerLinks } from '../pure/session-operational-context.js';
+import { workerContextNodes } from '../components/session-operational-context.js';
 
 /** Render a session's transcript + actions into `container`. Safe to call
  * again on the same container (e.g. on retry) — it clears first. */
@@ -16,8 +18,12 @@ export async function renderSessionDetail({ api, profile, id, container, onChang
   container.append(skeleton({ lines: 6 }));
 
   let response = null;
+  let workerLink = null;
   try {
-    response = await api.get(`/api/adapter/sessions/${encodeURIComponent(id)}/timeline`, { profile });
+    [response, workerLink] = await Promise.all([
+      api.get(`/api/adapter/sessions/${encodeURIComponent(id)}/timeline`, { profile }),
+      fetchWorkerLinks({ api, profile, sessionIds: [id] }).then((links) => links.get(id) || null).catch(() => null),
+    ]);
   } catch (err) {
     clear(container);
     container.append(errorPanel({
@@ -29,10 +35,12 @@ export async function renderSessionDetail({ api, profile, id, container, onChang
   }
 
   clear(container);
-  container.append(el('div', { class: 'detail-head' }, [
+  const head = el('div', { class: 'detail-head' }, [
     el('span', { class: 'detail-title', text: `Session ${id}` }),
     provenanceBadge(response.meta),
-  ]));
+  ]);
+  head.append(...workerContextNodes(workerLink));
+  container.append(head);
 
   const timeline = listFrom(response.data, ['timeline', 'messages', 'events']);
   if (!timeline.length) {

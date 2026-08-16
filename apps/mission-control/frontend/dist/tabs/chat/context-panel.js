@@ -90,6 +90,7 @@ export function createContextPanel({
 
   let latest = null;
   let draftTokens = 0;
+  let refreshSequence = 0;
 
   // The panel floats over the transcript, so it needs the dismissal a
   // floating surface is expected to have. Bound to the expanded state, and
@@ -182,10 +183,14 @@ export function createContextPanel({
 
   async function refresh() {
     if (!sessionId) return;
+    const sequence = ++refreshSequence;
     const response = await api.get(
       `/api/upstream/api/sessions/${encodeURIComponent(sessionId)}/context`,
       { profile: sessionProfile },
     ).catch(() => null);
+    // A slow earlier request must not repaint the dial after a newer turn
+    // settled and already produced a fresh measurement.
+    if (sequence !== refreshSequence) return;
     // An older dashboard has no such route. Hide the panel rather than
     // render an empty gauge that reads as "this session uses no context".
     const view = response ? normalizeContextWindow(response.data, {

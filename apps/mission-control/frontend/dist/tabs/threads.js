@@ -174,7 +174,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
       },
       {
         key: 'live',
-        label: 'Live sessions',
+        label: 'Open sessions',
         width: '110px',
         sortable: true,
         sortValue: (row) => (row.live || []).length,
@@ -481,7 +481,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
   /** Compact table-cell summary of a thread's live sessions. */
   function liveCell(live) {
     if (!live.length) return el('span', { class: 'cell-dim', text: '—' });
-    return statusChip('ok', `${live.length} live`);
+    return statusChip('ok', `${live.length} open`);
   }
 
   /** Detail-panel list of a thread's live sessions, each opening its chat. */
@@ -507,7 +507,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
             label: `Open ${session.id}`,
             onClick: () => navigate('sessions', { session: session.id }),
           })
-          : statusChip('ok', 'live'),
+          : statusChip('ok', 'open'),
       ]);
     }));
   }
@@ -541,7 +541,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
         row.role ? statusChip(ROLE_TONE[row.role] || 'idle', `${row.role} · slot ${row.slot}`) : null,
         row.locked ? statusChip('warn', 'locked') : null,
         row.model ? el('span', { class: 'chip', text: row.model }) : null,
-        (row.live || []).length ? statusChip('ok', `${row.live.length} live`) : null,
+        (row.live || []).length ? statusChip('ok', `${row.live.length} open`) : null,
       ].filter(Boolean),
       fields: [
         { label: 'Thread id', value: row.thread_id, mono: true },
@@ -550,7 +550,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
         { label: 'Provider override', value: row.provider },
       ],
       sections: [
-        { title: 'Live sessions', node: liveSessionsSection(row) },
+        { title: 'Open sessions', node: liveSessionsSection(row) },
         { title: 'Preloaded skills', node: tagList(row.skills, 'None preloaded.') },
         { title: 'Available skills', node: tagList(row.enabled_skills, 'Inherits the global skill set.') },
         { title: 'Enabled toolsets', node: tagList(row.enabled_toolsets, 'Inherits every toolset the platform allows.') },

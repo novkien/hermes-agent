@@ -60,6 +60,8 @@ import { createRunTrace } from './chat/run-trace.js';
 import { createPermitBanner } from './chat/permits.js';
 import { createThreadSearch, openCommandPalette } from './chat/palette.js';
 import { fetchChainTips } from './_kit.js';
+import { CONTEXT_REFRESH_MS, fetchWorkerLinks, isWorkerRunning, mergeTaskChanged } from '../pure/session-operational-context.js';
+import { workerContextNodes } from '../components/session-operational-context.js';
 
 export const GATEWAY_UNAVAILABLE_REASON =
   'Hermes Gateway is not reachable from the Pi BFF. Session history remains readable; create/send actions are disabled.';
@@ -113,6 +115,12 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   let runningIds = new Set();
   let unsubscribeRunning = null;
   let unsubscribeChatFrame = null;
+  let unsubscribeTaskChanged = null;
+  const workerLinks = new Map();
+  let contextTimer = null;
+  let contextInFlight = false;
+  let contextQueued = false;
+  let contextVisibility = null;
 
   function runningSet() {
     if (!runningSessionId) return runningIds;
@@ -167,6 +175,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   // each read "the session's model" at a different moment and never converge.
   let modelChipNode = null;
   let modelChipSessionId = null;
+  let workerMetaNode = null;
+  let workerMetaSessionId = null;
   // Per-session extra instructions and unsent drafts. Memory-only: tab state
   // never goes to Web Storage.
   const instructions = new Map();
@@ -187,6 +197,61 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   function notifyInspector() {
     if (typeof refreshInspector === 'function') refreshInspector();
     else if (inspectorHost) renderInspector(inspectorHost);
+  }
+
+  function openWorkerLink() { return workerLinks.get(selectedSessionId) || null; }
+  function refreshWorkerMeta() {
+    if (!workerMetaNode || workerMetaSessionId !== selectedSessionId) return;
+    clear(workerMetaNode);
+    workerMetaNode.append(...workerContextNodes(openWorkerLink()));
+  }
+  async function resolveWorkerLink(sessionId, sessionProfile) {
+    const links = await fetchWorkerLinks({ api, profile: sessionProfile || profile, sessionIds: [sessionId] }).catch(() => new Map());
+    const link = links.get(sessionId) || null;
+    if (link) workerLinks.set(sessionId, link);
+    return link;
+  }
+  async function hydrateSidebarWorkerLinks() {
+    // The sider renders a bounded first screen. Resolve its Kanban candidates
+    // in profile-scoped batches instead of polling every background session.
+    const groups = new Map();
+    for (const session of (allSessions || [])) {
+      if ((session.tip?.source || session.source) !== 'kanban') continue;
+      const id = openTargetId(session);
+      if (!id || workerLinks.has(id)) continue;
+      const key = session.tip?.profile || session.profile || profile;
+      if (!groups.has(key)) groups.set(key, []);
+      if (groups.get(key).length < 50) groups.get(key).push(id);
+    }
+    await Promise.all([...groups].map(async ([sessionProfile, ids]) => {
+      const links = await fetchWorkerLinks({ api, profile: sessionProfile, sessionIds: ids }).catch(() => new Map());
+      links.forEach((link, id) => workerLinks.set(id, link));
+    }));
+  }
+  function isOpenChatActive() {
+    return Boolean(composerHandle && (composerHandle.isRunning?.() || composerHandle.isWatching?.()
+      || runningSet().has(selectedSessionId) || isWorkerRunning(openWorkerLink())));
+  }
+  function refreshOpenContext() {
+    if (document.hidden) return;
+    if (!composerHandle || contextInFlight) { contextQueued = Boolean(composerHandle); return; }
+    contextInFlight = true;
+    Promise.resolve(composerHandle.refreshContext?.()).finally(() => {
+      contextInFlight = false;
+      if (contextQueued) { contextQueued = false; refreshOpenContext(); }
+    });
+  }
+  function syncContextRefresh() {
+    if (contextTimer) { clearInterval(contextTimer); contextTimer = null; }
+    if (!document.hidden && root.isConnected && isOpenChatActive()) {
+      contextTimer = setInterval(refreshOpenContext, CONTEXT_REFRESH_MS);
+    }
+  }
+  function stopContextRefresh() { if (contextTimer) clearInterval(contextTimer); contextTimer = null; contextQueued = false; }
+  function bindContextVisibility() {
+    if (contextVisibility) return;
+    contextVisibility = () => { if (document.hidden) stopContextRefresh(); else { refreshOpenContext(); syncContextRefresh(); } };
+    document.addEventListener('visibilitychange', contextVisibility);
   }
 
   async function load() {
@@ -249,6 +314,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       });
     }
     await resolveChainTips();
+    await hydrateSidebarWorkerLinks();
     applyPins();
 
     loaded = true;
@@ -297,6 +363,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
         // costs one more round of tip lookups, not a re-resolve of everything
         // loaded so far.
         await resolveChainTips();
+        await hydrateSidebarWorkerLinks();
         applyPins();
         notifyInspector();
       }
@@ -477,13 +544,14 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
 
     historyOffset = 0;
     historyExhausted = false;
-    const [messages] = await Promise.all([
+    const [messages, _persona, workerLink] = await Promise.all([
       readMessages(sessionId, sessionProfile, 0),
       loadPersona(sessionId),
+      resolveWorkerLink(sessionId, sessionProfile),
     ]);
 
     clear(threadPane);
-    threadPane.append(threadHeader(session, sessionProfile));
+    threadPane.append(threadHeader(session, sessionProfile, workerLink));
 
     const list = el('div', { class: 'thread-list' });
     threadList = list;
@@ -535,9 +603,11 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       instructionsStore,
       draftStore,
       onFork: () => forkSession(session),
-      onTurnSettled: (turn) => onTurnSettled(
-        turn, session, sessionId, sessionProfile,
-      ),
+      onTurnSettled: (turn) => {
+        onTurnSettled(turn, session, sessionId, sessionProfile);
+        refreshOpenContext();
+        syncContextRefresh();
+      },
       // A turn watched from elsewhere was painted from frames, not from
       // persisted rows, so the mirror has to be re-anchored exactly as it is
       // after a local turn — otherwise the next poll appends the whole thing
@@ -546,6 +616,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
         syncMirrorBaseline(sessionId, sessionProfile).catch(() => null);
         patchLocalSession(session, { last_activity_at: Math.floor(Date.now() / 1000) });
         refreshSessionList().catch(() => null);
+        refreshOpenContext(); syncContextRefresh();
       },
       // Only the tab actually painting a turn knows one is running: the session
       // list Hermes serves carries no in-flight field. The gateway's own
@@ -554,6 +625,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       onRunningChange: (isRunning) => {
         runningSessionId = isRunning ? sessionId : null;
         notifyInspector();
+        refreshOpenContext(); syncContextRefresh();
       },
       onNeedsReload: () => reloadThread(list, sessionId, sessionProfile),
       // A pick is a fact the header chip needs the instant it happens, not
@@ -578,6 +650,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     // a second permanent connection of its own.
     if (sse) sse.watch(sessionId);
     startMirror(sessionId, sessionProfile, list);
+    refreshOpenContext();
+    syncContextRefresh();
 
     // Chat was the only major tab with no deep link, so a refresh always
     // dropped you back on the hero. `profile` stays in the document query —
@@ -938,7 +1012,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     paintModelChip(id, session);
   }
 
-  function threadHeader(session, sessionProfile) {
+  function threadHeader(session, sessionProfile, workerLink = null) {
     const head = el('div', { class: 'chat-thread-head' });
     const titleRow = el('div', { class: 'chat-thread-title-row' });
     titleRow.append(el('div', { class: 'chat-thread-title', text: sessionTitle(session) }));
@@ -994,6 +1068,10 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
         ? el('span', { class: 'chip chip-info', text })
         : el('span', { class: 'chat-thread-meta-item', text }));
     }
+    workerMetaNode = el('span', { class: 'chat-thread-worker-context' });
+    workerMetaSessionId = targetId;
+    workerMetaNode.append(...workerContextNodes(workerLink));
+    meta.append(workerMetaNode);
 
     // Room/thread identity for chat platforms — telegram & friends bind a
     // session to one chat+thread, so these ids are what distinguish it.
@@ -1321,6 +1399,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       const id = event.entity_id || '';
       if (id && id !== selectedSessionId && id !== openTargetId(selectedSession)) return;
       mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+      refreshOpenContext();
       // A list-level event also means the sider's ordering and counts moved.
       refreshSessionList().catch(() => null);
     });
@@ -1346,6 +1425,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       if (!payload || payload.session_id !== selectedSessionId) return;
       if (!composerHandle) return;
       composerHandle.feedRemoteFrame({ event: payload.event, data: payload.data });
+      syncContextRefresh();
     });
   }
 
@@ -1360,6 +1440,19 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       if (next.size === runningIds.size && [...next].every((id) => runningIds.has(id))) return;
       runningIds = next;
       notifyInspector();
+      refreshOpenContext(); syncContextRefresh();
+    });
+  }
+
+  function subscribeToTaskChanges() {
+    if (unsubscribeTaskChanged || !sse) return;
+    unsubscribeTaskChanged = sse.on('task.changed', (event) => {
+      let changed = false;
+      for (const [id, link] of workerLinks) {
+        const next = mergeTaskChanged(link, event);
+        if (next !== link) { workerLinks.set(id, next); changed = true; }
+      }
+      if (changed) { refreshWorkerMeta(); refreshOpenContext(); syncContextRefresh(); notifyInspector(); }
     });
   }
 
@@ -1392,6 +1485,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       sessions: allSessions,
       selectedId: selectedSessionId,
       runningIds: runningSet(),
+      workerLinks,
       query: sessionQuery,
       expandedPlatforms,
       gatewayAvailable,
@@ -1493,6 +1587,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       document.addEventListener('keydown', onShortcut, true);
       subscribeToRunning();
       subscribeToChatFrames();
+      subscribeToTaskChanges();
+      bindContextVisibility();
       const deepLinked = params.s || params.session || null;
       if (deepLinked) selectedSessionId = deepLinked;
       pendingMessageAnchor = params.m || null;
@@ -1505,6 +1601,9 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       document.removeEventListener('keydown', onShortcut, true);
       stopStream();
       stopMirror();
+      stopContextRefresh();
+      if (contextVisibility) document.removeEventListener('visibilitychange', contextVisibility);
+      contextVisibility = null;
       closeMenu();
       if (unsubscribeSessionChanged) unsubscribeSessionChanged();
       unsubscribeSessionChanged = null;
@@ -1512,6 +1611,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       unsubscribeRunning = null;
       if (unsubscribeChatFrame) unsubscribeChatFrame();
       unsubscribeChatFrame = null;
+      if (unsubscribeTaskChanged) unsubscribeTaskChanged();
+      unsubscribeTaskChanged = null;
       // Stop the shared stream carrying a session this tab is no longer showing.
       if (sse) sse.watch(null);
       return { s: selectedSessionId || undefined };
@@ -1524,6 +1625,12 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     // openThread, the one implementation both the tab and the popup use.
     async openSession(id) {
       if (!id) return;
+      // Modal callers use this path rather than tab activate(); they still get
+      // the same refresh controller and event sources as the main Chat tab.
+      subscribeToRunning();
+      subscribeToChatFrames();
+      subscribeToTaskChanges();
+      bindContextVisibility();
       selectedSessionId = id;
       if (!loaded) await load();
       else await openThread(id);

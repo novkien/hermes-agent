@@ -855,6 +855,23 @@ def upstream_error_status(status: int) -> int:
     return status if 400 <= int(status or 0) < 600 else 502
 
 
+# This is the dispatcher-owned seed, not a best-effort matching hint.  In
+# particular, task.session_id identifies the session that CREATED a card and
+# must never be used to identify the worker which later executes it.
+_KANBAN_WORKER_SEED = re.compile(r"^work kanban task (t_[A-Za-z0-9_-]+)$")
+
+
+def _kanban_worker_task_id(message: Any) -> str | None:
+    """Return a task id only for the canonical first worker message."""
+    if not isinstance(message, dict):
+        return None
+    text = message.get("content") or message.get("text") or message.get("message")
+    if not isinstance(text, str):
+        return None
+    match = _KANBAN_WORKER_SEED.fullmatch(text.strip())
+    return match.group(1) if match else None
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str):
         self.status = status
@@ -1237,6 +1254,104 @@ class Router:
         )
 
     # ---------------------------------------------------------------- reads
+    async def kanban_worker_context(self, request: Request) -> Response:
+        """Join explicitly seeded Kanban workers to their current card state.
+
+        This deliberately performs no heuristic reconciliation.  A historical
+        Kanban session without the dispatcher seed remains visible to callers
+        as unresolved rather than being attached to a plausible-looking card.
+        """
+        rid = request.state.request_id
+        profile = self._request_profile(request)
+        requested = [value.strip() for value in request.query_params.get("session_ids", "").split(",")]
+        session_ids = list(dict.fromkeys(value for value in requested if value))
+        if len(session_ids) > 50:
+            return _json_error(400, "bad_request", "session_ids accepts at most 50 unique ids", rid)
+        if not profile:
+            return _json_error(400, "bad_request", "profile is required", rid)
+
+        links: dict[str, dict[str, Any]] = {}
+        degraded = False
+        semaphore = asyncio.Semaphore(4)
+
+        def record(value: Any, keys: tuple[str, ...]) -> dict[str, Any] | None:
+            data, _meta = split_upstream_envelope(value)
+            if not isinstance(data, dict):
+                return None
+            for key in keys:
+                nested = data.get(key)
+                if isinstance(nested, dict):
+                    return nested
+            return data
+
+        async def resolve(session_id: str) -> None:
+            nonlocal degraded
+            async with semaphore:
+                # Source is checked first so a caller cannot turn an arbitrary
+                # non-Kanban session into a synthetic unresolved worker.
+                try:
+                    status, body, _headers = await self.dashboard.get(
+                        f"/api/sessions/{session_id}", params={"profile": profile}, inbound_request_id=rid,
+                    )
+                except UpstreamError:
+                    degraded = True
+                    links[session_id] = {"kind": "kanban_worker", "resolution": "unresolved", "reason": "dashboard_unavailable"}
+                    return
+                if status >= 400:
+                    return
+                session = record(body, ("session",)) or {}
+                if session.get("source") != "kanban":
+                    return
+
+                unresolved: dict[str, Any] = {"kind": "kanban_worker", "resolution": "unresolved"}
+                try:
+                    status, body, _headers = await self.dashboard.get(
+                        f"/api/sessions/{session_id}/messages",
+                        params={"profile": profile, "limit": "1", "order": "oldest"}, inbound_request_id=rid,
+                    )
+                except UpstreamError:
+                    degraded = True
+                    links[session_id] = {**unresolved, "reason": "dashboard_unavailable"}
+                    return
+                if status >= 400:
+                    links[session_id] = {**unresolved, "reason": "seed_unavailable"}
+                    return
+                data, _meta = split_upstream_envelope(body)
+                messages = data.get("messages", data) if isinstance(data, dict) else data
+                first = messages[0] if isinstance(messages, list) and messages else None
+                task_id = _kanban_worker_task_id(first)
+                if not task_id:
+                    links[session_id] = {**unresolved, "reason": "canonical_seed_missing"}
+                    return
+                try:
+                    status, body, _headers = await self.adapter.kanban_task_detail(task_id, request_id=rid)
+                except UpstreamError:
+                    degraded = True
+                    links[session_id] = {**unresolved, "reason": "adapter_unavailable"}
+                    return
+                if status >= 400:
+                    links[session_id] = {**unresolved, "reason": "task_not_found"}
+                    return
+                task = record(body, ("task", "data")) or {}
+                if not task:
+                    links[session_id] = {**unresolved, "reason": "task_unreadable"}
+                    return
+                links[session_id] = {
+                    "kind": "kanban_worker", "resolution": "verified", "task_id": task_id,
+                    "status": task.get("status") or "unknown",
+                    "current_run_id": task.get("current_run_id"),
+                    "last_heartbeat_at": task.get("last_heartbeat_at"),
+                    "board": task.get("board") or task.get("board_id"),
+                    "assignee": task.get("assignee"),
+                }
+
+        await asyncio.gather(*(resolve(session_id) for session_id in session_ids))
+        return JSONResponse(self._envelope(
+            {"links": links}, source_id="session-operational-context", profile_id=profile,
+            freshness="degraded" if degraded else "live", request_id=rid,
+            degraded_reason="one_or_more_sources_unavailable" if degraded else None,
+        ))
+
     async def proxy_dashboard_read(self, request: Request, path: str) -> Response:
         normalized = "/" + path.lstrip("/")
         if not is_allowed_read_path(normalized):
@@ -2927,6 +3042,10 @@ class Router:
 
         # ---- gateway (8642) reads — agent capability surface ----
         r.add_api_route("/api/gateway/{path:path}", self.proxy_gateway_read,
+                        methods=["GET"])
+
+        # Explicit before every generic read proxy/catch-all.
+        r.add_api_route("/api/session-context/kanban-workers", self.kanban_worker_context,
                         methods=["GET"])
 
         # ---- read proxy (catch-all) ----

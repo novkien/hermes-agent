@@ -77,6 +77,25 @@ class FakeAdapter:
         return self.status, self.body, {}
 
 
+class WorkerContextDashboard:
+    """Exact route fixture: worker seed, never task.creator_session_id."""
+    async def get(self, path, *, params=None, inbound_request_id=None):
+        if path == "/api/sessions/worker_1":
+            return 200, {"session": {"id": "worker_1", "source": "kanban"}}, {}
+        if path == "/api/sessions/creator_1":
+            return 200, {"session": {"id": "creator_1", "source": "chat"}}, {}
+        if path.endswith("/messages"):
+            return 200, {"messages": [{"role": "user", "content": "work kanban task t_right"}]}, {}
+        return 404, {}, {}
+
+
+class WorkerContextAdapter:
+    async def kanban_task_detail(self, task_id, request_id=None):
+        assert task_id == "t_right"
+        # Deliberate conflicting creator id proves it cannot be substituted.
+        return 200, {"task": {"id": task_id, "status": "running", "session_id": "creator_1", "last_heartbeat_at": 44}}, {}
+
+
 def make_request(query: str) -> Request:
     request = Request({
         "type": "http",
@@ -104,6 +123,21 @@ def bare_router(*, dashboard=None, adapter=None) -> Router:
 
 def response_json(response) -> dict:
     return json.loads(response.body.decode("utf-8"))
+
+
+async def test_kanban_worker_context_uses_canonical_seed_only() -> None:
+    router = bare_router(dashboard=WorkerContextDashboard(), adapter=WorkerContextAdapter())
+    response = await router.kanban_worker_context(make_request("profile=default&session_ids=worker_1,creator_1"))
+    body = response_json(response)
+    assert body["data"]["links"] == {
+        "worker_1": {
+            "kind": "kanban_worker", "resolution": "verified", "task_id": "t_right",
+            "status": "running", "current_run_id": None, "last_heartbeat_at": 44,
+            "board": None, "assignee": None,
+        }
+    }
+    too_many = await router.kanban_worker_context(make_request("profile=default&session_ids=" + ",".join(f"s{i}" for i in range(51))))
+    assert too_many.status_code == 400
 
 
 def test_adapter_allowlist() -> None:
@@ -1916,6 +1950,7 @@ async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> Non
 
 
 async def main() -> None:
+    await test_kanban_worker_context_uses_canonical_seed_only()
     from core_contract_cases import run_all as run_core_contract_cases
 
     test_redaction_regex_matches_the_frontend_copy()

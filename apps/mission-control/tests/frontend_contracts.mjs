@@ -57,6 +57,9 @@ import { attachChainTips, chainIdBatches } from '../frontend/dist/pure/session-c
 
 import { shapeOpenRouterCatalog, supportsTools } from '../frontend/dist/pure/openrouter-catalog.js';
 import { createDeltaPacer } from '../frontend/dist/pure/delta-pacer.js';
+import {
+  CONTEXT_REFRESH_MS, isWorkerRunning, mergeTaskChanged, normalizeWorkerLink, workerStateLabel,
+} from '../frontend/dist/pure/session-operational-context.js';
 
 import {
   applyPage,
@@ -67,6 +70,21 @@ import {
   planNextPages,
   remainingCount,
 } from '../frontend/dist/pure/session-pager.js';
+
+// Session operational context is separate from lifecycle: an open session is
+// not automatically a running Kanban worker, and a worker never gains an id
+// unless the BFF verified the dispatcher seed against the card.
+const verifiedWorker = normalizeWorkerLink({
+  kind: 'kanban_worker', resolution: 'verified', task_id: 't_context', status: 'running', last_heartbeat_at: 123,
+});
+assert.equal(CONTEXT_REFRESH_MS, 10_000);
+assert.equal(isWorkerRunning(verifiedWorker), true);
+assert.equal(workerStateLabel(verifiedWorker), 'Kanban · t_context');
+assert.equal(isWorkerRunning(normalizeWorkerLink({ kind: 'kanban_worker', resolution: 'unresolved' })), false);
+assert.equal(workerStateLabel(normalizeWorkerLink({ kind: 'kanban_worker', resolution: 'unresolved', reason: 'seed' })), 'Kanban worker · card unresolved');
+assert.equal(normalizeWorkerLink({ kind: 'ordinary_session', status: 'running' }), null);
+assert.equal(mergeTaskChanged(verifiedWorker, { entity_id: 't_context', payload: { status: 'blocked' } }).status, 'blocked');
+assert.equal(mergeTaskChanged(verifiedWorker, { entity_id: 't_other', payload: { status: 'done' } }).status, 'running');
 
 import {
   NARRATION_TOOL,
