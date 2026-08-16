@@ -102,6 +102,16 @@ def generate_systemd_unit(
 ) -> str:
     """Generate an independent Mission Control systemd service definition."""
     ctx = _resolve_unit_context(system=system, run_as_user=run_as_user)
+    git_write_paths = " ".join(
+        str(path)
+        for path in (
+            ctx.data_root,
+            ctx.hermes_root / "hermes-agent",
+            ctx.hermes_root / "hermes-plugins",
+            ctx.hermes_root.parent / "agents",
+            ctx.hermes_root / "repos" / "hermes-skills.git",
+        )
+    )
     identity = ""
     wanted_by = "default.target"
     if system:
@@ -138,7 +148,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths={ctx.data_root}
+ReadWritePaths={git_write_paths}
 StandardOutput=journal
 StandardError=journal
 
