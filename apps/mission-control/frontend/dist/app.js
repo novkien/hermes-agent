@@ -11,6 +11,7 @@ import { ROUTES, navGroups } from './pure/route-registry.js';
 import { registerS7Routes } from './pure/s7-registration.js';
 import { parseRouteWithProfile, buildHash, FALLBACK_PATH } from './pure/hash-router.js';
 import { createStateStore, restoreOrEmpty } from './pure/state-store.js';
+import { createRetainedRoutes } from './pure/retained-routes.js';
 import { createPrefetch } from './preload.js';
 import { createPalette } from './palette.js';
 import { SseClient } from './events.js';
@@ -184,6 +185,7 @@ export async function boot({ root } = {}) {
   let currentRouteKey = null;
   let currentRouteParams = {};
   let currentInstanceKey = null;
+  let routeActivation = 0;
 
   let prefs = { density: 'comfortable', nav_collapsed: [] };
 
@@ -198,6 +200,19 @@ export async function boot({ root } = {}) {
   const workspace = el('main', { class: 'workspace' });
   const workspaceTopbar = el('div', { class: 'workspace-topbar' });
   const workspaceContent = el('div', { class: 'workspace-content' });
+  const retainedRoutes = createRetainedRoutes({
+    container: workspaceContent,
+    limit: 10,
+    createRoot: (id) => el('section', {
+      class: 'route-root',
+      'data-route-root': id,
+    }),
+    onEvict: (id) => {
+      const instance = tabInstances.get(id);
+      instance?.dispose?.();
+      tabInstances.delete(id);
+    },
+  });
   workspace.append(workspaceTopbar, workspaceContent);
   const inspector = el('aside', { class: 'inspector', 'aria-label': 'Contextual inspector' });
   const header = el('header', { class: 'left-header' });
@@ -418,17 +433,22 @@ export async function boot({ root } = {}) {
     renderInspectorPlaceholder();
     writeRouteToHistory(route, currentRouteParams, historyMode);
 
-    activateRoute(normalizedKey, currentRouteParams).catch((err) => {
+    const activation = ++routeActivation;
+    activateRoute(normalizedKey, currentRouteParams, activation).catch((err) => {
       console.error('route activation failed', err);
-      clear(workspaceContent);
-      workspaceContent.append(el('div', { class: 'panel-error' }, [
+      if (activation !== routeActivation) return;
+      const id = instanceId(normalizedKey);
+      const host = retainedRoutes.ensure(id);
+      clear(host);
+      host.append(el('div', { class: 'panel-error' }, [
         el('div', { class: 'panel-error-title', text: 'Route failed' }),
         el('div', { class: 'panel-error-msg', text: String(err?.message || err) }),
       ]));
+      retainedRoutes.activate(id);
     });
   }
 
-  async function activateRoute(key, params = {}) {
+  async function activateRoute(key, params = {}, activation = routeActivation) {
     const route = REGISTRY[key] || ROUTES[key];
     if (!route) return;
     liveStore.setContext(profile, key);
@@ -438,6 +458,7 @@ export async function boot({ root } = {}) {
     const restored = restoreOrEmpty(stateStore, id);
     inspectorState = restored.inspector || null;
     let instance = tabInstances.get(id);
+    const routeRoot = retainedRoutes.ensure(id);
 
     if (!instance) {
       if (route.placeholder) {
@@ -465,11 +486,12 @@ export async function boot({ root } = {}) {
         }
       }
       tabInstances.set(id, instance);
+      instance.mount(routeRoot);
     }
 
+    if (activation !== routeActivation || key !== currentRouteKey || id !== instanceId(key)) return;
     currentInstanceKey = id;
-    clear(workspaceContent);
-    instance.mount(workspaceContent);
+    retainedRoutes.activate(id);
     // Re-painted per activation so a cached instance still owns the topbar slot
     // after the breadcrumb render cleared it.
     if (typeof instance.renderToolbar === 'function') {

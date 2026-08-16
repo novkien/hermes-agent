@@ -45,6 +45,11 @@ export function createTable({
   let sortKey = initialSort?.key ?? null;
   let sortDir = initialSort?.dir === 'desc' ? 'desc' : 'asc';
   let selectedId = null;
+  const table = el('table', { class: `table${pinFirst ? ' table-pinned' : ''}` });
+  const head = buildHead();
+  const body = el('tbody');
+  table.append(head, body);
+  const rowNodes = new Map();
 
   function sortedRows() {
     if (!sortKey) return rows;
@@ -94,16 +99,18 @@ export function createTable({
     if (onSelect) onSelect(row, id);
   }
 
-  function buildBody(list) {
-    const tbody = el('tbody');
-    list.forEach((row, index) => {
-      const id = String(rowId(row, index));
+  function rowFingerprint(row) {
+    try { return JSON.stringify(row); } catch (_err) { return String(row); }
+  }
+
+  function paintRow(entry, row, index, id) {
+      const tr = entry.node;
       const extra = rowClass ? rowClass(row) : '';
-      const tr = el('tr', {
-        class: [extra, id === selectedId ? 'is-selected' : ''].filter(Boolean).join(' ') || null,
-        tabindex: onSelect ? '0' : null,
-        'data-row-id': id,
-      });
+      tr.className = [extra, id === selectedId ? 'is-selected' : ''].filter(Boolean).join(' ');
+      if (onSelect) tr.tabIndex = 0;
+      else tr.removeAttribute('tabindex');
+      tr.dataset.rowId = id;
+      clear(tr);
       for (const col of columns) {
         const align = ALIGN_CLASS[col.align] || '';
         const td = el('td', {
@@ -121,11 +128,19 @@ export function createTable({
         tr.append(el('td', { class: 'right' }, [actions]));
       }
       if (onSelect) {
-        tr.addEventListener('click', () => select(id, row, tr));
+        entry.row = row;
+      }
+  }
+
+  function buildRow(row, index, id) {
+      const tr = el('tr');
+      const entry = { node: tr, row, fingerprint: '', index };
+      if (onSelect) {
+        tr.addEventListener('click', () => select(id, entry.row, tr));
         tr.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            select(id, row, tr);
+            select(id, entry.row, tr);
           } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault();
             const sibling = event.key === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
@@ -133,22 +148,71 @@ export function createTable({
           }
         });
       }
-      tbody.append(tr);
+      paintRow(entry, row, index, id);
+      return entry;
+  }
+
+  function reconcileBody(list) {
+    const previousPositions = new Map();
+    if (!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      for (const [id, entry] of rowNodes) {
+        if (entry.node.isConnected) previousPositions.set(id, entry.node.getBoundingClientRect());
+      }
+    }
+    const retained = new Set();
+    list.forEach((row, index) => {
+      const id = String(rowId(row, index));
+      const fingerprint = rowFingerprint(row);
+      let entry = rowNodes.get(id);
+      if (!entry) {
+        entry = buildRow(row, index, id);
+        rowNodes.set(id, entry);
+      } else if (entry.fingerprint !== fingerprint) {
+        paintRow(entry, row, index, id);
+      } else {
+        entry.row = row;
+        entry.node.classList.toggle('is-selected', id === selectedId);
+      }
+      entry.fingerprint = fingerprint;
+      entry.index = index;
+      retained.add(id);
+      body.append(entry.node);
     });
-    return tbody;
+    for (const [id, entry] of rowNodes) {
+      if (retained.has(id)) continue;
+      entry.node.remove();
+      rowNodes.delete(id);
+    }
+    for (const [id, before] of previousPositions) {
+      const node = rowNodes.get(id)?.node;
+      if (!node?.isConnected || typeof node.animate !== 'function') continue;
+      const after = node.getBoundingClientRect();
+      const x = before.left - after.left;
+      const y = before.top - after.top;
+      if (!x && !y) continue;
+      node.animate(
+        [{ transform: `translate(${x}px, ${y}px)` }, { transform: 'translate(0, 0)' }],
+        { duration: 140, easing: 'ease-out' },
+      );
+    }
   }
 
   function render() {
-    clear(wrap);
     const list = sortedRows();
     if (!list.length) {
+      reconcileBody([]);
+      clear(wrap);
       wrap.append(emptyState({ title: emptyTitle, note: emptyNote }));
       return;
     }
-    const table = el('table', { class: `table${pinFirst ? ' table-pinned' : ''}` });
-    table.append(buildHead());
-    table.append(buildBody(list));
-    wrap.append(table);
+    reconcileBody(list);
+    if (table.parentNode !== wrap) {
+      clear(wrap);
+      wrap.append(table);
+    }
+    wrap.classList.remove('is-stale', 'is-syncing');
+    wrap.removeAttribute('title');
+    wrap.removeAttribute('aria-busy');
   }
 
   function showState(node) {
@@ -156,14 +220,33 @@ export function createTable({
     wrap.append(node);
   }
 
+  function retainWithWarning(opts, fallback) {
+    if (!rows.length) {
+      showState(fallback(opts || {}));
+      return;
+    }
+    wrap.classList.remove('is-syncing');
+    wrap.classList.add('is-stale');
+    wrap.removeAttribute('aria-busy');
+    wrap.title = opts?.message || opts?.reason || 'Showing last-known-good data';
+  }
+
   render();
 
   return {
     node: wrap,
     setRows(next) { rows = Array.isArray(next) ? next : []; render(); },
-    setLoading() { showState(skeleton({ lines: 6, height: 14 })); },
-    setError(opts) { showState(errorPanel(opts || {})); },
-    setUnavailable(opts) { showState(unavailableState(opts || {})); },
+    setLoading() {
+      if (!rows.length) showState(skeleton({ lines: 6, height: 14 }));
+      else {
+        wrap.classList.add('is-syncing');
+        wrap.setAttribute('aria-busy', 'true');
+      }
+    },
+    setError(opts) {
+      retainWithWarning(opts, errorPanel);
+    },
+    setUnavailable(opts) { retainWithWarning(opts, unavailableState); },
     setUnsupported(opts) { showState(unsupportedState(opts || {})); },
     /** Re-apply a selection made elsewhere (e.g. restored from the URL). */
     setSelected(id) {

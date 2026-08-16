@@ -340,6 +340,8 @@ html, body {
 }
 .breadcrumb-current svg { color: var(--accent); flex: none; }
 .workspace-content { padding: var(--space-4); }
+.route-root { min-height: 100%; }
+.route-root[hidden] { display: none !important; }
 
 /* Full-height application panes (the memory editor, the chat thread) own their
    own inner scroller. The workspace column must not scroll as well: a wheel
@@ -356,6 +358,7 @@ html, body {
   min-height: 0;
   overflow: hidden;
 }
+.workspace-fixed-pane .route-root { height: 100%; min-height: 0; }
 
 /* The inspector is a fixed 320px column, so everything inside it has to be able
    to reach that width or narrower. `overflow-wrap: anywhere` is what makes that
@@ -2050,6 +2053,8 @@ html, body {
   overflow: auto; border: 1px solid var(--elev-1-border);
   border-radius: var(--radius-md); background: var(--elev-1-bg);
 }
+.table-wrap.is-syncing { cursor: progress; }
+.table-wrap.is-stale { border-color: rgba(var(--warn-rgb), 0.38); }
 .table th { padding: var(--row-pad-y) var(--row-pad-x); background: var(--elev-2-bg); }
 .table td {
   padding: var(--row-pad-y) var(--row-pad-x);
