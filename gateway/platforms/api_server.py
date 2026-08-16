@@ -3139,6 +3139,12 @@ class APIServerAdapter(BasePlatformAdapter):
             agent_kwargs["service_tier"] = request_service_tier
 
         agent = AIAgent(**agent_kwargs)
+        self._persist_session_capability_snapshot(
+            session_id=session_id,
+            agent=agent,
+            config=user_config,
+            enabled_toolsets=enabled_toolsets,
+        )
         agent._hermes_api_runtime = {
             "provider": runtime_kwargs.get("provider") or getattr(agent, "provider", "") or "",
             # Kept alongside the resolved kind so a confirmed lock can be
@@ -3443,6 +3449,55 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
 
+        session_id = str(request.query.get("session_id") or "").strip()
+        if session_id:
+            if len(session_id) > self._MAX_SESSION_HEADER_LEN or re.search(
+                r"[\r\n\x00]", session_id
+            ):
+                return web.json_response(
+                    _openai_error("Invalid session ID", code="invalid_session_id"),
+                    status=400,
+                )
+            db = await self._ensure_session_db_async()
+            session = await asyncio.to_thread(db.get_session, session_id) if db else None
+            if not session:
+                return web.json_response(
+                    _openai_error("Session not found", code="session_not_found"),
+                    status=404,
+                )
+            model_config = self._parse_session_model_config(session.get("model_config"))
+            snapshot = model_config.get("capability_snapshot_v1")
+            rows = (
+                snapshot.get("toolsets")
+                if isinstance(snapshot, dict) and snapshot.get("version") == 1
+                else None
+            )
+            if not isinstance(rows, list):
+                return web.json_response(
+                    {
+                        "object": "list",
+                        "platform": "api_server",
+                        "session_id": session_id,
+                        "session_confirmed": False,
+                        "data": [],
+                        "error": {
+                            "code": "session_capabilities_unavailable",
+                            "message": "This session has no confirmed capability snapshot",
+                        },
+                    },
+                    status=409,
+                )
+            public_rows = self._public_capability_toolset_rows(rows)
+            return web.json_response({
+                "object": "list",
+                "platform": "api_server",
+                "session_id": session_id,
+                "session_confirmed": True,
+                "snapshot_at": snapshot.get("captured_at"),
+                "profile": snapshot.get("profile"),
+                "data": public_rows,
+            })
+
         try:
             from hermes_cli.config import load_config
             from hermes_cli.tools_config import (
@@ -3485,8 +3540,124 @@ class APIServerAdapter(BasePlatformAdapter):
         return web.json_response({
             "object": "list",
             "platform": "api_server",
+            "session_confirmed": False,
             "data": data,
         })
+
+    @staticmethod
+    def _public_capability_toolset_rows(rows: List[Any]) -> List[Dict[str, Any]]:
+        """Whitelist snapshot fields before returning model_config-derived data."""
+        public: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")[:160]
+            if not name:
+                continue
+            tools = [
+                str(tool)[:160]
+                for tool in (row.get("tools") if isinstance(row.get("tools"), list) else [])
+                if isinstance(tool, str) and tool
+            ]
+            public.append({
+                "name": name,
+                "label": str(row.get("label") or name)[:240],
+                "description": str(row.get("description") or "")[:1000],
+                "enabled": row.get("enabled") is True,
+                "configured": row.get("configured") is True,
+                "tools": tools,
+                "tool_count": len(tools),
+            })
+        return public
+
+    @staticmethod
+    def _capability_toolset_rows(
+        config: Dict[str, Any],
+        enabled_toolsets: List[str],
+        *,
+        valid_tool_names: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build the non-secret toolset inventory captured for one agent."""
+        from hermes_cli.tools_config import (
+            _get_effective_configurable_toolsets,
+            _toolset_has_keys,
+            get_nous_subscription_features,
+        )
+        from toolsets import resolve_toolset
+
+        enabled = set(enabled_toolsets or [])
+        features = get_nous_subscription_features(config)
+        rows: List[Dict[str, Any]] = []
+        for name, label, desc in _get_effective_configurable_toolsets():
+            try:
+                resolved = set(resolve_toolset(name))
+            except Exception:
+                resolved = set()
+            is_enabled = name in enabled
+            if is_enabled and valid_tool_names is not None:
+                resolved &= valid_tool_names
+            rows.append({
+                "name": name,
+                "label": label,
+                "description": desc,
+                "enabled": is_enabled,
+                "configured": _toolset_has_keys(name, config, features=features),
+                "tools": sorted(resolved),
+                "tool_count": len(resolved),
+            })
+        return rows
+
+    def _persist_session_capability_snapshot(
+        self,
+        *,
+        session_id: Optional[str],
+        agent: Any,
+        config: Dict[str, Any],
+        enabled_toolsets: List[str],
+    ) -> None:
+        """Persist the first exact API-session tool surface, without secrets."""
+        if not session_id:
+            return
+        db = self._ensure_session_db()
+        if db is None:
+            return
+        try:
+            existing = db.get_session_model_config_value(
+                session_id, "capability_snapshot_v1"
+            )
+            if (
+                isinstance(existing, dict)
+                and existing.get("version") == 1
+                and isinstance(existing.get("toolsets"), list)
+            ):
+                return
+            try:
+                from hermes_cli.profiles import get_active_profile_name
+
+                profile = _api_request_profile.get() or get_active_profile_name()
+            except Exception:
+                profile = _api_request_profile.get() or "default"
+            snapshot = {
+                "version": 1,
+                "profile": profile or "default",
+                "captured_at": time.time(),
+                "enabled_toolsets": sorted(set(enabled_toolsets or [])),
+                "toolsets": self._capability_toolset_rows(
+                    config,
+                    enabled_toolsets,
+                    valid_tool_names=set(getattr(agent, "valid_tool_names", set()) or set()),
+                ),
+            }
+            db.patch_session_model_config(
+                session_id, {"capability_snapshot_v1": snapshot}
+            )
+        except Exception:
+            logger.warning(
+                "[%s] failed to persist capability snapshot for %s",
+                self.name,
+                session_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # /api/sessions — thin client/session resource API
@@ -3868,10 +4039,18 @@ class APIServerAdapter(BasePlatformAdapter):
         # SessionDB's native parent_session_id/end_reason visibility model rather
         # than inventing a parallel fork store.
         await asyncio.to_thread(db.end_session, source_id, "branched")
+        source_model_config = self._parse_session_model_config(source.get("model_config"))
+        capability_snapshot = source_model_config.get("capability_snapshot_v1")
+        fork_model_config = (
+            {"capability_snapshot_v1": capability_snapshot}
+            if isinstance(capability_snapshot, dict)
+            else None
+        )
         await asyncio.to_thread(db.create_session,
             fork_id,
             "api_server",
             model=source.get("model"),
+            model_config=fork_model_config,
             system_prompt=source.get("system_prompt"),
             parent_session_id=source_id,
         )

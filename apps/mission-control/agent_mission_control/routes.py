@@ -674,6 +674,9 @@ CONFIG_WRITE_ALLOW_TREE: dict[str, Any] = {
     "agent": {
         "disabled_toolsets": True,
     },
+    "skills": {
+        "mode": True,
+    },
     # Per-thread toolsets / skills / cross-thread allowlist. The toolset policy
     # re-resolves per inbound message, so an edit takes effect on the next
     # message rather than on restart.
@@ -704,6 +707,41 @@ CONFIG_WRITE_ALLOW_TREE: dict[str, Any] = {
         },
     },
 }
+
+_SKILLS_PROMPT_MODES = frozenset({"visible", "prune", "invisible"})
+
+
+def _invalid_skills_mode_in_patch(body: dict[str, Any]) -> str | None:
+    """Return the first invalid profile/topic skills mode in a config patch."""
+    skills = body.get("skills")
+    if isinstance(skills, dict) and "mode" in skills:
+        mode = skills.get("mode")
+        if not isinstance(mode, str) or mode not in _SKILLS_PROMPT_MODES:
+            return "skills.mode must be one of: invisible, prune, visible"
+
+    for root in (
+        body.get("platforms", {}).get("telegram", {}).get("extra", {}),
+        body.get("telegram", {}).get("extra", {}),
+    ):
+        if not isinstance(root, dict) or "group_topics" not in root:
+            continue
+        groups = root.get("group_topics")
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            topics = group.get("topics") if isinstance(group, dict) else None
+            if not isinstance(topics, list):
+                continue
+            for topic in topics:
+                if not isinstance(topic, dict) or "skills_mode" not in topic:
+                    continue
+                mode = topic.get("skills_mode")
+                if not isinstance(mode, str) or mode not in _SKILLS_PROMPT_MODES:
+                    return (
+                        "Telegram group topic skills_mode must be one of: "
+                        "invisible, prune, visible, or be omitted to inherit"
+                    )
+    return None
 
 
 def _prune_to_allow_tree(body: Any, tree: Any) -> Any:
@@ -1650,6 +1688,10 @@ class Router:
                 rid,
             )
 
+        invalid_mode = _invalid_skills_mode_in_patch(pruned)
+        if invalid_mode:
+            return _json_error(400, "invalid_skills_mode", invalid_mode, rid)
+
         # Record which writable section was touched, not its contents.
         summary = build_request_summary(
             request.method, "/api/config", dict(request.query_params),
@@ -1871,10 +1913,18 @@ class Router:
             return _json_error(404, "not_found", "path not in gateway read allowlist",
                                request.state.request_id)
         profile = request.query_params.get("profile")
+        session_id = (request.query_params.get("session_id") or "").strip()
+        session_scoped_toolsets = normalized == "/v1/toolsets" and bool(session_id)
+        params = {"session_id": session_id} if session_scoped_toolsets else None
         rid = request.state.request_id
         try:
-            status, body, _ = await self.gateway.request(
-                "GET", normalized, inbound_request_id=rid
+            gateway = (
+                await self._gateway_client_for_session(session_id)
+                if session_scoped_toolsets
+                else self.gateway
+            )
+            status, body, _ = await gateway.request(
+                "GET", normalized, params=params, inbound_request_id=rid
             )
         except UpstreamError as e:
             detail = str(e.detail or "upstream error")

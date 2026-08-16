@@ -91,13 +91,13 @@ def test_skills_breakdown_shape_sorted_and_attributed(isolated_home):
     assert sum(s["index_line_bytes"] for s in skills) <= data["skills_index"]["bytes"]
 
 
-def test_skills_breakdown_attributes_demoted_category_shared_line(isolated_home):
-    """A real posture-demoted category retains every skill in the breakdown."""
+def test_skills_breakdown_attributes_invisible_mode_shared_line(isolated_home):
+    """Names-only mode retains every skill in the cost breakdown."""
     from agent.prompt_builder import build_skills_system_prompt
 
     _seed_skill(isolated_home, "alpha-skill", "alpha description")
     _seed_skill(isolated_home, "beta-skill", "beta description")
-    prompt = build_skills_system_prompt(compact_categories=frozenset({"demo"}))
+    prompt = build_skills_system_prompt(mode="invisible")
     skills_match = _SKILLS_BLOCK_RE.search(prompt)
     assert skills_match is not None
     skills_block = skills_match.group(0)
@@ -115,7 +115,6 @@ def test_skills_breakdown_attributes_demoted_category_shared_line(isolated_home)
         assert entry["index_line_total_bytes"] == shared_line_bytes
         assert entry["index_line_shared_bytes"] > 0
         assert entry["index_line_skill_count"] == 2
-
 
 
 

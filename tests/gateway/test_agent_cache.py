@@ -131,6 +131,22 @@ class TestAgentConfigSignature:
         assert base != changed_allowlist
         assert base != changed_payload
 
+    def test_skills_mode_change_busts_cache(self):
+        from gateway.run import GatewayRunner
+
+        runtime = {"api_key": "k", "base_url": "u", "provider": "p"}
+        visible = GatewayRunner._agent_config_signature(
+            "m", runtime, ["terminal"], "", skills_mode="visible"
+        )
+        pruned = GatewayRunner._agent_config_signature(
+            "m", runtime, ["terminal"], "", skills_mode="prune"
+        )
+        invisible = GatewayRunner._agent_config_signature(
+            "m", runtime, ["terminal"], "", skills_mode="invisible"
+        )
+
+        assert len({visible, pruned, invisible}) == 3
+
 
 class TestExtractCacheBustingConfig:
     """Verify _extract_cache_busting_config pulls the documented subset of

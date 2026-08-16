@@ -1878,6 +1878,9 @@ DEFAULT_CONFIG = {
     # Each path is expanded (~, ${VAR}) and resolved.  Read-only — skill creation
     # always goes to ~/.hermes/skills/.
     "skills": {
+        # Controls descriptions in the always-on <available_skills> system-
+        # prompt index. Skill loading and SKILL.md contents are unaffected.
+        "mode": "visible",  # visible | prune (60 chars) | invisible (names only)
         "external_dirs": [],   # e.g. ["~/.agents/skills", "/shared/team-skills"]
         # Substitute ${HERMES_SKILL_DIR} and ${HERMES_SESSION_ID} in SKILL.md
         # content with the absolute skill directory and the active session id

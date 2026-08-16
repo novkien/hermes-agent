@@ -148,3 +148,32 @@ def test_details_lines_caps_listing():
     assert any("… and 5 more" in line for line in lines)
 
 
+def test_context_details_measures_live_volatile_skills_index():
+    agent, parts = _make_agent(
+        stable="stable identity",
+        volatile=(
+            "volatile prefix\n<available_skills>\n"
+            "  writing:\n    - demo: pruned description…\n"
+            "</available_skills>"
+        ),
+        tools=[],
+    )
+    captured = {}
+
+    def skill_breakdown(block):
+        captured["block"] = block
+        return [{"name": "demo", "index_line_bytes": 32, "skill_md_bytes": 400}]
+
+    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts), patch(
+        "hermes_cli.prompt_size._compute_skills_breakdown",
+        side_effect=skill_breakdown,
+    ), patch(
+        "hermes_cli.prompt_size._compute_toolsets_breakdown", return_value=[]
+    ):
+        details = compute_context_details(agent)
+
+    assert "pruned description…" in captured["block"]
+    assert details["skills"] == [{
+        "name": "demo", "index_tokens": 8, "skill_md_tokens": 100,
+    }]
+

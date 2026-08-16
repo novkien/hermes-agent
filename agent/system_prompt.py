@@ -463,6 +463,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             available_toolsets=avail_toolsets,
             compact_categories=_compact_cats or None,
             enabled_skills=getattr(agent, "enabled_skills", None),
+            mode=getattr(agent, "skills_mode", "visible"),
         )
     else:
         skills_prompt = ""

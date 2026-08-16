@@ -513,6 +513,7 @@ class AIAgent:
         requested_provider: str = None,
         auto_loaded_skill_prompt: str = "",
         enabled_skills: List[str] = None,
+        skills_mode: str = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:
@@ -603,6 +604,7 @@ class AIAgent:
             pass_session_id=pass_session_id,
             auto_loaded_skill_prompt=auto_loaded_skill_prompt,
             enabled_skills=enabled_skills,
+            skills_mode=skills_mode,
         )
 
     def _get_session_db_for_recall(self):

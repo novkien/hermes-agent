@@ -570,6 +570,7 @@ def init_agent(
     requested_provider: str = None,
     auto_loaded_skill_prompt: str = "",
     enabled_skills: List[str] = None,
+    skills_mode: str = None,
 ):
     """
     Initialize the AI Agent.
@@ -636,6 +637,12 @@ def init_agent(
     agent._auto_loaded_skill_prompt = auto_loaded_skill_prompt or ""
     agent.enabled_skills = (
         tuple(enabled_skills) if enabled_skills is not None else None
+    )
+    from agent.skill_context import validate_skills_mode
+    agent.skills_mode = (
+        validate_skills_mode(skills_mode, field="skills_mode")
+        if skills_mode is not None
+        else None
     )
     agent.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
     agent._user_id = user_id  # Platform user identifier (gateway sessions)
@@ -1699,6 +1706,14 @@ def init_agent(
         _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}
+
+    if agent.skills_mode is None:
+        from agent.skill_context import resolve_profile_skills_mode
+
+        # Validation deliberately sits outside the config-load fallback: valid
+        # YAML with an invalid enum is an operator error and must fail clearly,
+        # not silently become a different prompt policy.
+        agent.skills_mode = resolve_profile_skills_mode(_agent_cfg)
 
     # Codex commentary visibility (display.show_commentary, default true).
     # When true, completed Codex phase=commentary messages are delivered as

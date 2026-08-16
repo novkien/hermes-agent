@@ -27,6 +27,12 @@ import {
   parseRouteWithProfile,
 } from '../frontend/dist/pure/hash-router.js';
 import {
+  configuredSkillModeTopics,
+  profileSkillModePatch,
+  profileSkillPromptMode,
+  topicSkillModePatch,
+} from '../frontend/dist/pure/skill-prompt-mode.js';
+import {
   buildTopology,
   buildOrgChart,
   profileNodes,
@@ -151,6 +157,56 @@ assert.deepEqual(profileRows(null), []);
 
 assert.deepEqual(listFrom([{ id: 'skill-1' }]), [{ id: 'skill-1' }]);
 assert.deepEqual(logLines({ file: '/tmp/test.log', lines: ['first', 'second'] }), ['first', 'second']);
+
+// Skills prompt visibility uses narrow profile writes and a lossless
+// one-topic list rewrite (Hermes replaces lists rather than merging them).
+const skillModeConfig = {
+  skills: { mode: 'prune', disabled: ['keep'] },
+  platforms: {
+    telegram: {
+      extra: {
+        group_topics: [{
+          chat_id: '-100',
+          name: 'Ops',
+          untouched_group: true,
+          topics: [
+            {
+              thread_id: '20', name: 'Coder', skills_mode: 'visible',
+              enabled_skills: ['coding'], enabled_toolsets: ['terminal'],
+              prompt: 'keep me',
+            },
+            { thread_id: '21', name: 'Research', skills_mode: 'invisible' },
+          ],
+        }],
+      },
+    },
+  },
+};
+assert.equal(profileSkillPromptMode(skillModeConfig), 'prune');
+assert.equal(profileSkillPromptMode({}), 'visible');
+assert.equal(profileSkillPromptMode({ skills: { mode: 'compact' } }), null);
+assert.deepEqual(profileSkillModePatch('invisible'), { skills: { mode: 'invisible' } });
+assert.throws(() => profileSkillModePatch('compact'));
+assert.deepEqual(
+  configuredSkillModeTopics(skillModeConfig).map((row) => [row.threadId, row.mode]),
+  [['20', 'visible'], ['21', 'invisible']],
+);
+const inheritedTopicPatch = topicSkillModePatch(
+  skillModeConfig, '-100', '20', 'inherit',
+);
+const inheritedTopic = inheritedTopicPatch.platforms.telegram.extra.group_topics[0].topics[0];
+assert.equal('skills_mode' in inheritedTopic, false);
+assert.deepEqual(inheritedTopic.enabled_skills, ['coding']);
+assert.deepEqual(inheritedTopic.enabled_toolsets, ['terminal']);
+assert.equal(inheritedTopic.prompt, 'keep me');
+assert.equal(
+  inheritedTopicPatch.platforms.telegram.extra.group_topics[0].topics[1].skills_mode,
+  'invisible',
+);
+assert.equal(
+  inheritedTopicPatch.platforms.telegram.extra.group_topics[0].untouched_group,
+  true,
+);
 
 const directRegistry = {
   adapter: { healthy: true },
@@ -1268,6 +1324,15 @@ const chatTabSource = readFileSync(
 const attachmentSource = readFileSync(
   new URL('../frontend/dist/tabs/chat/attachments.js', import.meta.url), 'utf8',
 );
+const paletteSource = readFileSync(
+  new URL('../frontend/dist/tabs/chat/palette.js', import.meta.url), 'utf8',
+);
+const contextPanelSource = readFileSync(
+  new URL('../frontend/dist/tabs/chat/context-panel.js', import.meta.url), 'utf8',
+);
+const skillsTabSource = readFileSync(
+  new URL('../frontend/dist/tabs/skills.js', import.meta.url), 'utf8',
+);
 assert.match(composerSource, /return Boolean\(localActive \|\| controller\)/,
   'the optimistic-send window must count as running before a stream controller exists');
 assert.match(composerSource,
@@ -1285,6 +1350,15 @@ assert.match(composerSource, /accept:\s*['"]\*\/\*['"]/,
 assert.match(attachmentSource, /readAsDataURL\(file\)/,
   'non-image files must be transported, not replaced with a text summary');
 assert.doesNotMatch(attachmentSource, /This file cannot be safely inlined/);
+assert.match(composerSource, /openToolsetMenu\(toolsetButton,[\s\S]*?sessionId/,
+  'Toolsets must be requested for the open session, not inferred from the profile');
+assert.match(paletteSource, /toolsets\?session_id=\$\{encodeURIComponent\(sessionId\)\}/);
+assert.match(paletteSource, /Confirmed for this session/);
+assert.match(paletteSource, /not yet confirmed for this session/);
+assert.match(contextPanelSource, /context\?platform=api_server/);
+assert.match(chatTabSource, /context\?details=1&platform=api_server/);
+assert.match(skillsTabSource, /Prompt visibility/);
+assert.match(skillsTabSource, /system prompt\. Skill discovery, SKILL\.md, and skill loading are unchanged/);
 
 /* ---------------------------------------------------------------------------
  * One owner for "which model does this session run".

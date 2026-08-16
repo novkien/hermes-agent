@@ -30,6 +30,7 @@ from agent_mission_control.routes import (  # noqa: E402
     UPSTREAM_MUTATION_SPECS,
     Router,
     _describe_allow_tree,
+    _invalid_skills_mode_in_patch,
     _prune_to_allow_tree,
     is_allowed_adapter_path,
     is_allowed_read_path,
@@ -550,6 +551,59 @@ def test_gateway_read_allowlist_is_exact_not_prefix() -> None:
         assert forbidden not in GATEWAY_READ_PATHS
 
 
+async def test_gateway_toolsets_forwards_only_session_id_to_session_gateway() -> None:
+    class FakeGateway:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return 200, {"session_confirmed": True, "data": []}, {}
+
+    default_gateway = FakeGateway()
+    session_gateway = FakeGateway()
+    router = bare_router()
+    router.gateway = default_gateway
+
+    async def resolve(session_id):
+        assert session_id == "api_123"
+        return session_gateway
+
+    router._gateway_client_for_session = resolve
+    response = await Router.proxy_gateway_read(
+        router,
+        make_request("profile=worker&session_id=api_123&ignored=secret"),
+        "v1/toolsets",
+    )
+
+    assert response.status_code == 200
+    assert default_gateway.calls == []
+    assert session_gateway.calls == [
+        (
+            "GET",
+            "/v1/toolsets",
+            {
+                "params": {"session_id": "api_123"},
+                "inbound_request_id": "test-request-id",
+            },
+        )
+    ]
+    assert response_json(response)["data"]["session_confirmed"] is True
+
+    await Router.proxy_gateway_read(
+        router,
+        make_request("session_id=must-not-forward&ignored=secret"),
+        "v1/capabilities",
+    )
+    assert default_gateway.calls == [
+        (
+            "GET",
+            "/v1/capabilities",
+            {"params": None, "inbound_request_id": "test-request-id"},
+        )
+    ]
+
+
 def test_verb_suffixed_mutations_do_not_substitute_the_verb_for_the_id() -> None:
     """`{id}` is the last path segment only for the flat session routes.
 
@@ -781,6 +835,7 @@ def test_config_write_tree_excludes_every_credential_branch() -> None:
         "agent.disabled_toolsets",
         "platforms.telegram.channel_overrides",
         "platforms.telegram.extra.group_topics",
+        "skills.mode",
         "telegram.extra.group_topics",
     ]
     # channel_overrides is a per-thread dict, so a single-thread edit prunes to
@@ -804,9 +859,40 @@ def test_config_write_tree_excludes_every_credential_branch() -> None:
     ) == {"agent": {"disabled_toolsets": ["image_gen"]}}
     # A named-but-empty branch collapses so the upstream merge stays a no-op.
     assert _prune_to_allow_tree({"agent": {"model": "x"}}, CONFIG_WRITE_ALLOW_TREE) == {}
+    assert _prune_to_allow_tree(
+        {"skills": {"mode": "prune", "disabled": ["leave-alone"]}},
+        CONFIG_WRITE_ALLOW_TREE,
+    ) == {"skills": {"mode": "prune"}}
     # PUT /api/config/raw is never allowlisted: it would carry sentinels back.
     assert match_upstream_mutation("/api/config/raw", "PUT") is None
     assert match_upstream_mutation("/api/config", "PUT") is None
+
+
+def test_config_skills_modes_fail_closed_before_upstream() -> None:
+    assert _invalid_skills_mode_in_patch({"skills": {"mode": "visible"}}) is None
+    assert _invalid_skills_mode_in_patch({"skills": {"mode": "compact"}})
+    assert _invalid_skills_mode_in_patch({
+        "platforms": {
+            "telegram": {
+                "extra": {
+                    "group_topics": [{
+                        "chat_id": "-100",
+                        "topics": [{"thread_id": "20", "skills_mode": "invisible"}],
+                    }],
+                },
+            },
+        },
+    }) is None
+    assert _invalid_skills_mode_in_patch({
+        "telegram": {
+            "extra": {
+                "group_topics": [{
+                    "chat_id": "-100",
+                    "topics": [{"thread_id": "20", "skills_mode": None}],
+                }],
+            },
+        },
+    })
 
 
 def test_new_write_surfaces_are_advertised_to_the_ui() -> None:
@@ -1976,6 +2062,7 @@ async def main() -> None:
     test_created_session_id_reads_the_nested_gateway_shape()
     test_chat_open_frame_is_a_wellformed_named_sse_event()
     test_gateway_read_allowlist_is_exact_not_prefix()
+    await test_gateway_toolsets_forwards_only_session_id_to_session_gateway()
     test_verb_suffixed_mutations_do_not_substitute_the_verb_for_the_id()
     await test_dashboard_profile_forward_and_flatten()
     await test_adapter_profile_is_provenance_not_filter()
@@ -2005,6 +2092,7 @@ async def main() -> None:
     test_cron_update_uses_the_upstream_nested_body()
     test_credential_carrying_specs_reject_the_sentinel()
     test_config_write_tree_excludes_every_credential_branch()
+    test_config_skills_modes_fail_closed_before_upstream()
     test_new_write_surfaces_are_advertised_to_the_ui()
     test_plugin_toggles_flag_the_restart_requirement()
     await test_events_recent_is_bounded_and_separate_from_the_audit_ledger()

@@ -295,7 +295,7 @@ class TestBuildSkillsSystemPrompt:
         assert result.count("- search") == 1
 
 
-    def test_compact_categories_demote_nested_and_miss_cache_separately(
+    def test_visible_mode_overrides_coding_focus_category_demotion(
         self, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -304,16 +304,118 @@ class TestBuildSkillsSystemPrompt:
         (d / "SKILL.md").write_text(
             "---\nname: thread-writer\ndescription: Write threads\n---\n"
         )
-        # Nested category ("social-media/twitter") demoted via its parent:
-        # name visible, description gone.
-        compact = build_skills_system_prompt(
+        visible = build_skills_system_prompt(
             compact_categories=frozenset({"social-media"})
         )
-        assert "thread-writer" in compact
-        assert "Write threads" not in compact
-        # Unfiltered call must not be served from the compacted cache entry.
-        full = build_skills_system_prompt()
-        assert "Write threads" in full
+        assert "thread-writer" in visible
+        assert "Write threads" in visible
+
+    def test_visibility_modes_are_exact_and_cache_isolated(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        category = tmp_path / "skills" / "writing"
+        category.mkdir(parents=True)
+        (category / "DESCRIPTION.md").write_text(
+            "---\ndescription: Category detail must only be visible in full mode.\n---\n",
+            encoding="utf-8",
+        )
+        long_desc = "技" * 59 + "界TAIL-MUST-NOT-LEAK"
+        long_skill = category / "long-skill"
+        long_skill.mkdir()
+        (long_skill / "SKILL.md").write_text(
+            f"---\nname: long-skill\ndescription: {long_desc}\n---\n",
+            encoding="utf-8",
+        )
+        short_skill = category / "short-skill"
+        short_skill.mkdir()
+        (short_skill / "SKILL.md").write_text(
+            "---\nname: short-skill\ndescription: Short detail.\n---\n",
+            encoding="utf-8",
+        )
+
+        visible = build_skills_system_prompt(mode="visible")
+        pruned = build_skills_system_prompt(mode="prune")
+        invisible = build_skills_system_prompt(mode="invisible")
+        visible_again = build_skills_system_prompt(mode="visible")
+
+        def index(prompt):
+            return prompt.split("<available_skills>\n", 1)[1].split(
+                "\n</available_skills>", 1
+            )[0]
+
+        visible_index = index(visible)
+        pruned_index = index(pruned)
+        invisible_index = index(invisible)
+
+        assert long_desc in visible_index
+        assert "Category detail must only be visible in full mode." in visible_index
+        assert "技" * 59 + "…" in pruned_index
+        assert "TAIL-MUST-NOT-LEAK" not in pruned_index
+        assert "Short detail." in pruned_index
+        assert "Category detail must only be visible in full mode." not in pruned_index
+        assert "long-skill" in invisible_index
+        assert "short-skill" in invisible_index
+        assert long_desc not in invisible_index
+        assert "Short detail." not in invisible_index
+        assert "Category detail must only be visible in full mode." not in invisible_index
+        assert visible_again == visible
+        assert visible != pruned != invisible
+
+    def test_invalid_visibility_mode_is_rejected(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill = tmp_path / "skills" / "tools" / "sample"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: sample\ndescription: Sample detail.\n---\n"
+        )
+
+        with pytest.raises(ValueError, match="skills.mode must be one of"):
+            build_skills_system_prompt(mode="compact")
+
+    def test_invisible_preserves_enabled_external_names_and_disabled_policy(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        local_root = tmp_path / "home" / "skills"
+        external_root = tmp_path / "external"
+        for root, name, description in [
+            (local_root, "local-skill", "Local description must be hidden."),
+            (local_root, "disabled-skill", "Disabled description."),
+            (external_root, "external-skill", "External description must be hidden."),
+        ]:
+            skill = root / "tools" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {description}\n---\n"
+            )
+
+        # An earlier import-safety test deliberately reloads prompt_builder;
+        # patch the globals owned by this imported function object so this
+        # policy test remains independent of module-object identity.
+        globals_ = build_skills_system_prompt.__globals__
+        monkeypatch.setitem(globals_, "get_skills_dir", lambda: local_root)
+        monkeypatch.setitem(
+            globals_, "get_all_skills_dirs", lambda: [local_root, external_root]
+        )
+        monkeypatch.setitem(
+            globals_, "get_disabled_skill_names", lambda *_a, **_k: {"disabled-skill"}
+        )
+        monkeypatch.setitem(globals_, "_load_skills_snapshot", lambda *_a: None)
+        monkeypatch.setitem(globals_, "_write_skills_snapshot", lambda *_a: None)
+        result = build_skills_system_prompt(
+            mode="invisible",
+            enabled_skills=["local-skill", "disabled-skill", "external-skill"],
+        )
+        index = result.split("<available_skills>", 1)[1].split(
+            "</available_skills>", 1
+        )[0]
+
+        assert "local-skill" in index
+        assert "external-skill" in index
+        assert "disabled-skill" not in index
+        assert "Local description" not in index
+        assert "External description" not in index
 
 
 

@@ -1719,6 +1719,7 @@ def build_skills_system_prompt(
     available_toolsets: "set[str] | None" = None,
     compact_categories: "frozenset[str] | None" = None,
     enabled_skills: "tuple[str, ...] | list[str] | None" = None,
+    mode: str = "visible",
 ) -> str:
     """Build a compact skill index for the system prompt.
 
@@ -1734,12 +1735,20 @@ def build_skills_system_prompt(
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
 
-    ``compact_categories`` (e.g. from the coding posture — see
-    agent/coding_context.py) demotes whole categories to a names-only line in
-    the rendered index. Nothing is ever hidden: every skill name stays
-    visible and loadable via ``skill_view`` / ``skills_list``; only the
-    descriptions are dropped, and a footer note explains the demotion.
+    ``mode`` is the operator-owned visibility policy and takes precedence over
+    posture hints: ``visible`` renders every description, ``prune`` limits each
+    rendered skill description to 60 Unicode code points, and ``invisible``
+    renders category labels plus skill names only. Skill discovery and loading
+    are unchanged in every mode.
     """
+    from agent.skill_context import (
+        SKILLS_MODE_INVISIBLE,
+        SKILLS_MODE_PRUNE,
+        prune_skill_description,
+        validate_skills_mode,
+    )
+
+    mode = validate_skills_mode(mode)
     skills_dir = get_skills_dir()
     external_dirs = get_all_skills_dirs()[1:]  # skip local (index 0)
 
@@ -1761,6 +1770,7 @@ def build_skills_system_prompt(
         tuple(sorted(disabled)),
         tuple(sorted(compact_categories or ())),
         tuple(sorted(enabled)) if enabled is not None else None,
+        mode,
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -1928,28 +1938,28 @@ def build_skills_system_prompt(
             except Exception as e:
                 logger.debug("Could not read external skill description %s: %s", desc_file, e)
 
-    # Posture-driven category demotion (e.g. non-coding skills while pairing
-    # on code). Demoted categories stay in the index as a single names-only
-    # line — descriptions are dropped to cut noise, but every skill name
-    # remains visible so memory-anchored recall ("load <name>") keeps working.
-    # NEVER remove entries entirely: agent-created skills are the model's
-    # project memory, and models don't reach for skills_list to rediscover
-    # what the index stops showing them. Match on the top-level category
-    # segment so nested categories ("social-media/twitter") are demoted with
-    # their parent.
-    demoted = frozenset(
-        cat for cat in skills_by_category
-        if cat.split("/", 1)[0] in (compact_categories or frozenset())
+    # The explicit visibility policy is authoritative over posture-driven
+    # category demotion. In particular, ``visible`` always means full and
+    # ``prune`` always means one independently clamped description per skill.
+    # ``compact_categories`` remains in the cache key for call-site
+    # compatibility, but cannot weaken or partially override these modes.
+    demoted = (
+        frozenset(skills_by_category)
+        if mode == SKILLS_MODE_INVISIBLE
+        else frozenset()
     )
 
     hidden_note = ""
-    if demoted:
+    if mode == SKILLS_MODE_INVISIBLE:
         hidden_note = (
-            "\n(Categories marked [names only] are outside the current coding "
-            "context, so their descriptions are omitted — the skills work "
-            "normally and load with skill_view(name) as usual.)"
+            "\n(Skill descriptions are hidden by the active skills.mode policy; "
+            "every listed skill remains loadable with skill_view(name).)"
         )
-
+    elif mode == SKILLS_MODE_PRUNE:
+        hidden_note = (
+            "\n(Skill descriptions are limited to 60 characters by the active "
+            "skills.mode policy; load a skill with skill_view(name) for its full instructions.)"
+        )
     if not skills_by_category:
         result = ""
     else:
@@ -1961,7 +1971,7 @@ def build_skills_system_prompt(
                 names = sorted({name for name, _ in skills_by_category[category]})
                 index_lines.append(f"  {category} [names only]: {', '.join(names)}")
                 continue
-            cat_desc = category_descriptions.get(category, "")
+            cat_desc = category_descriptions.get(category, "") if mode == "visible" else ""
             if cat_desc:
                 index_lines.append(f"  {category}: {cat_desc}")
             else:
@@ -1970,8 +1980,13 @@ def build_skills_system_prompt(
                 if name in seen:
                     continue
                 seen.add(name)
-                if desc:
-                    index_lines.append(f"    - {name}: {desc}")
+                rendered_desc = (
+                    prune_skill_description(desc)
+                    if mode == SKILLS_MODE_PRUNE
+                    else desc
+                )
+                if rendered_desc:
+                    index_lines.append(f"    - {name}: {rendered_desc}")
                 else:
                     index_lines.append(f"    - {name}")
 

@@ -89,22 +89,43 @@ export function openSlashMenu(anchor, { api, profile, query = '', onPick }) {
 }
 
 /**
- * What the agent can actually call. `GET /v1/toolsets` is the gateway's own
- * deterministic answer — its handler says as much — so this replaces guessing
- * from the model's behaviour.
+ * What this session's already-built agent can actually call. The session id is
+ * mandatory: a profile-level catalogue is not evidence for a live session.
  */
-export function openToolsetMenu(anchor, { api, profile }) {
+export function openToolsetMenu(anchor, { api, profile, sessionId }) {
   const menu = el('div', { class: 'chat-menu chat-menu-wide' });
   const body = el('div', { class: 'chat-menu-body' });
   menu.append(el('div', { class: 'chat-menu-group' }, [el('span', { text: 'Toolsets' })]), body);
+  if (!sessionId) {
+    body.append(el('div', {
+      class: 'chat-menu-empty',
+      text: 'Toolsets cannot be confirmed until this session has run.',
+    }));
+    openMenu(anchor, menu);
+    return menu;
+  }
   body.append(skeleton({ lines: 4 }));
 
-  api.get('/api/gateway/v1/toolsets', { profile })
+  api.get(`/api/gateway/v1/toolsets?session_id=${encodeURIComponent(sessionId)}`, { profile })
     .then((response) => {
-      const rows = listFrom(response?.data, ['toolsets', 'data']);
+      const payload = response?.data || {};
+      const rows = listFrom(payload, ['toolsets', 'data']);
       clear(body);
+      if (payload.session_confirmed !== true) {
+        body.append(el('div', {
+          class: 'chat-menu-empty',
+          text: 'Toolsets are not yet confirmed for this session.',
+        }));
+        return;
+      }
+      body.append(el('div', { class: 'chat-menu-group' }, [
+        el('span', { text: 'Confirmed for this session' }),
+        payload.snapshot_at
+          ? el('span', { class: 'chat-menu-group-note', text: 'agent snapshot' })
+          : null,
+      ].filter(Boolean)));
       if (!rows.length) {
-        body.append(el('div', { class: 'chat-menu-empty', text: 'Gateway reported no toolsets' }));
+        body.append(el('div', { class: 'chat-menu-empty', text: 'Confirmed snapshot contains no toolsets' }));
         return;
       }
       const enabled = rows.filter((row) => row.enabled);
@@ -115,9 +136,14 @@ export function openToolsetMenu(anchor, { api, profile }) {
         for (const row of group[1]) body.append(toolsetRow(row));
       }
     })
-    .catch(() => {
+    .catch((err) => {
       clear(body);
-      body.append(el('div', { class: 'chat-menu-empty', text: 'Toolset inventory unavailable' }));
+      body.append(el('div', {
+        class: 'chat-menu-empty',
+        text: err?.status === 409
+          ? 'Toolsets are not yet confirmed for this session. Send one message to build its agent snapshot.'
+          : 'Confirmed toolsets are unavailable for this session.',
+      }));
     });
 
   openMenu(anchor, menu);

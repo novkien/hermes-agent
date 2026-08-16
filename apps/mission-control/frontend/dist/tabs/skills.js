@@ -46,12 +46,22 @@ import { renderMarkdown } from '../markdown-render.js';
 import { createCodeEditor } from '../components/code-editor.js';
 import { rackShell, rackCard, rackMore } from '../components/rack.js';
 import { toast } from '../components/toast.js';
+import {
+  configuredSkillModeTopics,
+  profileSkillModePatch,
+  profileSkillPromptMode,
+  topicSkillModePatch,
+} from '../pure/skill-prompt-mode.js';
 
 export const ROUTE = 'skills';
 export const LABEL = 'Skills';
 export const GROUP = 'BUILD & INTEGRATE';
 export const READ_ONLY_NOTE = readOnlyBadge('skills');
-export const SOURCE_ENDPOINTS = Object.freeze(['/api/skills', '/api/skills/content']);
+export const SOURCE_ENDPOINTS = Object.freeze([
+  '/api/skills',
+  '/api/skills/content',
+  '/api/config',
+]);
 
 export const DISABLED_ACTIONS = Object.freeze({
   toggle: 'not exposed in dashboard v1 (native skill tooling)',
@@ -114,6 +124,8 @@ export function createSkills({ api, profile, refreshInspector }) {
   });
 
   let listEnvelope = null;
+  let configEnvelope = null;
+  let config = null;
   let rows = [];
   let capabilities = supportedActions(null);
   let selected = null;
@@ -125,6 +137,7 @@ export function createSkills({ api, profile, refreshInspector }) {
   let visible = CARD_BATCH;
   let busyAction = null;
   let pendingRefresh = null;
+  let policyBusy = null;
   // The action bar is rebuilt on every render, so the editor's dirty callback
   // has to reach the *current* one rather than the node it was created with.
   let docActionsRow = null;
@@ -137,9 +150,14 @@ export function createSkills({ api, profile, refreshInspector }) {
   async function load() {
     clear(stage);
     stage.append(skeleton({ lines: 8 }));
-    try {
-      listEnvelope = await api.get('/api/skills', { profile });
-    } catch (err) {
+    const [skillsResult, configResult] = await Promise.allSettled([
+      api.get('/api/skills', { profile }),
+      api.get('/api/upstream/api/config', { profile }),
+    ]);
+    if (skillsResult.status === 'fulfilled') {
+      listEnvelope = skillsResult.value;
+    } else {
+      const err = skillsResult.reason || {};
       listEnvelope = {
         data: null,
         meta: {
@@ -150,9 +168,25 @@ export function createSkills({ api, profile, refreshInspector }) {
         },
       };
     }
+    if (configResult.status === 'fulfilled') {
+      configEnvelope = configResult.value;
+      config = configEnvelope?.data || {};
+    } else {
+      const err = configResult.reason || {};
+      configEnvelope = {
+        data: null,
+        meta: {
+          freshness: 'unavailable',
+          request_id: err.request_id || null,
+          degraded_reason: err.message || 'config unavailable',
+        },
+      };
+      config = null;
+    }
 
     rows = normalizeSkills(listEnvelope?.data);
     capabilities = supportedActions(listEnvelope?.meta);
+    policyBusy = null;
     // A selection that no longer exists upstream is dropped rather than left
     // pointing at a skill the rack can't show.
     if (selected && !rows.some((skill) => skill.name === selected)) selected = null;
@@ -288,6 +322,36 @@ export function createSkills({ api, profile, refreshInspector }) {
     runAction(skill, 'save', { content: editor.getValue() });
   }
 
+  async function saveProfileMode(mode) {
+    policyBusy = 'profile';
+    render();
+    try {
+      await api.put('/api/config', profileSkillModePatch(mode), { profile });
+      toast(`Prompt visibility set to ${mode}`, { tone: 'ok' });
+      await load();
+    } catch (err) {
+      policyBusy = null;
+      toast('Prompt visibility save failed', { tone: 'danger', detail: err.message });
+      render();
+    }
+  }
+
+  async function saveTopicMode(topic, mode) {
+    const key = `${topic.chatId}:${topic.threadId}`;
+    policyBusy = key;
+    render();
+    try {
+      const body = topicSkillModePatch(config, topic.chatId, topic.threadId, mode);
+      await api.put('/api/config', body, { profile });
+      toast(`${topic.name} prompt visibility updated`, { tone: 'ok' });
+      await load();
+    } catch (err) {
+      policyBusy = null;
+      toast('Topic visibility save failed', { tone: 'danger', detail: err.message });
+      render();
+    }
+  }
+
   function copyDoc() {
     if (!editor) return;
     const text = editor.getValue();
@@ -340,6 +404,8 @@ export function createSkills({ api, profile, refreshInspector }) {
     renderToolbar();
     clear(stage);
 
+    stage.append(renderPromptVisibility());
+
     const meta = listEnvelope?.meta;
     if (meta?.freshness === 'unavailable' || meta?.freshness === 'unsupported') {
       stage.append(unavailableState({
@@ -353,6 +419,113 @@ export function createSkills({ api, profile, refreshInspector }) {
       return;
     }
     stage.append(selected ? renderDoc() : renderLibrary());
+  }
+
+  function renderPromptVisibility() {
+    const section = el('section', { class: 'skill-section skill-prompt-visibility' });
+    section.append(el('div', { class: 'skill-section-title' }, [
+      icon('eye', { size: 13 }),
+      'Prompt visibility',
+    ]));
+    section.append(el('div', {
+      class: 'field-hint',
+      text: 'Controls only the <available_skills> index in the system prompt. Skill discovery, SKILL.md, and skill loading are unchanged.',
+    }));
+
+    if (!config) {
+      section.append(el('div', {
+        class: 'notice notice-warn',
+        text: configEnvelope?.meta?.degraded_reason || 'Profile config unavailable.',
+      }));
+      return section;
+    }
+
+    const mode = profileSkillPromptMode(config);
+    if (!mode) {
+      section.append(el('div', {
+        class: 'notice notice-danger',
+        text: 'Invalid skills.mode in config. Use visible, prune, or invisible.',
+      }));
+    } else {
+      const control = segmented([
+        { value: 'visible', label: 'Visible', title: 'Full skill and category descriptions' },
+        { value: 'prune', label: 'Prune 60', title: 'At most 60 Unicode characters per skill description' },
+        { value: 'invisible', label: 'Invisible', title: 'Category labels and skill names only' },
+      ], {
+        value: mode,
+        ariaLabel: 'Profile skill prompt visibility',
+        onChange: (next) => saveProfileMode(next),
+      });
+      if (policyBusy) {
+        for (const button of control.querySelectorAll('button')) button.disabled = true;
+      }
+      section.append(el('div', { class: 'choice-row' }, [
+        el('div', { class: 'cell-stack' }, [
+          el('span', { class: 'cell-strong', text: `Effective profile mode: ${mode}` }),
+          el('span', {
+            class: 'cell-dim',
+            text: mode === 'prune'
+              ? 'Each rendered skill description is capped at 60 Unicode characters.'
+              : mode === 'invisible'
+                ? 'Descriptions are omitted; all enabled skill names remain visible.'
+                : 'Full category and skill descriptions are rendered.',
+          }),
+        ]),
+        control,
+      ]));
+    }
+
+    const topics = configuredSkillModeTopics(config);
+    section.append(el('div', { class: 'skill-section-title' }, [
+      icon('chat', { size: 13 }),
+      'Telegram group topics',
+    ]));
+    section.append(el('div', {
+      class: 'field-hint',
+      text: 'Topic overrides are frozen per session. Use /new in that topic to apply a changed mode; the current session keeps its existing prompt policy.',
+    }));
+    if (!topics.length) {
+      section.append(el('div', { class: 'field-hint', text: 'No configured Telegram group topics.' }));
+      return section;
+    }
+    const topicList = el('div', { class: 'stack-sm' });
+    for (const topic of topics) {
+      const key = `${topic.chatId}:${topic.threadId}`;
+      const select = el('select', {
+        class: 'select',
+        'aria-label': `Prompt visibility for ${topic.name}`,
+        onchange: (event) => saveTopicMode(topic, event.target.value),
+      });
+      for (const [value, label] of [
+        ['inherit', 'Inherit profile'],
+        ['visible', 'Visible'],
+        ['prune', 'Prune 60'],
+        ['invisible', 'Invisible'],
+      ]) {
+        const option = el('option', { value, text: label });
+        option.selected = topic.mode === value;
+        select.append(option);
+      }
+      if (topic.mode === null) {
+        select.prepend(el('option', { value: '', text: 'Invalid configured value', selected: true }));
+      }
+      select.disabled = Boolean(policyBusy);
+      topicList.append(el('div', { class: 'choice-row' }, [
+        el('div', { class: 'cell-stack' }, [
+          el('span', { class: 'cell-strong', text: topic.name }),
+          el('span', {
+            class: 'cell-dim mono',
+            text: `${topic.chatName ? `${topic.chatName} · ` : ''}${topic.chatId} / ${topic.threadId}`,
+          }),
+        ]),
+        el('div', { class: 'cell-stack' }, [
+          select,
+          policyBusy === key ? el('span', { class: 'cell-dim', text: 'Saving…' }) : null,
+        ].filter(Boolean)),
+      ]));
+    }
+    section.append(topicList);
+    return section;
   }
 
   /** No selection: the library overview. */

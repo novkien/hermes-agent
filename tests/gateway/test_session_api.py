@@ -41,6 +41,7 @@ def auth_adapter(session_db):
 def _create_session_app(adapter: APIServerAdapter) -> web.Application:
     app = web.Application()
     app.router.add_get("/v1/capabilities", adapter._handle_capabilities)
+    app.router.add_get("/v1/toolsets", adapter._handle_toolsets)
     app.router.add_get("/api/sessions", adapter._handle_list_sessions)
     app.router.add_post("/api/sessions", adapter._handle_create_session)
     app.router.add_get("/api/sessions/{session_id}", adapter._handle_get_session)
@@ -51,6 +52,125 @@ def _create_session_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_post("/api/sessions/{session_id}/chat", adapter._handle_session_chat)
     app.router.add_post("/api/sessions/{session_id}/chat/stream", adapter._handle_session_chat_stream)
     return app
+
+
+@pytest.mark.asyncio
+async def test_session_toolsets_require_and_return_confirmed_snapshot(adapter, session_db):
+    session_db.create_session("legacy", "api_server")
+    snapshot = {
+        "version": 1,
+        "profile": "default",
+        "captured_at": 123.5,
+        "enabled_toolsets": ["terminal"],
+        "toolsets": [
+            {
+                "name": "terminal",
+                "label": "Terminal & Processes",
+                "description": "Shell tools",
+                "enabled": True,
+                "configured": True,
+                "tools": ["terminal", "process"],
+                "must_not_escape": "row-secret",
+            }
+        ],
+        "must_not_escape": "snapshot-secret",
+    }
+    session_db.create_session(
+        "confirmed",
+        "api_server",
+        model_config={
+            "capability_snapshot_v1": snapshot,
+            "provider_secret": "model-config-secret",
+        },
+    )
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        legacy_resp = await cli.get("/v1/toolsets?session_id=legacy")
+        assert legacy_resp.status == 409
+        legacy = await legacy_resp.json()
+
+        confirmed_resp = await cli.get("/v1/toolsets?session_id=confirmed")
+        assert confirmed_resp.status == 200
+        confirmed_text = await confirmed_resp.text()
+
+    assert legacy["session_confirmed"] is False
+    assert legacy["error"]["code"] == "session_capabilities_unavailable"
+    assert '"session_confirmed": true' in confirmed_text
+    assert '"profile": "default"' in confirmed_text
+    assert '"tools": ["terminal", "process"]' in confirmed_text
+    assert "model_config" not in confirmed_text
+    assert "model-config-secret" not in confirmed_text
+    assert "snapshot-secret" not in confirmed_text
+    assert "row-secret" not in confirmed_text
+
+
+def test_capability_snapshot_is_first_build_only_and_non_secret(adapter, session_db, monkeypatch):
+    session_db.create_session("first-build", "api_server")
+    rows = [{
+        "name": "terminal",
+        "enabled": True,
+        "tools": ["terminal"],
+        "tool_count": 1,
+    }]
+    monkeypatch.setattr(adapter, "_capability_toolset_rows", lambda *a, **k: rows)
+    agent = MagicMock(valid_tool_names={"terminal"})
+
+    adapter._persist_session_capability_snapshot(
+        session_id="first-build",
+        agent=agent,
+        config={"api_key": "must-not-persist"},
+        enabled_toolsets=["terminal"],
+    )
+    first = session_db.get_session_model_config_value(
+        "first-build", "capability_snapshot_v1"
+    )
+    adapter._persist_session_capability_snapshot(
+        session_id="first-build",
+        agent=agent,
+        config={"api_key": "different-secret"},
+        enabled_toolsets=["web"],
+    )
+    second = session_db.get_session_model_config_value(
+        "first-build", "capability_snapshot_v1"
+    )
+
+    assert first == second
+    assert first["enabled_toolsets"] == ["terminal"]
+    assert first["toolsets"] == rows
+    assert "must-not-persist" not in str(first)
+    assert "different-secret" not in str(first)
+
+
+@pytest.mark.asyncio
+async def test_fork_inherits_only_capability_snapshot(adapter, session_db):
+    snapshot = {
+        "version": 1,
+        "profile": "default",
+        "captured_at": 9.0,
+        "enabled_toolsets": [],
+        "toolsets": [],
+    }
+    session_db.create_session(
+        "parent",
+        "api_server",
+        model_config={
+            "capability_snapshot_v1": snapshot,
+            "browser_model_lock": {"api_key": "must-not-copy"},
+        },
+    )
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.post(
+            "/api/sessions/parent/fork", json={"id": "child"}
+        )
+        assert resp.status == 201
+
+    child_config = adapter._parse_session_model_config(
+        session_db.get_session("child")["model_config"]
+    )
+    assert child_config == {"capability_snapshot_v1": snapshot}
 
 
 @pytest.mark.asyncio

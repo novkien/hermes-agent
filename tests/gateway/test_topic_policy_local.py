@@ -3,7 +3,11 @@ from types import SimpleNamespace
 from gateway.platforms.base import resolve_group_topic
 from gateway.config import Platform
 from gateway.session import SessionContext, SessionSource, build_session_context_prompt
-from gateway.skill_policy import SkillPolicyStatus, resolve_enabled_skills_policy
+from gateway.skill_policy import (
+    SkillPolicyStatus,
+    resolve_enabled_skills_policy,
+    resolve_topic_skills_mode_override,
+)
 from gateway.toolset_policy import (
     ToolsetPolicyStatus,
     resolve_enabled_toolsets_policy,
@@ -92,6 +96,22 @@ def test_enabled_toolsets_empty_valid_unknown_fails_closed():
     assert unknown.status is ToolsetPolicyStatus.CONFIGURED_INVALID
 
 
+def test_topic_skills_mode_override_and_validation():
+    assert resolve_topic_skills_mode_override(
+        _source(), _config({"thread_id": "20", "skills_mode": "prune"})
+    ) == "prune"
+    assert resolve_topic_skills_mode_override(
+        _source(), _config({"thread_id": "20"})
+    ) is None
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Telegram group topic skills_mode"):
+        resolve_topic_skills_mode_override(
+            _source(), _config({"thread_id": "20", "skills_mode": "compact"})
+        )
+
+
 def test_runtime_identity_appears_once_in_session_context():
     context = SessionContext(
         source=SessionSource(
@@ -169,6 +189,7 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
             "thread_id": "20",
             "enabled_skills": ["audit"],
             "enabled_toolsets": ["terminal"],
+            "skills_mode": "prune",
         }
     )
     first = runner._frozen_topic_policy(_source(), "session-key", first_config)
@@ -178,6 +199,7 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
             "thread_id": "20",
             "enabled_skills": ["coding"],
             "enabled_toolsets": [],
+            "skills_mode": "invisible",
         }
     )
     resumed = runner._frozen_topic_policy(
@@ -187,3 +209,41 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
     assert resumed == first
     assert resumed["enabled_skills"] == ["audit"]
     assert resumed["enabled_toolsets"] == ["terminal"]
+    assert resumed["skills_mode"] == "prune"
+
+    # /new keeps the routing key but replaces SessionEntry with empty metadata.
+    runner.session_store.values.clear()
+    fresh = runner._frozen_topic_policy(_source(), "session-key", changed_config)
+    assert fresh["skills_mode"] == "invisible"
+
+
+def test_telegram_session_freezes_profile_mode_when_topic_inherits(monkeypatch):
+    class MetadataStore:
+        def __init__(self):
+            self.values = {}
+
+        def get_session_metadata(self, session_key, key, default=None):
+            return self.values.get((session_key, key), default)
+
+        def set_session_metadata(self, session_key, key, value):
+            self.values[(session_key, key)] = value
+            return True
+
+    monkeypatch.setattr("agent.skill_commands.get_skill_commands", lambda: {})
+    runner = GatewayRunner.__new__(GatewayRunner)
+    runner.session_store = MetadataStore()
+
+    visible = _config({"thread_id": "20"})
+    visible["skills"] = {"mode": "visible"}
+    invisible = _config({"thread_id": "20"})
+    invisible["skills"] = {"mode": "invisible"}
+
+    first = runner._frozen_topic_policy(_source(), "same-session", visible)
+    resumed = runner._frozen_topic_policy(_source(), "same-session", invisible)
+    # Model SessionStore.reset_session(): same routing key, fresh metadata.
+    runner.session_store.values.clear()
+    fresh = runner._frozen_topic_policy(_source(), "same-session", invisible)
+
+    assert first["skills_mode"] == "visible"
+    assert resumed["skills_mode"] == "visible"
+    assert fresh["skills_mode"] == "invisible"

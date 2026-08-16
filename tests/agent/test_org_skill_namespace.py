@@ -130,6 +130,21 @@ class TestListingCollisionsAndLabels:
         assert "[org-shared: by bens-macbook]" in out
         assert "personal-a" in out
 
+        pruned = pb.build_skills_system_prompt(mode="prune")
+        shared_line = next(
+            line for line in pruned.splitlines() if "- shared-x:" in line
+        )
+        rendered_description = shared_line.split(": ", 1)[1]
+        assert rendered_description.startswith("[org-shared: by bens-macbook]")
+        assert len(rendered_description) <= 60
+
+        invisible = pb.build_skills_system_prompt(mode="invisible")
+        index = invisible.split("<available_skills>", 1)[1].split(
+            "</available_skills>", 1
+        )[0]
+        assert "shared-x" in index
+        assert "[org-shared" not in index
+
     def test_collision_flags_both_sides(self, tmp_path, monkeypatch):
         skills, pb = self._render(tmp_path, monkeypatch)
         _mk_skill(skills, "k8s-debug", body="personal version\n")

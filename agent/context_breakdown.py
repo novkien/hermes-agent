@@ -209,7 +209,11 @@ def compute_context_details(agent: Any) -> Dict[str, Any]:
 
     parts = build_system_prompt_parts(agent)
     stable = parts.get("stable", "") or ""
-    skills_match = _SKILLS_BLOCK_RE.search(stable)
+    volatile = parts.get("volatile", "") or ""
+    # The live index is volatile because skill/config changes must be visible
+    # without invalidating the stable identity prefix. Measure the exact block
+    # after the selected skills.mode policy has rendered it.
+    skills_match = _SKILLS_BLOCK_RE.search(volatile) or _SKILLS_BLOCK_RE.search(stable)
     skills_block = skills_match.group(0) if skills_match else ""
 
     skills: List[Dict[str, Any]] = []

@@ -695,7 +695,11 @@ export function createComposer(ctx) {
     }));
   });
   toolsetButton.addEventListener('click', () => {
-    openToolsetMenu(toolsetButton, { api, profile: sessionProfile || profile });
+    openToolsetMenu(toolsetButton, {
+      api,
+      profile: sessionProfile || profile,
+      sessionId,
+    });
   });
   paintPills();
 

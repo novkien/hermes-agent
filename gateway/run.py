@@ -5162,6 +5162,7 @@ class TurnRunner:
             user_id_alt=getattr(ctx.source, "user_id_alt", None),
             skip_context_files=skip_context_files,
             enabled_skills=ctx.enabled_skills,
+            skills_mode=ctx.skills_mode,
             topic_policy_fingerprint=ctx.enabled_toolsets_policy_fingerprint,
             auto_loaded_skill_prompt=ctx.auto_loaded_skill_prompt,
         )
@@ -5405,6 +5406,7 @@ class TurnRunner:
                 load_soul_identity=True,
                 auto_loaded_skill_prompt=ctx.auto_loaded_skill_prompt,
                 enabled_skills=ctx.enabled_skills,
+                skills_mode=ctx.skills_mode,
             )
             if _cache_lock and _cache is not None:
                 with _cache_lock:
@@ -24940,6 +24942,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_id_alt: str | None = None,
         skip_context_files: bool = False,
         enabled_skills: Optional[Iterable[str]] = None,
+        skills_mode: str = "visible",
         topic_policy_fingerprint: str = "",
         auto_loaded_skill_prompt: str = "",
     ) -> str:
@@ -25005,6 +25008,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # session switch can never reuse an agent built for a
                 # different allowlist or authoritative skill payload.
                 sorted(str(name) for name in (enabled_skills or ())),
+                str(skills_mode),
                 str(topic_policy_fingerprint or ""),
                 str(auto_loaded_skill_prompt or ""),
             ],
@@ -26701,19 +26705,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         config: dict,
     ) -> dict:
         """Resolve topic policy once and persist its small session snapshot."""
-        metadata_key = "topic_policy_v1"
+        metadata_key = "topic_policy_v2"
         session_store = getattr(self, "session_store", None)
         get_session_metadata = getattr(session_store, "get_session_metadata", None)
         set_session_metadata = getattr(session_store, "set_session_metadata", None)
         if session_key and callable(get_session_metadata):
             snapshot = get_session_metadata(session_key, metadata_key, None)
-            if isinstance(snapshot, dict) and snapshot.get("version") == 1:
+            if isinstance(snapshot, dict) and snapshot.get("version") == 2:
                 return snapshot
 
         from agent.skill_commands import get_skill_commands
+        from agent.skill_context import resolve_profile_skills_mode
         from gateway.skill_policy import (
             SkillPolicyStatus,
             resolve_enabled_skills_policy,
+            resolve_topic_skills_mode_override,
         )
         from gateway.toolset_policy import (
             ToolsetPolicyStatus,
@@ -26740,14 +26746,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         }:
             raise ValueError(toolset_policy.error or "invalid enabled_toolsets")
 
+        skills_mode_override = resolve_topic_skills_mode_override(source, config)
+        source_platform = getattr(
+            getattr(source, "platform", None),
+            "value",
+            getattr(source, "platform", ""),
+        )
+        # Telegram topic policy is session-frozen: capture the effective mode,
+        # including the profile fallback, so editing either YAML surface cannot
+        # mutate an already-built session prompt. ``/new`` replaces the live
+        # SessionEntry (clearing its metadata even though the routing key stays
+        # stable), so the first turn of the replacement resolves policy again.
+        frozen_skills_mode = None
+        if str(source_platform).lower() == "telegram":
+            frozen_skills_mode = (
+                skills_mode_override
+                if skills_mode_override is not None
+                else resolve_profile_skills_mode(config)
+            )
+
         snapshot = {
-            "version": 1,
+            "version": 2,
             "enabled_skills": (
                 list(skill_policy.identities)
                 if skill_policy.status is SkillPolicyStatus.CONFIGURED_VALID
                 else None
             ),
             "skills_fingerprint": skill_policy.fingerprint,
+            "skills_mode": frozen_skills_mode,
             "enabled_toolsets": (
                 list(toolset_policy.toolsets)
                 if toolset_policy.status is ToolsetPolicyStatus.CONFIGURED_VALID
@@ -26961,6 +26987,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         )
         enabled_skills = _topic_policy.get("enabled_skills")
+        try:
+            from agent.skill_context import resolve_profile_skills_mode
+
+            skills_mode = (
+                _topic_policy.get("skills_mode")
+                or resolve_profile_skills_mode(user_config)
+            )
+        except ValueError as exc:
+            return {
+                "final_response": f"⚠️ Skills mode policy denied: {exc}",
+                "messages": list(history),
+                "api_calls": 0,
+                "completed": False,
+                "history_offset": len(history),
+                "session_id": session_id,
+            }
         denied_auto = sorted(
             set(auto_skill_names or []) - set(enabled_skills or [])
         ) if enabled_skills is not None else []
@@ -27225,6 +27267,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
             enabled_skills=enabled_skills,
+            skills_mode=skills_mode,
             enabled_toolsets_policy_fingerprint=str(
                 _topic_policy.get("toolsets_fingerprint") or "legacy"
             ),

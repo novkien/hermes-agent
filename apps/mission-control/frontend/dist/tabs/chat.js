@@ -1148,7 +1148,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
         .then((response) => recordFrom(response?.data)).catch(() => null),
       readMessages(id, sessionProfile, 0),
       api.get(
-        `/api/upstream/api/sessions/${encodeURIComponent(id)}/context?details=1`,
+        `/api/upstream/api/sessions/${encodeURIComponent(id)}/context?details=1&platform=api_server`,
         { profile: sessionProfile },
       ).then((response) => recordFrom(response?.data)).catch(() => null),
     ]);

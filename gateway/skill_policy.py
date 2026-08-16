@@ -6,6 +6,8 @@ from enum import Enum
 from hashlib import sha256
 from typing import Iterable
 
+from agent.skill_context import validate_skills_mode
+
 
 class SkillPolicyStatus(str, Enum):
     UNCONFIGURED = "UNCONFIGURED"
@@ -125,3 +127,33 @@ def resolve_enabled_skills_policy(
             SkillPolicyStatus.RESOLUTION_ERROR,
             f"could not resolve enabled_skills: {exc}",
         )
+
+
+def resolve_topic_skills_mode_override(source, config: dict | None) -> str | None:
+    """Resolve an optional Telegram group/topic ``skills_mode`` override.
+
+    Absence means the live profile-level ``skills.mode`` remains authoritative.
+    Invalid configured values raise so the gateway denies the turn rather than
+    silently constructing a different system prompt than the operator asked for.
+    """
+    platform = getattr(
+        getattr(source, "platform", None), "value", getattr(source, "platform", "")
+    )
+    if (
+        str(platform).lower() != "telegram"
+        or not getattr(source, "chat_id", None)
+        or not getattr(source, "thread_id", None)
+    ):
+        return None
+    if not isinstance(config, dict):
+        raise ValueError("gateway configuration could not be read")
+    from gateway.platforms.base import resolve_group_topic
+
+    topic = resolve_group_topic(
+        _topic_extra(config), str(source.chat_id), str(source.thread_id)
+    )
+    if topic is None or "skills_mode" not in topic:
+        return None
+    return validate_skills_mode(
+        topic.get("skills_mode"), field="Telegram group topic skills_mode"
+    )

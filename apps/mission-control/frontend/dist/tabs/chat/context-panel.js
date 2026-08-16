@@ -185,7 +185,7 @@ export function createContextPanel({
     if (!sessionId) return;
     const sequence = ++refreshSequence;
     const response = await api.get(
-      `/api/upstream/api/sessions/${encodeURIComponent(sessionId)}/context`,
+      `/api/upstream/api/sessions/${encodeURIComponent(sessionId)}/context?platform=api_server`,
       { profile: sessionProfile },
     ).catch(() => null);
     // A slow earlier request must not repaint the dial after a newer turn
