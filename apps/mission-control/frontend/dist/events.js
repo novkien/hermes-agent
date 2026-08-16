@@ -68,11 +68,10 @@ export class SseClient {
         : SSE_STATE.ERROR);
     };
     es.onmessage = (ev) => this.dispatch('message', ev.data);
-    // Named events: task.changed, permit.changed, issue.changed, cron.changed,
-    // source.health, alert.changed, cache.invalidated, session.changed, ...
-    for (const type of SseClient.EVENT_TYPES) {
-      es.addEventListener(type, (ev) => this.dispatch(type, ev.data));
-    }
+    // Every replayable business event uses one transport name. The actual
+    // resource and legacy topic live in the envelope, so a new backend event
+    // can never be silently dropped because this file lacks a named listener.
+    es.addEventListener('state.change', (ev) => this.dispatch('state.change', ev.data));
     // Live turn frames are a stream, not a log: they carry no `event_id`, and
     // there is nothing to replay or de-duplicate about a token that has already
     // been painted. So they take their own path around `dispatch`, which exists
@@ -113,8 +112,13 @@ export class SseClient {
       const it = this.seenIds.values().next();
       if (it.value !== undefined) this.seenIds.delete(it.value);
     }
-    const set = this.listeners.get(event.event_type || type) || new Set();
-    for (const fn of set) {
+    // Notify the unified live store and legacy topic subscribers during the
+    // route-by-route migration. A Set avoids invoking the same listener twice.
+    const direct = new Set();
+    for (const name of [type, event.event_type]) {
+      for (const fn of this.listeners.get(name) || new Set()) direct.add(fn);
+    }
+    for (const fn of direct) {
       try {
         fn(event);
       } catch (err) {
@@ -156,16 +160,7 @@ export class SseClient {
   }
 
   static get EVENT_TYPES() {
-    return [
-      // This list is an allowlist, not documentation: an event type missing
-      // from it is dropped silently by EventSource's named-listener dispatch.
-      'task.changed', 'run.changed', 'session.changed', 'session.running',
-      'permit.changed',
-      'issue.changed', 'cron.changed', 'log.appended', 'alert.changed',
-      'source.health', 'cache.invalidated',
-      // Note: `chat.frame` is deliberately NOT here — it is registered
-      // separately in `connect()` because it bypasses `dispatch`.
-    ];
+    return ['state.change'];
   }
 }
 

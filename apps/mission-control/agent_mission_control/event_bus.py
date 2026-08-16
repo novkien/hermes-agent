@@ -20,6 +20,7 @@ import uuid
 from collections import deque
 from typing import Awaitable, Callable, Optional
 
+from .live_resources import canonical_event
 from .store import Store
 
 Subscriber = Callable[[dict], Awaitable[None]]
@@ -79,9 +80,13 @@ class EventBus:
         if dedup_key in self._seen:
             return None
         occurred_at = int(time.time())
+        mapping = canonical_event(event_type, entity_id)
         event = {
             "event_id": event_id,
             "event_type": event_type,
+            "resource_key": mapping.resource_key,
+            "operation": mapping.operation,
+            "revision": 0,
             "occurred_at": occurred_at,
             "profile_id": profile_id,
             "entity_type": entity_type,
@@ -188,9 +193,20 @@ class EventBus:
 
 
 def sse_frame(event: dict, retry_ms: Optional[int] = None) -> str:
-    """Render one event as an SSE frame (id/event/data lines)."""
-    lines = [f"id: {event['event_id']}", f"event: {event['event_type']}"]
-    data = json.dumps(event)
+    """Render one replayable state event under the unified transport name."""
+    payload = dict(event)
+    if "resource_key" not in payload:
+        mapping = canonical_event(
+            str(payload.get("event_type") or ""), str(payload.get("entity_id") or "")
+        )
+        payload.update(
+            resource_key=mapping.resource_key,
+            operation=mapping.operation,
+            revision=0,
+            profile_id=payload.get("profile_id") or "",
+        )
+    lines = [f"id: {payload['event_id']}", "event: state.change"]
+    data = json.dumps(payload)
     # SSE data lines: split newlines
     for part in data.split("\n"):
         lines.append(f"data: {part}")

@@ -328,11 +328,11 @@ async def test_event_bus_replay_and_sse_contracts() -> None:
         raise RuntimeError("subscriber failure is isolated")
 
     bus.subscribe("*", subscriber)
-    bus.subscribe("changed", broken)
-    assert (await bus.publish("changed", "adapter", event_id="e1"))["coverage"] == "polled"
-    assert await bus.publish("changed", "adapter", event_id="e1") is None
-    await bus.publish("changed", "adapter", event_id="e2")
-    await bus.publish("changed", "adapter", event_id="e3")
+    bus.subscribe("task.changed", broken)
+    assert (await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e1"))["coverage"] == "polled"
+    assert await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e1") is None
+    await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e2")
+    await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e3")
     assert delivered == ["e1", "e2", "e3"]
     assert [event["event_id"] for event in bus.ring_events()] == ["e2", "e3"]
     assert [event["event_id"] for event in await bus.replay_after("e2")] == ["e3"]
@@ -341,7 +341,7 @@ async def test_event_bus_replay_and_sse_contracts() -> None:
     bus.unsubscribe("*", subscriber)
 
     frame = sse_frame(store.events[0], retry_ms=1234)
-    assert frame.startswith("retry: 1234\nid: e1\nevent: changed\ndata: ")
+    assert frame.startswith("retry: 1234\nid: e1\nevent: state.change\ndata: ")
     assert sse_frame_named("delta", {"text": "hi"}).startswith("event: delta\ndata: ")
     assert sse_heartbeat() == ": ping\n\n"
 
