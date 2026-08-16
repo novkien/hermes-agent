@@ -36,6 +36,7 @@ from .data_backend import (
 from .event_bus import EventBus
 from .ip_utils import resolve_client_ip
 from .pulse import Pulse
+from .read_model import ReadModel
 from .repository_routes import build_repository_router
 from .routes import ApiError, Router
 from .run_inspector import RunInspector
@@ -220,6 +221,7 @@ class AppDeps:
         workers: SourceWorkers | None = None,
         dashboard_store: SessionPersonaStore | None = None,
         runner_manager: RunnerManager | None = None,
+        read_model: ReadModel | None = None,
     ):
         self.settings = settings
         self.store = store
@@ -241,6 +243,7 @@ class AppDeps:
         self.alert_engine = alert_engine or getattr(router, "alert_engine", None)
         self.pulse = pulse or getattr(router, "pulse", None)
         self.workers = workers
+        self.read_model = read_model or getattr(router, "read_model", None)
 
 
 def create_app(deps: AppDeps | None = None, settings: Settings | None = None) -> FastAPI:
@@ -250,6 +253,7 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
 
     if deps is None:
         store = Store(s.store_path)
+        read_model = ReadModel(s.read_model_path)
         dashboard_store = SessionPersonaStore(s.dashboard_store_path)
         dashboard = DashboardClient(s.dashboard_url, s.dashboard_basic_auth_password)
         gateway = GatewayClient(
@@ -292,19 +296,20 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
         pulse = Pulse(store)
         workers = SourceWorkers(
             bus, store, cache, dashboard, gateway, adapter, s,
-            alert_engine=alert_engine,
+            alert_engine=alert_engine, read_model=read_model,
         )
         router = Router(
             s, store, dashboard, gateway, adapter, cache, registry,
             event_bus=bus, correlation_engine=engine, run_inspector=inspector,
             alert_engine=alert_engine, pulse=pulse, dashboard_store=dashboard_store,
-            runner_manager=runner_manager,
+            runner_manager=runner_manager, read_model=read_model,
         )
         deps = AppDeps(
             s, store, dashboard, gateway, adapter, cache, registry, router,
             event_bus=bus, correlation_engine=engine, run_inspector=inspector,
             alert_engine=alert_engine, pulse=pulse, workers=workers,
             dashboard_store=dashboard_store, runner_manager=runner_manager,
+            read_model=read_model,
         )
 
     app = FastAPI(title="agent-mission-control", version="0.1.0", docs_url=None,
@@ -378,6 +383,12 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
         if dashboard_store is not None:
             try:
                 dashboard_store.close()
+            except Exception:  # noqa: BLE001
+                pass
+        read_model = getattr(deps, "read_model", None)
+        if read_model is not None:
+            try:
+                read_model.close()
             except Exception:  # noqa: BLE001
                 pass
 

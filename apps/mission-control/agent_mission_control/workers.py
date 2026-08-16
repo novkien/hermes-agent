@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Optional
 from .cache import Cache
 from .clients import AdapterClient, DashboardClient, GatewayClient
 from .event_bus import EventBus
+from .read_model import ReadModel
 from .store import Store
 
 DEFAULT_BACKOFF_MAX = 300  # 5 minutes
@@ -46,6 +47,8 @@ class PollWorker:
         on_delta: Callable[[Any, Any], Awaitable[None]],
         fingerprint_of: Callable[[Any], str],
         backoff_max: int = DEFAULT_BACKOFF_MAX,
+        on_success: Callable[[Any, str], Awaitable[None]] | None = None,
+        on_failure: Callable[[Exception], Awaitable[None]] | None = None,
     ) -> None:
         self.name = name
         self.interval_seconds = interval_seconds
@@ -53,6 +56,8 @@ class PollWorker:
         self.on_delta = on_delta
         self.fingerprint_of = fingerprint_of
         self.backoff_max = backoff_max
+        self.on_success = on_success
+        self.on_failure = on_failure
         self.last_fingerprint: Optional[str] = None
         self.last_error: Optional[str] = None
         self.backoff_seconds = 0
@@ -76,11 +81,18 @@ class PollWorker:
             self.last_error = None
             self.last_success_at = time.time()
             fp = self.fingerprint_of(data)
+            if self.on_success is not None:
+                await self.on_success(data, fp)
             if fp != self.last_fingerprint:
                 await self.on_delta(data, fp)
                 self.last_fingerprint = fp
         except Exception as exc:  # noqa: BLE001 - worker must survive
             self.last_error = str(exc)
+            if self.on_failure is not None:
+                try:
+                    await self.on_failure(exc)
+                except Exception:
+                    pass
             self.backoff_seconds = min(
                 self.backoff_seconds * 2 or 2, self.backoff_max
             )
@@ -129,6 +141,7 @@ class SourceWorkers:
         adapter: AdapterClient,
         cfg: Any,
         alert_engine: Any = None,
+        read_model: ReadModel | None = None,
     ) -> None:
         self.bus = bus
         self.store = store
@@ -142,6 +155,7 @@ class SourceWorkers:
         # that data, so they feed it here instead of a second poller doing the
         # same round trips.
         self.alert_engine = alert_engine
+        self.read_model = read_model
         self.workers: dict[str, PollWorker] = {}
         self._tasks: list[asyncio.Task] = []
         self._source_health: dict[str, bool] = {}
@@ -172,9 +186,18 @@ class SourceWorkers:
         summary = await self.adapter.board_summary()
         tasks = await self.adapter.tasks(limit=100)
         return {
-            "summary": summary[1] if isinstance(summary, tuple) and summary[0] < 400 else {},
-            "tasks": tasks[1] if isinstance(tasks, tuple) and tasks[0] < 400 else [],
+            "summary": self._adapter_data(summary, {}),
+            "tasks": self._adapter_data(tasks, []),
         }
+
+    @staticmethod
+    def _adapter_data(response: Any, default: Any) -> Any:
+        if not isinstance(response, tuple) or len(response) < 2 or response[0] >= 400:
+            return default
+        body = response[1]
+        if isinstance(body, dict) and "data" in body:
+            return body.get("data", default)
+        return body
 
     def _fp_kanban(self, data: dict) -> str:
         running = [
@@ -227,7 +250,8 @@ class SourceWorkers:
     # ---- permits -----------------------------------------------------------
     async def _fetch_permits(self) -> list[dict]:
         r = await self.adapter.permits_list(limit=100)
-        return r[1] if isinstance(r, tuple) and r[0] < 400 else []
+        data = self._adapter_data(r, [])
+        return data if isinstance(data, list) else []
 
     def _fp_permits(self, data: list) -> str:
         return fingerprint_json(
@@ -247,7 +271,8 @@ class SourceWorkers:
     # ---- issues ------------------------------------------------------------
     async def _fetch_issues(self) -> list[dict]:
         r = await self.adapter.issues_list(limit=100)
-        return r[1] if isinstance(r, tuple) and r[0] < 400 else []
+        data = self._adapter_data(r, [])
+        return data if isinstance(data, list) else []
 
     def _fp_issues(self, data: list) -> str:
         return fingerprint_json(
@@ -269,7 +294,10 @@ class SourceWorkers:
         s, body, _ = await self.dashboard.get("/api/cron/jobs")
         if s >= 400:
             raise RuntimeError(f"cron fetch failed: {s}")
-        jobs = body.get("jobs", body if isinstance(body, list) else [])
+        if isinstance(body, dict):
+            jobs = body.get("jobs") or body.get("data") or []
+        else:
+            jobs = body if isinstance(body, list) else []
         return jobs
 
     def _fp_cron(self, data: list) -> str:
@@ -481,48 +509,75 @@ class SourceWorkers:
             "token_threshold": getattr(self.cfg, "alert_token_threshold", 0),
         })
 
+    # ---- persistent read model -------------------------------------------
+    _WORKER_RESOURCES = {
+        "kanban": ("kanban.tasks",),
+        "permits": ("permits",),
+        "issues": ("issues",),
+        "cron": ("cron.jobs",),
+        "sessions": ("sessions",),
+        "running": ("sessions.running",),
+        "health": ("source.health",),
+        "analytics": ("analytics.usage",),
+    }
+
+    async def _persist_success(self, name: str, data: Any, fingerprint: str) -> None:
+        model = self.read_model
+        if model is None or not model.available:
+            return
+        profile = getattr(self.cfg, "live_default_profile", "default")
+        if name == "kanban":
+            model.replace_entities("kanban.tasks", data.get("tasks", []), profile_id=profile, fingerprint=fingerprint)
+        elif name in {"permits", "issues", "cron", "sessions", "running"}:
+            key = self._WORKER_RESOURCES[name][0]
+            model.replace_entities(key, data if isinstance(data, list) else [], profile_id=profile, fingerprint=fingerprint)
+        elif name == "health":
+            rows = [
+                {"source_id": source, "healthy": bool(healthy), "checked_at": time.time()}
+                for source, healthy in (data.items() if isinstance(data, dict) else ())
+            ]
+            model.replace_entities("source.health", rows, profile_id=profile, fingerprint=fingerprint)
+        elif name == "analytics":
+            summary = dict(data) if isinstance(data, dict) else {}
+            if isinstance(summary.get("totals"), dict):
+                summary = {**summary, **summary["totals"]}
+            model.replace_summary("analytics.usage", summary, profile_id=profile, fingerprint=fingerprint)
+
+    async def _persist_failure(self, name: str, exc: Exception) -> None:
+        if self.read_model is None:
+            return
+        resources = self._WORKER_RESOURCES.get(name, ())
+        if resources:
+            self.read_model.record_failure(
+                resources, exc, profile_id=getattr(self.cfg, "live_default_profile", "default")
+            )
+
+    def _worker(self, name: str, interval: int, fetch: FetchFn, on_delta, fingerprint_of) -> PollWorker:
+        return PollWorker(
+            name, interval, fetch, on_delta, fingerprint_of,
+            self.cfg.poll_backoff_max_seconds,
+            on_success=lambda data, fp: self._persist_success(name, data, fp),
+            on_failure=lambda exc: self._persist_failure(name, exc),
+        )
+
     # ---- setup -------------------------------------------------------------
     def build(self) -> None:
-        self.workers["kanban"] = PollWorker(
-            "kanban", self.cfg.poll_kanban_seconds, self._fetch_kanban,
-            self._on_kanban, self._fp_kanban, self.cfg.poll_backoff_max_seconds,
-        )
-        self.workers["permits"] = PollWorker(
-            "permits", self.cfg.poll_permits_seconds, self._fetch_permits,
-            self._on_permits, self._fp_permits, self.cfg.poll_backoff_max_seconds,
-        )
-        self.workers["issues"] = PollWorker(
-            "issues", self.cfg.poll_issues_seconds, self._fetch_issues,
-            self._on_issues, self._fp_issues, self.cfg.poll_backoff_max_seconds,
-        )
-        self.workers["cron"] = PollWorker(
-            "cron", self.cfg.poll_cron_seconds, self._fetch_cron,
-            self._on_cron, self._fp_cron, self.cfg.poll_backoff_max_seconds,
-        )
-        self.workers["sessions"] = PollWorker(
-            "sessions", self.cfg.poll_sessions_seconds, self._fetch_sessions,
-            self._on_sessions, self._fp_sessions, self.cfg.poll_backoff_max_seconds,
-        )
+        self.workers["kanban"] = self._worker("kanban", self.cfg.poll_kanban_seconds, self._fetch_kanban, self._on_kanban, self._fp_kanban)
+        self.workers["permits"] = self._worker("permits", self.cfg.poll_permits_seconds, self._fetch_permits, self._on_permits, self._fp_permits)
+        self.workers["issues"] = self._worker("issues", self.cfg.poll_issues_seconds, self._fetch_issues, self._on_issues, self._fp_issues)
+        self.workers["cron"] = self._worker("cron", self.cfg.poll_cron_seconds, self._fetch_cron, self._on_cron, self._fp_cron)
+        self.workers["sessions"] = self._worker("sessions", self.cfg.poll_sessions_seconds, self._fetch_sessions, self._on_sessions, self._fp_sessions)
         # Faster than the other pollers on purpose: this drives a "running now"
         # indicator, and an indicator that lags the turn it describes by fifteen
         # seconds is worse than none. The response is a short list and costs the
         # gateway a dict walk.
-        self.workers["running"] = PollWorker(
-            "running", self.cfg.poll_running_seconds, self._fetch_running,
-            self._on_running, self._fp_running, self.cfg.poll_backoff_max_seconds,
-        )
-        self.workers["health"] = PollWorker(
-            "health", self.cfg.poll_health_seconds, self._fetch_health,
-            self._on_health, self._fp_health, self.cfg.poll_backoff_max_seconds,
-        )
+        self.workers["running"] = self._worker("running", self.cfg.poll_running_seconds, self._fetch_running, self._on_running, self._fp_running)
+        self.workers["health"] = self._worker("health", self.cfg.poll_health_seconds, self._fetch_health, self._on_health, self._fp_health)
         self.workers["capabilities"] = PollWorker(
             "capabilities", self.cfg.poll_adapter_health_seconds, self._fetch_capabilities,
             self._on_capabilities, self._fp_capabilities, self.cfg.poll_backoff_max_seconds,
         )
-        self.workers["analytics"] = PollWorker(
-            "analytics", self.cfg.poll_analytics_seconds, self._fetch_analytics,
-            self._on_analytics, self._fp_analytics, self.cfg.poll_backoff_max_seconds,
-        )
+        self.workers["analytics"] = self._worker("analytics", self.cfg.poll_analytics_seconds, self._fetch_analytics, self._on_analytics, self._fp_analytics)
 
     async def start(self) -> None:
         self.build()

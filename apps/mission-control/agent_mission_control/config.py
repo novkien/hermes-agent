@@ -152,6 +152,8 @@ class Settings:
     bind_host: str = "127.0.0.1"
     frontend_dir: str = "../frontend/dist"
     store_path: str = "agentos-dashboard.db"
+    read_model_path: str = "mission-control-read-model.db"
+    live_default_profile: str = "default"
     # Separate file from store_path: the control store is frozen at its 8
     # permitted tables, so dashboard state Hermes cannot hold lives here.
     dashboard_store_path: str = "store.db"
@@ -233,6 +235,8 @@ class Settings:
             bind_host=bind_host,
             frontend_dir=_env("FRONTEND_DIR", "../frontend/dist") or "../frontend/dist",
             store_path=_env("STORE_PATH", "agentos-dashboard.db") or "agentos-dashboard.db",
+            read_model_path=_env("READ_MODEL_PATH", "mission-control-read-model.db") or "mission-control-read-model.db",
+            live_default_profile=_env("MISSION_DEFAULT_PROFILE", "default") or "default",
             dashboard_store_path=_env("DASHBOARD_STORE_PATH", "store.db") or "store.db",
         )
         if overrides:

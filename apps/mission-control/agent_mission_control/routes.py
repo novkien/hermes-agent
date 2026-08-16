@@ -38,6 +38,7 @@ from . import search as search_mod
 from .correlation import CorrelationEngine
 from .event_bus import EventBus, sse_frame, sse_frame_named, sse_heartbeat
 from .pulse import Pulse
+from .read_model import ReadModel
 from .run_inspector import RunInspector
 from .runner_manager import RunnerManager, RunnerSpawnError
 from .clients import (
@@ -974,11 +975,13 @@ class Router:
         pulse: Pulse | None = None,
         dashboard_store: SessionPersonaStore | None = None,
         runner_manager: RunnerManager | None = None,
+        read_model: ReadModel | None = None,
     ):
         self.s = settings
         self.store = store
         self.dashboard_store = dashboard_store
         self.runner_manager = runner_manager
+        self.read_model = read_model
         self.dashboard = dashboard
         self.gateway = gateway
         self.adapter = adapter
@@ -2131,6 +2134,66 @@ class Router:
             )
         )
 
+    async def live_bootstrap(self, request: Request) -> Response:
+        """Return shell + current-route state from one local read-model view."""
+        self._require_session(request)
+        rid = request.state.request_id
+        route = str(request.query_params.get("route") or "overview")
+        profile = str(request.query_params.get("profile") or self.s.live_default_profile)
+        if self.read_model is None:
+            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+        try:
+            data = self.read_model.bootstrap(route, profile_id=profile)
+        except KeyError:
+            return _json_error(404, "unknown_route", "route is outside live resource contract", rid)
+        except ValueError as exc:
+            return _json_error(400, "invalid_profile", str(exc), rid)
+        provenance = [item.get("provenance") for item in data["resources"].values()]
+        freshness = "stale" if "stale" in provenance else (
+            "unavailable" if provenance and all(value in {"missing", "unavailable"} for value in provenance)
+            else "live"
+        )
+        return JSONResponse(self._envelope(
+            data, source_id="read-model", profile_id=profile, freshness=freshness,
+            request_id=rid,
+        ))
+
+    async def live_resource(self, request: Request, resource_key: str) -> Response:
+        """Bounded resource resync, optionally suppressed by revision."""
+        self._require_session(request)
+        rid = request.state.request_id
+        profile = str(request.query_params.get("profile") or self.s.live_default_profile)
+        try:
+            after_revision = max(0, int(request.query_params.get("after_revision", 0)))
+        except (TypeError, ValueError):
+            return _json_error(422, "invalid_revision", "after_revision must be an integer", rid)
+        if self.read_model is None:
+            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+        try:
+            data = self.read_model.resource(
+                resource_key, profile_id=profile, after_revision=after_revision
+            )
+        except KeyError:
+            return _json_error(404, "unknown_resource", "resource is outside live resource contract", rid)
+        except ValueError as exc:
+            return _json_error(400, "invalid_profile", str(exc), rid)
+        return JSONResponse(self._envelope(
+            data, source_id="read-model", profile_id=profile,
+            freshness=str(data.get("provenance") or "unavailable"), request_id=rid,
+        ))
+
+    async def live_health(self, request: Request) -> Response:
+        self._require_session(request)
+        rid = request.state.request_id
+        if self.read_model is None:
+            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+        data = self.read_model.health()
+        status = 200 if data.get("status") != "unavailable" else 503
+        return JSONResponse(self._envelope(
+            data, source_id="read-model", profile_id=None,
+            freshness="live" if status == 200 else "unavailable", request_id=rid,
+        ), status_code=status)
+
     # ------------------------------------------------------------ mutations
     async def _read_body_keys(self, request: Request) -> list[str]:
         """Extract only top-level KEY NAMES from a JSON body (never values)."""
@@ -3073,6 +3136,9 @@ class Router:
         # Registered before the dashboard read catch-all, and ahead of
         # /api/events/stream only for readability — the paths do not overlap.
         r.add_api_route("/api/events/recent", self.events_recent_endpoint, methods=["GET"])
+        r.add_api_route("/api/live/bootstrap", self.live_bootstrap, methods=["GET"])
+        r.add_api_route("/api/live/resource/{resource_key}", self.live_resource, methods=["GET"])
+        r.add_api_route("/api/live/health", self.live_health, methods=["GET"])
 
         # ---- mutations (allowlist, 1:1 mirror of gateway 8642 routes) ----
         r.add_api_route("/api/sessions/{session_id}/chat/stream",
