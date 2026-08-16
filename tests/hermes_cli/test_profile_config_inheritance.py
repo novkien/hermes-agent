@@ -197,6 +197,22 @@ def test_save_config_does_not_materialize_inherited_keys(profile_env):
     assert reloaded["cron"]["allow_agent_scheduling"] is True
 
 
+def test_empty_owned_section_survives_save_round_trip(profile_env, monkeypatch):
+    _, _, worker = profile_env
+    own_mcp = PROFILE_YAML + "mcp:\n"
+    worker.write_text(own_mcp, encoding="utf-8")
+    monkeypatch.setattr(cfgmod, "get_config_path", lambda: worker)
+    cfgmod._LOAD_CONFIG_CACHE.clear()
+    cfg = load_config()
+    assert cfg["mcp"] == {"auto_reload_on_config_change": True}
+    assert "model" not in cfg["mcp"]
+    cfgmod.save_config(cfg)
+    raw = yaml.safe_load(worker.read_text(encoding="utf-8"))
+    assert "mcp" in raw
+    reloaded = load_config()
+    assert "model" not in reloaded["mcp"]
+
+
 def test_gateway_loader_applies_inheritance(profile_env, monkeypatch):
     import gateway.config as gwmod
 

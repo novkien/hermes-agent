@@ -3879,6 +3879,20 @@ def save_config(
                     explicit_raw_paths or set(),
                 )
 
+        # Re-emit explicitly-empty top-level sections (``mcp:`` / ``mcp: {}``)
+        # that the default-strip removed wholesale. They carry no schema
+        # defaults to materialize, but they are profile-owned under presence
+        # semantics — dropping them would silently flip a profile to
+        # inheriting that section from root on the next load.
+        if isinstance(normalized, dict) and isinstance(_raw_for_paths, dict):
+            for _rk, _rv in _raw_for_paths.items():
+                if (
+                    (_rv is None or isinstance(_rv, dict) and not _rv)
+                    and isinstance(DEFAULT_CONFIG.get(_rk), dict)
+                    and _rk not in normalized
+                ):
+                    normalized[_rk] = {}
+
         # Build optional commented-out sections for features that are off by
         # default or only relevant when explicitly configured.
         parts = []
