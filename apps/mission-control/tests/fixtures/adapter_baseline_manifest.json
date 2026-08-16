@@ -1,0 +1,186 @@
+{
+  "format_version": 1,
+  "captured_at": "2026-08-16T23:02:35+07:00",
+  "capture_policy": {
+    "response_values": "types-only",
+    "dynamic_mapping_keys": "collapsed",
+    "memory_content": "discarded-before-shaping",
+    "chat_transcripts": "not-collected",
+    "mutations": "negative-validation-only; no write target resolved",
+    "credentials": "not-collected"
+  },
+  "recovery": {
+    "repository": "/mnt/jarvis/.hermes/hermes-agent",
+    "branch": "master",
+    "baseline_head": "ce7b8bad37745f8fad175b555e5136ab1dd48346",
+    "tracked_dirty_snapshot_ref": "refs/codex/recovery/mission-control-live-ui-20260816-tracked",
+    "tracked_dirty_snapshot_commit": "f3c1da4b58cb2445be88615dfa6af78659c29d6c",
+    "dirty_status_sha256": "f17c5d07f5bd4ff8b170a13442aff86b7fc18aa072982f702a2c58aadd77d6be",
+    "untracked_file": "apps/mission-control/frontend/dist/tabs/kanban-analysis.js",
+    "untracked_blob_sha1": "eb2a912b788cd3fb2cd5d4022c44c254c313dad3",
+    "policy": "No reset, clean, checkout, or overwrite was performed."
+  },
+  "mission_control_runtime": {
+    "source_checkout": "/home/jarvis/.hermes/hermes-agent",
+    "source_head": "ce7b8bad37745f8fad175b555e5136ab1dd48346",
+    "source_branch": "master",
+    "service_working_directory": "/home/jarvis/.hermes/mission-control",
+    "working_directory_is_git_checkout": false,
+    "service_unit": "/home/jarvis/.config/systemd/user/hermes-mission-control.service",
+    "service_unit_sha256": "6b0d629f8d7397cd3a07656531ed98a20dd6fc24d68a9871c230f9a52b3d5173",
+    "service_scope": "user",
+    "service_active_state": "active",
+    "service_sub_state": "running",
+    "service_main_pid": 2196780,
+    "service_started_at": "2026-08-16T21:16:07+07:00",
+    "python": "3.13.14",
+    "frontend_dir": "/home/jarvis/.hermes/hermes-agent/apps/mission-control/frontend/dist",
+    "bff_port": 51763
+  },
+  "adapter_runtime": {
+    "canonical_source": "/home/jarvis/agentos-data-adapter",
+    "canonical_reason": "Deployed source contains production-only decisions and room occupancy behavior absent from the older temp copy.",
+    "service_unit": "/etc/systemd/system/agentos-data-adapter.service",
+    "service_unit_sha256": "3c2f48abfc7bf65ceb719400ca0d8d7378330ac950faf0872be755d87a1209aa",
+    "service_scope": "system",
+    "service_active_state": "active",
+    "service_sub_state": "running",
+    "service_enabled": true,
+    "service_main_pid": 1276320,
+    "service_started_at": "2026-08-13T00:14:25+07:00",
+    "port": 8643,
+    "python_source_aggregate_sha256": "f08a0cd2bf9fdd519c9b5b70212eb470b04b8dcd20a25459fde98334a6a17322",
+    "python_source_sha256": {
+      "agentos_data_adapter/__init__.py": "3770be892c2d1c33cafb580c3aa557ca9a652636b591ff04cc1a69fb91682f0a",
+      "agentos_data_adapter/_deploy.py": "066c8d15ea7194b66d96eb6fed15a24bdf62693980e3bb2ee1b12e938d730bbc",
+      "agentos_data_adapter/app.py": "63caa81cf259020d71ce41b07d11cac4b57b5f1e0e924c4a31011793deb3a496",
+      "agentos_data_adapter/auth.py": "c739cb729bbb55b7f2ffc2d4a4b16cd59e68a03cfa858b9bd543b1345092f42c",
+      "agentos_data_adapter/config.py": "6fdf57b79f73b996257b1af52619c7cd796a9b91323f2efc7e5e4556e33bf732",
+      "agentos_data_adapter/db.py": "998281a682ef14f5e8bddd8191f7eb6ff5475b8133c5ed49e16335413a1b45c2",
+      "agentos_data_adapter/decisions.py": "0070cd31870011d8b40a842429196264139f751dffe21e0327374910cb399bdd",
+      "agentos_data_adapter/queries.py": "f44fc98d79a7cc303bc00fab3779ddc2f9536075c63a8a5cb17c53821cb407e1",
+      "agentos_data_adapter/room_binding.py": "3752d46b015c763c965e69769dd3881efebe0fe1dd406c08ab0b39c44ae6ef29",
+      "agentos_data_adapter/room_occupancy.py": "d565936629f21fd8db2c50ec39472ed9743ff546f6fa5defc87cda08bcd03dbd"
+    }
+  },
+  "source_databases": {
+    "issues": {
+      "path": "/home/jarvis/.hermes/workspace/state/agent-notes/issues.db",
+      "main_size": 413696,
+      "wal_size": 2760432,
+      "shm_size": 32768,
+      "query_only": 1,
+      "main_wal_shm_unchanged_during_probe": true
+    },
+    "kanban": {
+      "path": "/home/jarvis/.hermes/kanban/boards/task/kanban.db",
+      "main_size": 696320,
+      "wal_size": 0,
+      "shm_size": 32768,
+      "query_only": 1,
+      "main_wal_shm_unchanged_during_probe": true
+    },
+    "permits": {
+      "path": "/home/jarvis/.hermes/workspace/state/permits.db",
+      "main_size": 69632,
+      "query_only": 1,
+      "main_wal_shm_unchanged_during_probe": true
+    },
+    "state": {
+      "path": "/home/jarvis/.hermes/state.db",
+      "main_size": 2205511680,
+      "wal_size": 16797272,
+      "shm_size": 32768,
+      "query_only": 1,
+      "main_wal_shm_unchanged_during_probe": true
+    }
+  },
+  "route_inventory": [
+    {"name": "health", "method": "GET", "path": "/health", "classification": "public-read"},
+    {"name": "capabilities", "method": "GET", "path": "/capabilities", "classification": "read"},
+    {"name": "memory-read", "method": "GET", "path": "/memory/files/{file_key}", "classification": "sensitive-read"},
+    {"name": "memory-write", "method": "PUT", "path": "/memory/files/{file_key}", "classification": "mutation"},
+    {"name": "kanban-boards", "method": "GET", "path": "/kanban/boards", "classification": "read"},
+    {"name": "kanban-tasks", "method": "GET", "path": "/kanban/tasks", "classification": "read"},
+    {"name": "kanban-task-detail", "method": "GET", "path": "/kanban/tasks/{task_id}", "classification": "read"},
+    {"name": "kanban-task-events", "method": "GET", "path": "/kanban/tasks/{task_id}/events", "classification": "read"},
+    {"name": "kanban-task-runs", "method": "GET", "path": "/kanban/tasks/{task_id}/runs", "classification": "read"},
+    {"name": "kanban-task-attachments", "method": "GET", "path": "/kanban/tasks/{task_id}/attachments", "classification": "read"},
+    {"name": "kanban-task-worker-session", "method": "GET", "path": "/kanban/tasks/{task_id}/worker-session", "classification": "read"},
+    {"name": "kanban-board-summary", "method": "GET", "path": "/kanban/board/summary", "classification": "read"},
+    {"name": "permits", "method": "GET", "path": "/permits", "classification": "read"},
+    {"name": "permit-detail", "method": "GET", "path": "/permits/{permit_id}", "classification": "read"},
+    {"name": "issues", "method": "GET", "path": "/issues", "classification": "read"},
+    {"name": "issue-detail", "method": "GET", "path": "/issues/{issue_id}", "classification": "read"},
+    {"name": "sessions-search", "method": "GET", "path": "/sessions/search", "classification": "read"},
+    {"name": "room-sessions", "method": "GET", "path": "/room-sessions", "classification": "read"},
+    {"name": "session-tips", "method": "GET", "path": "/session-tips", "classification": "read"},
+    {"name": "room-cards", "method": "GET", "path": "/room-cards", "classification": "read"},
+    {"name": "thread-sessions", "method": "GET", "path": "/thread-sessions", "classification": "read"},
+    {"name": "session-timeline", "method": "GET", "path": "/sessions/{session_id}/timeline", "classification": "read"},
+    {"name": "source-fingerprint", "method": "GET", "path": "/sources/{source_id}/fingerprint", "classification": "read"},
+    {"name": "room-binding", "method": "GET", "path": "/room-binding", "classification": "read"},
+    {"name": "permit-decision", "method": "POST", "path": "/permits/{permit_id}/decision", "classification": "mutation"},
+    {"name": "issue-update", "method": "POST", "path": "/issues/{issue_id}/update", "classification": "mutation"}
+  ],
+  "golden_corpus": {
+    "capabilities": {"status": 200, "elapsed_ms": 11.230, "top_level": ["data", "meta"]},
+    "health": {"status": 200, "elapsed_ms": 4.446, "top_level": ["sources", "status", "uptime", "version"]},
+    "issue-detail": {"status": 200, "elapsed_ms": 2.858, "top_level": ["data", "meta"]},
+    "issue-update": {"status": 400, "elapsed_ms": 2.321, "top_level": ["detail"], "reason": "non-integer id rejected before script execution"},
+    "issues": {"status": 200, "elapsed_ms": 1.776, "top_level": ["data", "meta"]},
+    "kanban-board-summary": {"status": 200, "elapsed_ms": 15.068, "top_level": ["data", "meta"]},
+    "kanban-boards": {"status": 200, "elapsed_ms": 5.079, "top_level": ["data", "meta"]},
+    "kanban-task-attachments": {"status": 200, "elapsed_ms": 3.360, "top_level": ["data", "meta"]},
+    "kanban-task-detail": {"status": 200, "elapsed_ms": 2.773, "top_level": ["data", "meta"]},
+    "kanban-task-events": {"status": 200, "elapsed_ms": 3.203, "top_level": ["data", "meta"]},
+    "kanban-task-runs": {"status": 200, "elapsed_ms": 3.130, "top_level": ["data", "meta"]},
+    "kanban-task-worker-session": {"status": 404, "elapsed_ms": 69.653, "top_level": ["detail"], "reason": "selected task had no worker anchor"},
+    "kanban-tasks": {"status": 200, "elapsed_ms": 24.338, "top_level": ["data", "meta"]},
+    "memory-read": {"status": 200, "elapsed_ms": 4.163, "top_level": ["data", "meta"], "body": "discarded-before-shaping"},
+    "memory-write": {"status": 404, "elapsed_ms": 10.178, "top_level": ["detail"], "reason": "unknown allowlisted file key rejected before filesystem access"},
+    "permit-decision": {"status": 400, "elapsed_ms": 4.954, "top_level": ["detail"], "reason": "unsupported field rejected before permit lookup or update"},
+    "permit-detail": {"status": 200, "elapsed_ms": 1.514, "top_level": ["data", "meta"]},
+    "permits": {"status": 200, "elapsed_ms": 1.626, "top_level": ["data", "meta"]},
+    "room-binding": {"status": 200, "elapsed_ms": 82.401, "top_level": ["data", "meta"]},
+    "room-cards": {"status": 200, "elapsed_ms": 15.798, "top_level": ["data", "meta"]},
+    "room-sessions": {"status": 200, "elapsed_ms": 13.968, "top_level": ["data", "meta"]},
+    "session-timeline": {"status": 200, "elapsed_ms": 4.642, "top_level": ["data", "meta"]},
+    "session-tips": {"status": 200, "elapsed_ms": 7.055, "top_level": ["data", "meta"]},
+    "sessions-search": {"status": 200, "elapsed_ms": 2.975, "top_level": ["data", "meta"]},
+    "source-fingerprint:issues": {"status": 200, "elapsed_ms": 1.209, "top_level": ["data", "meta"]},
+    "source-fingerprint:kanban": {"status": 200, "elapsed_ms": 1.421, "top_level": ["data", "meta"]},
+    "source-fingerprint:permits": {"status": 200, "elapsed_ms": 1.218, "top_level": ["data", "meta"]},
+    "source-fingerprint:state": {"status": 200, "elapsed_ms": 0.916, "top_level": ["data", "meta"]},
+    "thread-sessions": {"status": 200, "elapsed_ms": 6.329, "top_level": ["data", "meta"]}
+  },
+  "browser_baseline": {
+    "url": "http://127.0.0.1:51764/?profile=default#/overview",
+    "transport": "SSH loopback tunnel to Mission Control 51763",
+    "sse_visible_state": "open",
+    "manual_refresh_probe": {
+      "sample_window_ms": 2600,
+      "sampled_frames": 157,
+      "initial_route_roots": 1,
+      "workspace_replaced": false,
+      "first_card_identity_lost_ms": 158,
+      "skeleton_frames": 149,
+      "minimum_visible_text_length": 0,
+      "result": "fails-zero-flicker-baseline"
+    }
+  },
+  "negative_mutation_probe": {
+    "permit_db_unchanged": true,
+    "issues_db_unchanged": true,
+    "memory_directory_unchanged": true,
+    "scope": "Only fail-closed validation paths were requested; no valid entity or file target was used."
+  },
+  "known_baseline_anomalies": [
+    {
+      "surface": "source fingerprint",
+      "observation": "A prior probe returned HTTP 500 with sqlite3.OperationalError: interrupted; an immediate retry returned 200.",
+      "cause_pointer": "The cached SourceStore connection progress handler is armed before a deadline is set.",
+      "phase": "Phase 1 parity/security normalization"
+    }
+  ]
+}
