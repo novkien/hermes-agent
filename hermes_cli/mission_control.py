@@ -108,6 +108,8 @@ def generate_systemd_unit(
             ctx.data_root,
             ctx.hermes_root / "hermes-agent",
             ctx.hermes_root / "hermes-plugins",
+            ctx.hermes_root / "skills",
+            ctx.hermes_root / "workspace" / "skills-pack",
             ctx.hermes_root.parent / "agents",
             ctx.hermes_root / "repos" / "hermes-skills.git",
         )

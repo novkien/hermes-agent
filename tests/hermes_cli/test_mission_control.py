@@ -47,6 +47,8 @@ def test_generated_unit_is_independent(monkeypatch, tmp_path: Path) -> None:
         f"ReadWritePaths={tmp_path / '.hermes' / 'mission-control'} "
         f"{tmp_path / '.hermes' / 'hermes-agent'} "
         f"{tmp_path / '.hermes' / 'hermes-plugins'} "
+        f"{tmp_path / '.hermes' / 'skills'} "
+        f"{tmp_path / '.hermes' / 'workspace' / 'skills-pack'} "
         f"{tmp_path / 'agents'} "
         f"{tmp_path / '.hermes' / 'repos' / 'hermes-skills.git'}"
     ) in unit
