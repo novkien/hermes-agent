@@ -345,6 +345,119 @@ class ReadModel:
         except (sqlite3.DatabaseError, OSError) as exc:
             self._degrade(exc)
 
+    def upsert_entity(
+        self, resource_key: str, raw: dict[str, Any], *, profile_id: str = "default"
+    ) -> tuple[int, dict[str, Any]]:
+        """Apply one mutation/native delta and return its resource revision."""
+        spec = RESOURCE_SPECS[resource_key]
+        if spec.persistence not in {"entities", "metadata"} or not spec.entity_key:
+            raise ValueError(f"resource is not entity-persistable: {resource_key}")
+        profile = self._scope(resource_key, profile_id)
+        value = project_entity(resource_key, raw)
+        entity_id = value.get(spec.entity_key)
+        if entity_id in (None, ""):
+            raise ValueError(f"entity lacks {spec.entity_key}: {resource_key}")
+        entity_id = str(entity_id)
+        encoded = _json(value)
+        now = time.time()
+        try:
+            with self._lock:
+                conn = self._connection()
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute(
+                    "SELECT revision,payload_json FROM resource_entities "
+                    "WHERE profile_id=? AND resource_key=? AND entity_id=?",
+                    (profile, resource_key, entity_id),
+                ).fetchone()
+                if current is not None and current["payload_json"] == encoded:
+                    conn.commit()
+                    return int(current["revision"]), value
+                revision = self._next_revision(conn, profile, resource_key)
+                conn.execute(
+                    "INSERT INTO resource_entities "
+                    "(profile_id,resource_key,entity_id,revision,occurred_at,payload_json) "
+                    "VALUES (?,?,?,?,?,?) ON CONFLICT(profile_id,resource_key,entity_id) DO UPDATE SET "
+                    "revision=excluded.revision,occurred_at=excluded.occurred_at,payload_json=excluded.payload_json",
+                    (profile, resource_key, entity_id, revision, now, encoded),
+                )
+                count = int(conn.execute(
+                    "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
+                    (profile, resource_key),
+                ).fetchone()[0])
+                conn.execute(
+                    "INSERT INTO resource_snapshots "
+                    "(profile_id,resource_key,revision,fingerprint,fetched_at,payload_json) "
+                    "VALUES (?,?,?,'',?,?) ON CONFLICT(profile_id,resource_key) DO UPDATE SET "
+                    "revision=excluded.revision,fetched_at=excluded.fetched_at,payload_json=excluded.payload_json",
+                    (profile, resource_key, revision, now, _json({"count": count})),
+                )
+                conn.execute(
+                    "INSERT INTO source_state (profile_id,resource_key,revision,last_success_at,last_error,health) "
+                    "VALUES (?,?,?,?,NULL,'healthy') ON CONFLICT(profile_id,resource_key) DO UPDATE SET "
+                    "revision=excluded.revision,last_success_at=excluded.last_success_at,last_error=NULL,health='healthy'",
+                    (profile, resource_key, revision, now),
+                )
+                conn.commit()
+                return revision, value
+        except (sqlite3.DatabaseError, OSError) as exc:
+            self._degrade(exc)
+            return 0, value
+
+    def delete_entity(
+        self, resource_key: str, entity_id: str, *, profile_id: str = "default"
+    ) -> int:
+        spec = RESOURCE_SPECS[resource_key]
+        if not spec.entity_key:
+            raise ValueError(f"resource has no entity key: {resource_key}")
+        profile = self._scope(resource_key, profile_id)
+        now = time.time()
+        try:
+            with self._lock:
+                conn = self._connection()
+                conn.execute("BEGIN IMMEDIATE")
+                exists = conn.execute(
+                    "SELECT 1 FROM resource_entities WHERE profile_id=? AND resource_key=? AND entity_id=?",
+                    (profile, resource_key, str(entity_id)),
+                ).fetchone()
+                if exists is None:
+                    conn.commit()
+                    return self._next_revision(conn, profile, resource_key) - 1
+                revision = self._next_revision(conn, profile, resource_key)
+                conn.execute(
+                    "DELETE FROM resource_entities WHERE profile_id=? AND resource_key=? AND entity_id=?",
+                    (profile, resource_key, str(entity_id)),
+                )
+                count = int(conn.execute(
+                    "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
+                    (profile, resource_key),
+                ).fetchone()[0])
+                conn.execute(
+                    "UPDATE resource_snapshots SET revision=?,fetched_at=?,payload_json=? "
+                    "WHERE profile_id=? AND resource_key=?",
+                    (revision, now, _json({"count": count}), profile, resource_key),
+                )
+                conn.execute(
+                    "UPDATE source_state SET revision=?,last_success_at=?,last_error=NULL,health='healthy' "
+                    "WHERE profile_id=? AND resource_key=?",
+                    (revision, now, profile, resource_key),
+                )
+                conn.commit()
+                return revision
+        except (sqlite3.DatabaseError, OSError) as exc:
+            self._degrade(exc)
+            return 0
+
+    def revision(self, resource_key: str, *, profile_id: str = "default") -> int:
+        profile = self._scope(resource_key, profile_id)
+        if not self.available:
+            return 0
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT revision FROM source_state WHERE profile_id=? AND resource_key=?",
+                (profile, resource_key),
+            ).fetchone()
+        return int(row[0] if row else 0)
+
     def _degrade(self, exc: Exception) -> None:
         self.error = f"{type(exc).__name__}: {exc}"[:500]
         try:

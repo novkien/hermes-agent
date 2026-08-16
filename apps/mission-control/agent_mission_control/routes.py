@@ -1594,10 +1594,28 @@ class Router:
         bus = getattr(self, "event_bus", None)
         if bus is not None and event:
             event_name, entity_type = event
+            resource_key = "permits" if entity_type == "permit" else "issues"
+            operation = "delete" if body.get("delete") else "upsert"
+            revision = None
+            event_payload: dict[str, Any] = {"status": body.get("status")}
+            if self.read_model is not None:
+                if operation == "delete":
+                    revision = self.read_model.delete_entity(
+                        resource_key, str(entity_id), profile_id=profile_id or self.s.live_default_profile
+                    )
+                    event_payload = {}
+                else:
+                    raw = dict(data) if isinstance(data, dict) else {}
+                    raw.update({key: value for key, value in body.items() if key in {"status", "severity"}})
+                    raw["permit_id" if entity_type == "permit" else "id"] = entity_id
+                    revision, event_payload = self.read_model.upsert_entity(
+                        resource_key, raw, profile_id=profile_id or self.s.live_default_profile
+                    )
             await bus.safe_publish(
                 event_name, entity_type + "s", entity_type, str(entity_id),
-                {"status": body.get("status")}, coverage="native",
+                event_payload, coverage="native",
                 profile_id=profile_id,
+                resource_key=resource_key, operation=operation, revision=revision,
             )
         return JSONResponse(
             self._envelope(
@@ -2524,9 +2542,12 @@ class Router:
         # every ordinary request then queued behind them until the whole app
         # appeared frozen. One stream carries everything instead.
         watch_id = (request.query_params.get("watch") or "").strip()
-        queue: "asyncio.Queue[dict]" = self.event_bus.make_queue()
+        profile_id = str(request.query_params.get("profile") or self.s.live_default_profile)
+        queue = self.event_bus.make_queue()
 
         async def subscriber(ev: dict) -> None:
+            if ev.get("profile_id") and ev.get("profile_id") != profile_id:
+                return
             await queue.put(ev)
 
         self.event_bus.subscribe("*", subscriber)
@@ -2542,7 +2563,7 @@ class Router:
 
         async def gen():
             try:
-                replay = await self.event_bus.replay_after(last_event_id)
+                replay = await self.event_bus.replay_after(last_event_id, profile_id=profile_id)
                 for ev in replay:
                     yield sse_frame(ev)
                 yield f"retry: {self.event_bus.retry_ms}\n\n"

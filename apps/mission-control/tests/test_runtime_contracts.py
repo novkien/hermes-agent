@@ -1831,12 +1831,8 @@ async def test_session_changed_names_the_session_that_moved() -> None:
     """A subscriber watching ONE conversation has to be able to tell whether
     the session in front of it is the one that advanced.
 
-    The poller used to publish a single list-level event with an empty
-    `entity_id`, so the chat tab — which filters on that id — discarded every
-    event the poller ever sent. A turn driven from Telegram, cron or the CLI
-    therefore never reached an open thread, and the only way to see it was to
-    refresh. The list-level event stays (tabs that render the whole list want
-    it); the targeted ones are what make the topic usable per session.
+    Each changed session is now a keyed delta. A list-level invalidation is
+    reserved for an overflow that requires bounded resync.
     """
     from agent_mission_control.workers import SourceWorkers
 
@@ -1844,21 +1840,21 @@ async def test_session_changed_names_the_session_that_moved() -> None:
 
     class FakeBus:
         async def publish(self, event_type, source_id, entity_type, entity_id,
-                          payload, coverage=None):
+                          payload, coverage=None, **_kwargs):
             published.append((event_type, entity_id, payload))
 
     workers = SourceWorkers.__new__(SourceWorkers)
     workers.bus = FakeBus()
-    workers._sessions_by_id = {}
+    workers._initialized_sources = set()
+    workers._session_entities = {}
 
     first = [
         {"id": "s1", "last_activity_at": 100, "message_count": 4},
         {"id": "s2", "last_activity_at": 100, "message_count": 9},
     ]
     await workers._on_sessions(first, None)
-    # Nothing to compare against yet: only the list-level event, or every
-    # session on the fleet would look like it just moved.
-    assert [e[1] for e in published] == [""]
+    # Initial state arrives through bootstrap; it must not emit a list flood.
+    assert published == []
 
     published.clear()
     await workers._on_sessions(
@@ -1871,31 +1867,34 @@ async def test_session_changed_names_the_session_that_moved() -> None:
     targeted = [e for e in published if e[1]]
     assert [e[1] for e in targeted] == ["s2"], "only the session that moved is named"
     assert targeted[0][2]["message_count"] == 11
-    assert "" in [e[1] for e in published], "the list-level event still fires"
+    assert "" not in [e[1] for e in published]
 
 
 async def test_session_changed_burst_is_capped() -> None:
-    """A cron sweep touching hundreds of sessions must not flood the bus; the
-    list-level event still covers whatever the cap drops."""
+    """A cron sweep is capped and emits one explicit resync requirement."""
     from agent_mission_control.workers import SourceWorkers
 
-    published: list[str] = []
+    published: list[tuple[str, str | None]] = []
 
     class FakeBus:
         async def publish(self, event_type, source_id, entity_type, entity_id,
-                          payload, coverage=None):
-            published.append(entity_id)
+                          payload, coverage=None, **kwargs):
+            published.append((entity_id, kwargs.get("operation")))
 
     workers = SourceWorkers.__new__(SourceWorkers)
     workers.bus = FakeBus()
-    workers._sessions_by_id = {f"s{i}": (0, 0, None) for i in range(200)}
+    workers._initialized_sources = {"sessions"}
+    workers._session_entities = {
+        f"s{i}": {"id": f"s{i}", "last_activity_at": 0, "message_count": 0}
+        for i in range(200)
+    }
 
     await workers._on_sessions(
         [{"id": f"s{i}", "last_activity_at": 5, "message_count": 1} for i in range(200)],
         None,
     )
-    assert len([e for e in published if e]) == 25
-    assert "" in published
+    assert len([entity for entity, operation in published if entity and operation != "delete"]) == 100
+    assert ("", "resync-required") in published
 
 
 def test_decision_writes_stay_off_the_get_only_adapter_proxy() -> None:

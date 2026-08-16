@@ -78,12 +78,24 @@ def main() -> None:
         assert [row["entity_id"] for row in beta["entities"]] == ["b"]
         assert "token" not in alpha["entities"][0]["payload"]
         assert "content" not in alpha["entities"][0]["payload"]
+        next_revision, projected = model.upsert_entity(
+            "kanban.tasks", task("a", "Alpha updated", password="drop"), profile_id="alpha"
+        )
+        assert next_revision == 2 and projected["title"] == "Alpha updated"
+        assert model.revision("kanban.tasks", profile_id="alpha") == 2
+        assert model.delete_entity("kanban.tasks", "a", profile_id="alpha") == 3
+        assert model.resource("kanban.tasks", profile_id="alpha")["entities"] == []
+        # Restore a last-known-good row for stale/restart checks below.
+        restored_revision, _ = model.upsert_entity(
+            "kanban.tasks", task("a", "Alpha"), profile_id="alpha"
+        )
+        assert restored_revision == 4
 
         model.record_failure(("kanban.tasks",), RuntimeError("source offline"), profile_id="alpha")
         stale = model.resource("kanban.tasks", profile_id="alpha")
         assert stale["provenance"] == "stale"
         assert stale["entities"][0]["entity_id"] == "a", "failure erased last-known-good"
-        unchanged = model.resource("kanban.tasks", profile_id="alpha", after_revision=alpha_rev)
+        unchanged = model.resource("kanban.tasks", profile_id="alpha", after_revision=restored_revision)
         assert unchanged["provenance"] == "unchanged" and unchanged["entities"] == []
 
         bootstrap = model.bootstrap("kanban", profile_id="alpha")

@@ -285,6 +285,7 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             heartbeat_seconds=s.sse_heartbeat_seconds,
             retry_ms=s.sse_retry_ms,
             cache=cache,
+            read_model=read_model,
         )
         registry = CapabilityRegistry(adapter, dashboard, gateway, store)
         # One provider map, shared: the inspector's trajectory and the

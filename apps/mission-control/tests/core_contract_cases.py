@@ -329,10 +329,10 @@ async def test_event_bus_replay_and_sse_contracts() -> None:
 
     bus.subscribe("*", subscriber)
     bus.subscribe("task.changed", broken)
-    assert (await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e1"))["coverage"] == "polled"
-    assert await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e1") is None
-    await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e2")
-    await bus.publish("task.changed", "kanban", entity_id="t1", event_id="e3")
+    assert (await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1"))["coverage"] == "polled"
+    assert await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1") is None
+    await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 2}, event_id="e2")
+    await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 3}, event_id="e3")
     assert delivered == ["e1", "e2", "e3"]
     assert [event["event_id"] for event in bus.ring_events()] == ["e2", "e3"]
     assert [event["event_id"] for event in await bus.replay_after("e2")] == ["e3"]
@@ -863,7 +863,7 @@ def test_store_crud_and_replay_contracts() -> None:
     with tempfile.TemporaryDirectory() as directory:
         store = Store(Path(directory) / "contracts.db")
         try:
-            assert store.schema_version() == 3
+            assert store.schema_version() == 4
             assert set(store.table_names()) == {
                 "action_audit", "alert_acknowledgements", "alert_rules", "cache_metadata",
                 "event_replay", "preferences", "saved_views", "schema_fingerprints", "sessions",

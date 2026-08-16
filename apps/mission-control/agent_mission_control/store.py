@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 # v1 CREATE statements. Table names/columns are part of the accepted contract
 # (architecture-freeze §9) — do not rename or extend without a new migration.
@@ -132,12 +132,25 @@ CREATE INDEX IF NOT EXISTS idx_action_audit_request_id ON action_audit(request_i
 CREATE INDEX IF NOT EXISTS idx_action_audit_timestamp  ON action_audit(timestamp);
 """
 
+# v4: revisioned/profile-scoped live event envelope. Existing rows retain
+# empty profile and revision zero and are upgraded to the canonical resource
+# envelope when rendered.
+_SCHEMA_V4 = """
+ALTER TABLE event_replay ADD COLUMN profile_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE event_replay ADD COLUMN resource_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE event_replay ADD COLUMN operation TEXT NOT NULL DEFAULT 'invalidate';
+ALTER TABLE event_replay ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_event_replay_profile_id
+    ON event_replay(profile_id, id);
+"""
+
 # Ordered migrations: (version, sql). v1 is idempotent (IF NOT EXISTS) so a
 # fresh DB and an existing v1 DB converge.
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
+    (4, _SCHEMA_V4),
 ]
 
 
@@ -468,14 +481,19 @@ class Store:
         entity_id: str,
         payload: dict,
         coverage: str,
+        profile_id: str = "",
+        resource_key: str = "",
+        operation: str = "invalidate",
+        revision: int = 0,
     ) -> bool:
         """Insert if event_id not already present. Returns True if inserted."""
         cur = self._execute(
             "INSERT OR IGNORE INTO event_replay (event_id, event_type, occurred_at, "
-            "source_id, entity_type, entity_id, payload_json, coverage) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "source_id, entity_type, entity_id, payload_json, coverage, "
+            "profile_id, resource_key, operation, revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (event_id, event_type, occurred_at, source_id, entity_type, entity_id,
-             json.dumps(payload), coverage),
+             json.dumps(payload), coverage, profile_id, resource_key, operation, revision),
         )
         self._commit()
         return cur.rowcount > 0
@@ -493,7 +511,8 @@ class Store:
             return []
         rows = self._execute(
             "SELECT event_id, event_type, occurred_at, source_id, entity_type, entity_id, "
-            "payload_json, coverage FROM event_replay WHERE id > ? "
+            "payload_json, coverage, profile_id, resource_key, operation, revision "
+            "FROM event_replay WHERE id > ? "
             "ORDER BY id ASC LIMIT ?",
             (row["id"], limit),
         ).fetchall()
@@ -507,7 +526,8 @@ class Store:
     def replay_latest(self, limit: int = 2000) -> list[dict[str, Any]]:
         rows = self._execute(
             "SELECT event_id, event_type, occurred_at, source_id, entity_type, entity_id, "
-            "payload_json, coverage FROM event_replay ORDER BY id DESC LIMIT ?",
+            "payload_json, coverage, profile_id, resource_key, operation, revision "
+            "FROM event_replay ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         out = []
@@ -522,6 +542,11 @@ class Store:
             "SELECT event_id FROM event_replay ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return row["event_id"] if row else ""
+
+    def event_replay_has(self, event_id: str) -> bool:
+        return self._execute(
+            "SELECT 1 FROM event_replay WHERE event_id=? LIMIT 1", (event_id,)
+        ).fetchone() is not None
 
     def event_replay_count(self) -> int:
         return int(self._execute("SELECT COUNT(*) FROM event_replay").fetchone()[0])

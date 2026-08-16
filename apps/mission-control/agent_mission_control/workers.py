@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable, Optional
 from .cache import Cache
 from .clients import AdapterClient, DashboardClient, GatewayClient
 from .event_bus import EventBus
-from .read_model import ReadModel
+from .read_model import ReadModel, project_entity
 from .store import Store
 
 DEFAULT_BACKOFF_MAX = 300  # 5 minutes
@@ -160,10 +160,11 @@ class SourceWorkers:
         self._tasks: list[asyncio.Task] = []
         self._source_health: dict[str, bool] = {}
         self._kanban_tasks: list[dict] = []
-        # id -> (last_activity, message_count, ended_at) from the previous poll.
-        # Empty on the first poll, which is why the first tick emits no targeted
-        # session events: everything would look "changed" against nothing.
-        self._sessions_by_id: dict[str, tuple] = {}
+        self._permit_entities: dict[str, dict] = {}
+        self._issue_entities: dict[str, dict] = {}
+        self._cron_entities: dict[str, dict] = {}
+        self._session_entities: dict[str, dict] = {}
+        self._initialized_sources: set[str] = set()
 
     def _feed_alerts(self, key: str, data: Any) -> None:
         if self.alert_engine is None:
@@ -172,6 +173,13 @@ class SourceWorkers:
             self.alert_engine.set_source_data(key, data)
         except Exception:  # noqa: BLE001 - a poll must never die on alert wiring
             pass
+
+    def _ensure_delta_state(self) -> None:
+        if not hasattr(self, "_initialized_sources"):
+            self._initialized_sources = set()
+        for name in ("_permit_entities", "_issue_entities", "_cron_entities", "_session_entities"):
+            if not hasattr(self, name):
+                setattr(self, name, {})
 
     def freshness_snapshot(self) -> dict[str, dict]:
         """{worker: {fetched_at, last_error}} for alert rule R3."""
@@ -207,33 +215,30 @@ class SourceWorkers:
         return fingerprint_tasks(running)
 
     async def _on_kanban(self, data: dict, fp: Optional[str]) -> None:
+        self._ensure_delta_state()
         self._feed_alerts("tasks", data.get("tasks", []))
         prev_tasks = self._kanban_tasks
         cur_tasks = data.get("tasks", [])
         # task.changed on lifecycle field delta per running task
         by_id = {t.get("id"): t for t in cur_tasks}
         prev_by_id = {t.get("id"): t for t in prev_tasks}
+        if "kanban" not in self._initialized_sources:
+            self._initialized_sources.add("kanban")
+            self._kanban_tasks = cur_tasks
+            return
         for tid, t in by_id.items():
-            if t.get("status") not in ("running", "ready", "blocked", "todo"):
-                continue
             prev = prev_by_id.get(tid)
-            if prev is None:
+            projected = project_entity("kanban.tasks", t)
+            if prev is None or project_entity("kanban.tasks", prev) != projected:
                 await self.bus.publish(
                     "task.changed", "kanban", "task", tid,
-                    {"status": t.get("status"), "current_run_id": t.get("current_run_id"),
-                     "last_heartbeat_at": t.get("last_heartbeat_at")},
+                    projected,
                 )
-            else:
-                changed = any(
-                    t.get(k) != prev.get(k)
-                    for k in ("status", "current_run_id", "last_heartbeat_at")
+        for tid in set(prev_by_id) - set(by_id):
+            if tid:
+                await self.bus.publish(
+                    "task.changed", "kanban", "task", str(tid), {}, operation="delete"
                 )
-                if changed:
-                    await self.bus.publish(
-                        "task.changed", "kanban", "task", tid,
-                        {"status": t.get("status"), "current_run_id": t.get("current_run_id"),
-                         "last_heartbeat_at": t.get("last_heartbeat_at")},
-                    )
         # run.changed when a running task's run ended
         for tid, t in by_id.items():
             prev = prev_by_id.get(tid)
@@ -260,13 +265,19 @@ class SourceWorkers:
         )
 
     async def _on_permits(self, data: list, fp: Optional[str]) -> None:
+        self._ensure_delta_state()
         self._feed_alerts("permits", data)
-        for p in data:
-            await self.bus.publish(
-                "permit.changed", "permits", "permit", p.get("permit_id") or "",
-                {"status": p.get("status"), "severity": p.get("severity"),
-                 "updated_at": p.get("updated_at")},
-            )
+        current = {str(p.get("permit_id") or p.get("id")): p for p in data if p.get("permit_id") or p.get("id")}
+        if "permits" in self._initialized_sources:
+            for entity_id, row in current.items():
+                projected = project_entity("permits", row)
+                previous = self._permit_entities.get(entity_id)
+                if previous is None or project_entity("permits", previous) != projected:
+                    await self.bus.publish("permit.changed", "permits", "permit", entity_id, projected)
+            for entity_id in set(self._permit_entities) - set(current):
+                await self.bus.publish("permit.changed", "permits", "permit", entity_id, {}, operation="delete")
+        self._initialized_sources.add("permits")
+        self._permit_entities = current
 
     # ---- issues ------------------------------------------------------------
     async def _fetch_issues(self) -> list[dict]:
@@ -281,13 +292,19 @@ class SourceWorkers:
         )
 
     async def _on_issues(self, data: list, fp: Optional[str]) -> None:
+        self._ensure_delta_state()
         self._feed_alerts("issues", data)
-        for i in data:
-            await self.bus.publish(
-                "issue.changed", "issues", "issue", str(i.get("id") or ""),
-                {"status": i.get("status"), "severity": i.get("severity"),
-                 "last_seen_at": i.get("last_seen_at")},
-            )
+        current = {str(row.get("id")): row for row in data if row.get("id") is not None}
+        if "issues" in self._initialized_sources:
+            for entity_id, row in current.items():
+                projected = project_entity("issues", row)
+                previous = self._issue_entities.get(entity_id)
+                if previous is None or project_entity("issues", previous) != projected:
+                    await self.bus.publish("issue.changed", "issues", "issue", entity_id, projected)
+            for entity_id in set(self._issue_entities) - set(current):
+                await self.bus.publish("issue.changed", "issues", "issue", entity_id, {}, operation="delete")
+        self._initialized_sources.add("issues")
+        self._issue_entities = current
 
     # ---- cron --------------------------------------------------------------
     async def _fetch_cron(self) -> list[dict]:
@@ -307,13 +324,19 @@ class SourceWorkers:
         )
 
     async def _on_cron(self, data: list, fp: Optional[str]) -> None:
+        self._ensure_delta_state()
         self._feed_alerts("cron", data)
-        for j in data:
-            await self.bus.publish(
-                "cron.changed", "cron", "cron_job", j.get("id") or "",
-                {"state": j.get("state"), "last_run_at": j.get("last_run_at"),
-                 "next_run_at": j.get("next_run_at"), "last_status": j.get("last_status")},
-            )
+        current = {str(row.get("id")): row for row in data if row.get("id") is not None}
+        if "cron" in self._initialized_sources:
+            for entity_id, row in current.items():
+                projected = project_entity("cron.jobs", row)
+                previous = self._cron_entities.get(entity_id)
+                if previous is None or project_entity("cron.jobs", previous) != projected:
+                    await self.bus.publish("cron.changed", "cron", "cron_job", entity_id, projected)
+            for entity_id in set(self._cron_entities) - set(current):
+                await self.bus.publish("cron.changed", "cron", "cron_job", entity_id, {}, operation="delete")
+        self._initialized_sources.add("cron")
+        self._cron_entities = current
 
     # ---- sessions ----------------------------------------------------------
     # `session.changed` used to be emitted only by the two chat handlers in
@@ -343,40 +366,39 @@ class SourceWorkers:
         )
 
     async def _on_sessions(self, data: list, fp: Optional[str]) -> None:
-        # The list-level event: "sessions moved, somebody's did". Tabs that
-        # render the whole list refresh on this one.
-        await self.bus.publish(
-            "session.changed", "sessions", "session", "",
-            {"count": len(data)}, coverage="polled",
-        )
-        # Plus one targeted event per row that actually moved. Without these
-        # the topic carried an empty `entity_id` and nothing else, so a
-        # subscriber watching ONE open conversation — the chat tab does exactly
-        # that — had no way to tell whether the session in front of it was the
-        # one that advanced. Capped so a fleet-wide burst (a cron sweep touching
-        # hundreds of sessions at once) cannot flood the bus; the list-level
-        # event above still covers the overflow.
-        previous = self._sessions_by_id
-        current = {}
+        self._ensure_delta_state()
+        current: dict[str, dict] = {}
         emitted = 0
         for row in data:
             sid = row.get("id") or row.get("session_id")
             if not sid:
                 continue
-            state = (
-                row.get("last_activity_at") or row.get("last_active"),
-                row.get("message_count"),
-                row.get("ended_at"),
-            )
-            current[sid] = state
-            if previous and previous.get(sid) != state and emitted < 25:
+            sid = str(sid)
+            current[sid] = row
+            projected = project_entity("sessions", row)
+            previous = self._session_entities.get(sid)
+            if "sessions" in self._initialized_sources and (
+                previous is None or project_entity("sessions", previous) != projected
+            ) and emitted < 100:
                 emitted += 1
                 await self.bus.publish(
-                    "session.changed", "sessions", "session", str(sid),
-                    {"last_activity_at": state[0], "message_count": state[1],
-                     "ended_at": state[2]}, coverage="polled",
+                    "session.changed", "sessions", "session", sid,
+                    projected, coverage="polled",
                 )
-        self._sessions_by_id = current
+        if "sessions" in self._initialized_sources:
+            for sid in list(set(self._session_entities) - set(current))[:100]:
+                await self.bus.publish(
+                    "session.changed", "sessions", "session", sid, {},
+                    coverage="polled", operation="delete",
+                )
+            if emitted >= 100 or len(set(self._session_entities) - set(current)) > 100:
+                await self.bus.publish(
+                    "session.changed", "sessions", "session", "",
+                    {"reason": "delta-bound-exceeded"}, coverage="derived",
+                    operation="resync-required",
+                )
+        self._initialized_sources.add("sessions")
+        self._session_entities = current
 
     # ---- running turns -----------------------------------------------------
     # Nothing in the session list says whether a turn is in flight — `is_active`
