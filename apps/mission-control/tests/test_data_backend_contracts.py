@@ -17,7 +17,9 @@ if str(ROOT) not in sys.path:
 from agent_mission_control.data_backend import (
     DataBackend,
     DataBackendError,
+    LegacyDataBackendFacade,
     LocalDataBackend,
+    ParityComparator,
     Settings,
 )
 from agent_mission_control.data_backend import db as backend_db
@@ -433,6 +435,63 @@ async def exercise_backend(root: Path) -> None:
     assert "api_key" not in serialized_binding
     assert "token" not in serialized_binding
     assert "never-return-this" not in serialized_binding
+
+    shadow = LocalDataBackend(Settings(root / "hermes"))
+    comparator = ParityComparator(backend, shadow)
+    parity_cases = (
+        ("health", (), {}),
+        ("capabilities", (), {}),
+        ("memory_file", ("memory",), {}),
+        ("kanban_boards", (), {}),
+        ("kanban_tasks", (), {"board": "all", "limit": 10}),
+        ("kanban_task", ("task-1",), {}),
+        ("kanban_task_events", ("task-1",), {"limit": 1}),
+        ("kanban_task_runs", ("task-1",), {"limit": 1}),
+        ("kanban_task_attachments", ("task-1",), {"limit": 1}),
+        ("kanban_worker_session", ("task-1",), {}),
+        ("kanban_summary", (), {"board": "all"}),
+        ("permits", (), {"limit": 10}),
+        ("permit", ("permit-1",), {}),
+        ("issues", (), {"limit": 10}),
+        ("issue", (1,), {"occurrence_limit": 1}),
+        ("search_sessions", ("searchable",), {"limit": 5}),
+        ("room_sessions", ("chat-1",), {"limit": 5, "history": True}),
+        ("session_tips", (["root-session"],), {}),
+        ("room_cards", ("chat-1",), {"per_thread": 5}),
+        ("thread_sessions", ("chat-1", ["10"]), {}),
+        ("session_timeline", ("tip-session",), {"limit": 5}),
+        ("source_fingerprint", ("permits",), {}),
+        ("room_binding", (), {}),
+    )
+    for method, args, kwargs in parity_cases:
+        report = await comparator.compare(method, *args, **kwargs)
+        assert report.matches, (method, report.primary, report.shadow)
+    try:
+        await comparator.compare("save_memory_file", "memory", "forbidden shadow")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("parity comparator accepted a mutation")
+    facade = LegacyDataBackendFacade(backend)
+    status, envelope, _ = await facade.request(
+        "GET", "/kanban/tasks", params={"board": "all", "page": "1", "limit": "2"}
+    )
+    assert status == 200 and len(envelope["data"]) == 2
+    status, envelope, _ = await facade.request(
+        "GET", "/permits", params={"page": "1", "limit": "2"}
+    )
+    assert status == 200 and len(envelope["data"]) <= 2
+    status, envelope, _ = await facade.request(
+        "GET", "/issues", params={"page": "1", "limit": "2"}
+    )
+    assert status == 200 and len(envelope["data"]) <= 2
+    status, _, _ = await facade.request(
+        "GET", "/kanban/tasks", params={"limit": "not-an-integer"}
+    )
+    assert status == 422
+    status, _, _ = await facade.request("GET", "/not-allowlisted")
+    assert status == 404
+    await shadow.aclose()
 
     memory = await backend.memory_file("memory")
     assert memory.data["content"] == "fixture memory"

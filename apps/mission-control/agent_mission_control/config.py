@@ -81,6 +81,8 @@ class Settings:
     dashboard_basic_auth_password: str | None = None
     adapter_url: str = "http://192.168.1.128:8643"
     adapter_token: str | None = None
+    data_backend_mode: str = "external"
+    hermes_home: str = "~/.hermes"
     gateway_url: str = "http://127.0.0.1:8642"
     gateway_token: str | None = None
     nas_jwt_secret: str | None = None  # required for POST /api/cron/fire
@@ -177,6 +179,8 @@ class Settings:
             ),
             adapter_url=_env("ADAPTER_URL", "http://192.168.1.128:8643") or "http://192.168.1.128:8643",
             adapter_token=_env("ADAPTER_TOKEN"),
+            data_backend_mode=_env("MISSION_DATA_BACKEND", "external") or "external",
+            hermes_home=_env("HERMES_HOME", "~/.hermes") or "~/.hermes",
             gateway_url=_env("HERMES_GATEWAY_URL", "http://127.0.0.1:8642") or "http://127.0.0.1:8642",
             gateway_token=(
                 _env("HERMES_GATEWAY_API_KEY")
