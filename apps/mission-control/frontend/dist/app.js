@@ -14,6 +14,7 @@ import { createStateStore, restoreOrEmpty } from './pure/state-store.js';
 import { createPrefetch } from './preload.js';
 import { createPalette } from './palette.js';
 import { SseClient } from './events.js';
+import { createLiveResourceStore } from './live-store.js';
 import { api } from './api.js';
 import { readProfileFromLocation, setProfileInLocation, profileCachePrefix } from './profile.js';
 import { el, clear, skeleton, emptyState, unavailableState } from './ui.js';
@@ -189,7 +190,8 @@ export async function boot({ root } = {}) {
   const tabInstances = new Map();
   const stateStore = createStateStore({ maxRoutes: 16 });
   const prefetch = createPrefetch({ maxConcurrent: 4 });
-  const sse = new SseClient({ url: '/api/events/stream' });
+  const sse = new SseClient({ url: '/api/events/stream', profile });
+  const liveStore = createLiveResourceStore({ api });
 
   const statusStrip = el('div', { class: 'status-strip' });
   const leftNav = el('nav', { class: 'left-nav', 'aria-label': 'Main navigation' });
@@ -353,6 +355,10 @@ export async function boot({ root } = {}) {
   // actions in the middle slot, shell-level controls pinned right.
   const topbarSlot = el('div', { class: 'topbar-slot' });
 
+  async function refreshCurrent() {
+    return liveStore.forceResync(currentRouteKey || 'overview', profile);
+  }
+
   function renderBreadcrumb(route) {
     clear(workspaceTopbar);
     if (!route) return;
@@ -370,7 +376,7 @@ export async function boot({ root } = {}) {
           class: 'btn btn-sm',
           type: 'button',
           title: 'Refresh this tab',
-          onclick: () => tabInstances.get(currentInstanceKey)?.refresh?.(),
+          onclick: () => refreshCurrent().catch(() => null),
         }, [icon('retry', { size: 12 }), ' Refresh']),
       ]),
     );
@@ -425,6 +431,8 @@ export async function boot({ root } = {}) {
   async function activateRoute(key, params = {}) {
     const route = REGISTRY[key] || ROUTES[key];
     if (!route) return;
+    liveStore.setContext(profile, key);
+    const hydration = liveStore.hydrate(key, profile);
     workspace.classList.toggle('workspace-fixed-pane', FIXED_PANE_ROUTES.has(key));
     const id = instanceId(key);
     const restored = restoreOrEmpty(stateStore, id);
@@ -441,6 +449,7 @@ export async function boot({ root } = {}) {
         const create = await loader();
         const factoryArgs = {
           api, profile, events: null, sse, onNavigate: navigate,
+          liveStore,
           refreshInspector: renderInspectorPlaceholder,
           toolbar: topbarSlot,
         };
@@ -470,6 +479,7 @@ export async function boot({ root } = {}) {
     if (typeof instance.setSourceHealth === 'function') instance.setSourceHealth(capabilitiesEnvelope);
     // currentInstanceKey is only known now, so a tab-owned inspector renders here.
     renderInspectorPlaceholder();
+    await hydration;
     await instance.activate?.(params);
     if (restored.scroll && workspace.scrollTo) workspace.scrollTo(0, restored.scroll);
   }
@@ -587,7 +597,7 @@ export async function boot({ root } = {}) {
       const instance = currentInstanceKey ? tabInstances.get(currentInstanceKey) : null;
       if (typeof instance?.refresh !== 'function') return;
       event.preventDefault();
-      Promise.resolve(instance.refresh()).catch(() => null);
+      Promise.resolve(refreshCurrent()).catch(() => null);
       return;
     }
     if (event.key === '?') {
@@ -604,6 +614,8 @@ export async function boot({ root } = {}) {
     saveCurrentInstance();
     currentInstanceKey = null;
     profile = next;
+    sse.setProfile(next);
+    liveStore.setContext(next, route);
     setProfileInLocation(next);
     clearCacheForProfile(previous);
     prefetch.invalidateObsolete();
@@ -658,6 +670,7 @@ export async function boot({ root } = {}) {
       const instance = tabInstances.get(currentInstanceKey);
       instance?.setSourceHealth?.(capabilitiesEnvelope);
     }
+    sse.setProfile(profile);
     sse.connect();
   }
 
@@ -687,6 +700,7 @@ export async function boot({ root } = {}) {
   }
 
   sse.onStateChange = () => renderStatusStrip();
+  sse.on('state.change', (event) => liveStore.applyEvent(event));
   sse.on('cache.invalidated', (event) => {
     const key = event.entity_id || event.payload?.key;
     if (key) prefetch.cache.delete(key);
@@ -733,6 +747,9 @@ export async function boot({ root } = {}) {
     },
     getSse() {
       return sse;
+    },
+    getLiveStore() {
+      return liveStore;
     },
     get me() {
       return me;

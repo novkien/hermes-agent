@@ -12,9 +12,10 @@ export const SSE_STATE = Object.freeze({
 });
 
 export class SseClient {
-  constructor({ url = '/api/events/stream', token = null } = {}) {
+  constructor({ url = '/api/events/stream', token = null, profile = 'default' } = {}) {
     this.baseUrl = url;
     this.token = token;
+    this.profile = profile || 'default';
     // The session whose live turn should ride this stream. Folded into the one
     // connection the SPA already has rather than opening a second: a browser
     // allows six HTTP/1.1 connections per host, and a permanent extra stream
@@ -32,6 +33,7 @@ export class SseClient {
     const params = new URLSearchParams();
     if (this.token) params.set('token', this.token);
     if (this.watchId) params.set('watch', this.watchId);
+    if (this.profile) params.set('profile', this.profile);
     const query = params.toString();
     return query ? `${this.baseUrl}?${query}` : this.baseUrl;
   }
@@ -48,6 +50,17 @@ export class SseClient {
     const next = sessionId || null;
     if (next === this.watchId) return;
     this.watchId = next;
+    if (!this.es) return;
+    this.es.close();
+    this.es = null;
+    this.connect();
+  }
+
+  setProfile(profile) {
+    const next = profile || 'default';
+    if (next === this.profile) return;
+    this.profile = next;
+    this.seenIds.clear();
     if (!this.es) return;
     this.es.close();
     this.es = null;
