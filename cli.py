@@ -569,22 +569,25 @@ def load_cli_config() -> Dict[str, Any]:
             with open(config_path, "r", encoding="utf-8") as f:
                 from hermes_cli.config import (
                     _config_inherits_root,
-                    _deep_merge,
                     _load_profile_root_layer,
                     _normalize_root_model_keys,
                 )
 
                 file_config = _normalize_root_model_keys(fast_safe_load(f) or {})
 
-                # Profile inheritance: a profile CLI inherits every non-telegram
-                # key from the root config.yaml, with its own file winning on
-                # conflict. Root channel/prompt overrides are stripped so they
+                # Profile inheritance: a profile inherits a root config.yaml
+                # key ONLY when its own config.yaml does not define it —
+                # top-level presence decides; a profile-owned key wins
+                # wholesale. Root channel/prompt overrides are stripped so they
                 # never leak into profiles. A profile opts out with
                 # ``inherit_root_config: false``.
                 if _config_inherits_root(file_config):
                     root_layer = _load_profile_root_layer()
                     if root_layer:
-                        file_config = _deep_merge(root_layer, file_config)
+                        for _rk, _rv in root_layer.items():
+                            if _rk not in file_config:
+                                file_config[_rk] = _rv
+                file_config.pop("inherit_root_config", None)
             
             _file_has_terminal_config = "terminal" in file_config
 

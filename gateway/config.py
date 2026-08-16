@@ -1341,21 +1341,24 @@ def load_gateway_config() -> GatewayConfig:
             with open(config_yaml_path, encoding="utf-8") as f:
                 yaml_cfg = yaml.safe_load(f) or {}
 
-            # Profile inheritance: a profile gateway inherits every non-telegram
-            # key from the root config.yaml, with its own file winning on
-            # conflict. Root channel/prompt overrides are stripped so they never
-            # leak into profiles. A profile opts out with
+            # Profile inheritance: a profile inherits a root config.yaml key
+            # ONLY when its own config.yaml does not define it — top-level
+            # presence decides; a profile-owned key wins wholesale. Root
+            # channel/prompt overrides are stripped so they never leak into
+            # profiles. A profile opts out with
             # ``inherit_root_config: false``.
             from hermes_cli.config import (
                 _config_inherits_root,
-                _deep_merge,
                 _load_profile_root_layer,
             )
 
             if _config_inherits_root(yaml_cfg):
                 root_layer = _load_profile_root_layer()
                 if root_layer:
-                    yaml_cfg = _deep_merge(root_layer, yaml_cfg)
+                    for _rk, _rv in root_layer.items():
+                        if _rk not in yaml_cfg:
+                            yaml_cfg[_rk] = _rv
+            yaml_cfg.pop("inherit_root_config", None)
 
             # Managed scope: overlay administrator-pinned values so the gateway
             # honors them too. This loader builds its own dict instead of going

@@ -2553,33 +2553,35 @@ def _strip_inherited_values(
     root_layer: Dict[str, Any],
     explicit_paths: Set[Tuple[str, ...]],
 ) -> Dict[str, Any]:
-    """Remove root-inherited values from a profile config before saving.
+    """Remove root-inherited top-level keys from a profile config before saving.
 
-    Values equal to the inherited root layer are dropped so a profile save
-    (``hermes config set`` etc.) does not materialize root keys into the
-    profile's own config.yaml. Paths the profile explicitly set are always
-    preserved.
+    Inheritance is top-level: a profile either owns a key (present in its own
+    config.yaml, wins wholesale) or inherits the whole root value. So a save
+    (``hermes config set`` etc.) only risks materializing root keys the
+    profile never set — drop top-level keys that equal the inherited root
+    layer (once schema defaults are stripped from both sides, since
+    ``_strip_default_values`` runs first) and were not explicitly set by the
+    profile. Profile-owned sections are preserved in full, leaf by leaf, even
+    when some leaves equal root.
     """
 
-    def _walk(cfg: Any, root: Any, prefix: Tuple[str, ...]) -> Any:
-        if not isinstance(cfg, dict) or not isinstance(root, dict):
-            return cfg
-        result: Dict[str, Any] = {}
-        for k, v in cfg.items():
-            path = prefix + (k,)
-            if path in explicit_paths or k not in root:
-                result[k] = v
+    owned_tops = {p[0] for p in explicit_paths}
+    result: Dict[str, Any] = {}
+    for k, v in profile_cfg.items():
+        if k not in root_layer or k in owned_tops:
+            result[k] = v
+            continue
+        rv = root_layer[k]
+        if isinstance(rv, dict) and isinstance(v, dict):
+            # _strip_default_values compares against DEFAULT_CONFIG top-level
+            # keys, so the root section must be stripped in full-config shape.
+            stripped_root = _strip_default_values(copy.deepcopy({k: rv})).get(k)
+            if v == stripped_root:
                 continue
-            rv = root[k]
-            if isinstance(v, dict) and isinstance(rv, dict):
-                sub = _walk(v, rv, path)
-                if sub:
-                    result[k] = sub
-            elif v != rv:
-                result[k] = v
-        return result
-
-    return _walk(profile_cfg, root_layer, ())  # type: ignore[return-value]
+        elif v == rv:
+            continue
+        result[k] = v
+    return result
 
 
 def _merge_partial_save(raw: dict, override: dict) -> dict:
@@ -3590,16 +3592,28 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
                 config = _deep_merge(config, user_config)
 
-                # Profile inheritance: profiles inherit every non-telegram key
-                # from the root config.yaml, with their own file winning on
-                # conflict. Root channel/prompt overrides and per-thread model
-                # overrides are stripped so they never leak into profiles.
-                # A profile opts out with ``inherit_root_config: false``.
+                # Profile inheritance: a profile inherits a root config.yaml
+                # key ONLY when the profile's own config.yaml does not define
+                # it — top-level presence decides. A profile-owned key wins
+                # wholesale (no root sub-keys merged into it). Root
+                # channel/prompt overrides and per-thread model overrides are
+                # stripped before inheritance so they never leak into
+                # profiles. A profile opts out with
+                # ``inherit_root_config: false``.
                 if _config_inherits_root(user_config):
                     root_layer = _load_profile_root_layer()
                     if root_layer:
-                        config = _deep_merge(config, root_layer)
-                        config = _deep_merge(config, user_config)
+                        for _rk, _rv in root_layer.items():
+                            if _rk not in user_config:
+                                if isinstance(_rv, dict) and isinstance(
+                                    config.get(_rk), dict
+                                ):
+                                    config[_rk] = _deep_merge(config[_rk], _rv)
+                                else:
+                                    config[_rk] = copy.deepcopy(_rv)
+                # The opt-out flag is a profile-file directive, not runtime
+                # config — never surface it in the effective config.
+                config.pop("inherit_root_config", None)
             except Exception as e:
                 # Last-known-good fallback (port of openai/codex#31188's
                 # invariant: a parse failure in a policy/config file must not
