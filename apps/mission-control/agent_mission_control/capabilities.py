@@ -14,7 +14,8 @@ import asyncio
 import time
 from typing import Any, Optional
 
-from .clients import AdapterClient, DashboardClient, GatewayClient, UpstreamError
+from .clients import DashboardClient, GatewayClient, UpstreamError
+from .data_backend import DataBackend, DataBackendError
 from .store import Store
 
 _SOURCES = ("adapter", "hermes-dashboard", "hermes-gateway", "cron")
@@ -23,7 +24,7 @@ _SOURCES = ("adapter", "hermes-dashboard", "hermes-gateway", "cron")
 class CapabilityRegistry:
     def __init__(
         self,
-        adapter: AdapterClient,
+        adapter: DataBackend,
         dashboard: DashboardClient,
         gateway: GatewayClient,
         store: Store,
@@ -67,19 +68,20 @@ class CapabilityRegistry:
         healthy = False
         fingerprint = None
         try:
-            s, body, _ = await self._adapter.health()
-            routes_checked.append(f"GET /health -> {s}")
-            healthy = healthy or (200 <= s < 300)
-            s2, cap, _ = await self._adapter.capabilities()
-            routes_checked.append(f"GET /capabilities -> {s2}")
-            if 200 <= s2 < 300 and isinstance(cap, dict):
+            health = await self._adapter.health()
+            routes_checked.append("local health -> 200")
+            healthy = health.status in {"ok", "healthy"}
+            capabilities = await self._adapter.capabilities()
+            routes_checked.append("local capabilities -> 200")
+            cap = capabilities.data
+            if isinstance(cap, dict):
                 fingerprint = cap.get("schema_fingerprint") or cap.get("fingerprint")
-                if isinstance(cap, dict) and "sources" in cap:
+                if "sources" in cap:
                     fp_sources = cap["sources"]
                     if isinstance(fp_sources, dict) and "adapter" in fp_sources:
                         pass
-            healthy = healthy or (200 <= s2 < 300)
-        except UpstreamError as e:
+            healthy = True
+        except DataBackendError as e:
             routes_checked.append(f"error: {e.status}")
         except Exception as e:  # noqa: BLE001
             routes_checked.append(f"error: {type(e).__name__}")

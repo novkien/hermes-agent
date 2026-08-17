@@ -24,7 +24,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_mission_control.clients import (  # noqa: E402
-    AdapterClient,
     DashboardClient,
     GatewayClient,
     UpstreamError,
@@ -100,9 +99,6 @@ async def main() -> int:
         ("gateway 8642", GatewayClient(
             env.get("HERMES_GATEWAY_URL", "http://127.0.0.1:8642"),
             env.get("API_SERVER_KEY"), timeout=15.0)),
-        ("adapter 8643", AdapterClient(
-            env.get("ADAPTER_URL", "http://127.0.0.1:8643"),
-            env.get("ADAPTER_TOKEN"), timeout=15.0)),
     ]
     try:
         for label, client in clients:

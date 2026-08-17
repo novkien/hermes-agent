@@ -10,11 +10,11 @@ Jarvis/Hermes. Current source and tests take precedence over older repository no
   - `app.py` is the composition root for clients, store, cache, capabilities, event
     fabric, alert/pulse engines, workers and routes.
   - `routes.py` owns the main HTTP boundary, allowlists, mutation gates and envelopes.
-  - `clients.py` contains the Dashboard, Gateway and Adapter upstream clients.
+  - `clients.py` contains the Dashboard and Gateway upstream clients.
   - `store.py` manages the SQLite WAL control store and migrations.
   - `workers.py` runs bounded source polling loops.
   - `chat_proxy.py` relays Hermes gateway chat/session traffic including SSE streaming.
-  - `search.py` implements bounded federated search over adapter-backed sources.
+  - `search.py` implements bounded federated search over DataBackend sources.
 - `agent_mission_control/migrations/` contains SQL representations of runtime schema
   migrations; keep them aligned with the migration definitions in `store.py`.
 - `frontend/dist/` is the committed **source-of-truth SPA**, despite the `dist` name.
@@ -24,13 +24,14 @@ Jarvis/Hermes. Current source and tests take precedence over older repository no
 - `frontend/dist/pure/` contains data-shape, routing, state and transformer modules used
   directly by Node contract tests.
 - `tests/` contains the active Python and Node contract suites.
-- `deploy/agent-mission-control.service` and related deploy files define the systemd
-  deployment surface.
+- `deploy/hermes-mission-control.service` defines the Jarvis user-service deployment
+  surface. The former Pi system service is retired and must not be recreated.
 - Root-level `agentos-dashboard.db*` files are runtime state, not source artifacts.
 
 ## Runtime Architecture
 
-AgentOS is a FastAPI BFF between the browser SPA and three Hermes upstream families:
+AgentOS is a FastAPI BFF between the browser SPA, two HTTP upstreams and the local
+Hermes data backend:
 
 ```text
 Browser / frontend/dist
@@ -38,7 +39,7 @@ Browser / frontend/dist
 AgentOS FastAPI BFF
         ├── DashboardClient → Hermes dashboard API :9119
         ├── GatewayClient   → Hermes gateway API :8642
-        └── AdapterClient   → external adapter :8643
+        └── LocalDataBackend → bounded in-process Hermes data queries
 ```
 
 Current upstream responsibilities include:
@@ -46,7 +47,7 @@ Current upstream responsibilities include:
 - dashboard health/status and supported dashboard mutations through `DashboardClient`;
 - session/chat and chat SSE streaming through `GatewayClient`;
 - Kanban, permits, issues, timeline, fingerprints, memory files and related supported
-  adapter surfaces through `AdapterClient`.
+  data surfaces through the typed in-process `DataBackend` contract.
 
 Reads and writes are intentionally bounded by explicit allowlists. Do not turn any
 upstream client into an arbitrary path proxy.

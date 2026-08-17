@@ -21,6 +21,10 @@ if str(APP_ROOT) not in sys.path:
 
 from agent_mission_control import redact as redact_mod  # noqa: E402
 from agent_mission_control.clients import UpstreamError  # noqa: E402
+from agent_mission_control.data_backend import (  # noqa: E402
+    BackendResult,
+    DataBackendError,
+)
 from agent_mission_control.routes import (  # noqa: E402
     CONFIG_WRITE_ALLOW_TREE,
     GATEWAY_READ_PATHS,
@@ -66,16 +70,25 @@ class FakeAdapter:
         self.error = error
         self.calls: list[dict] = []
 
-    async def request(self, method, path, *, params=None, inbound_request_id=None, **_kwargs):
+    async def _result(self, method, **params):
         self.calls.append({
             "method": method,
-            "path": path,
             "params": params,
-            "request_id": inbound_request_id,
         })
         if self.error:
-            raise self.error
-        return self.status, self.body, {}
+            raise DataBackendError(self.error.status, "unavailable", self.error.detail)
+        if self.status >= 400:
+            raise DataBackendError(self.status, "backend_error", "fixture failure")
+        body = self.body or {}
+        if isinstance(body, dict) and "data" in body:
+            return BackendResult(body["data"], body.get("meta") or {})
+        return BackendResult(body, {})
+
+    async def kanban_tasks(self, **params):
+        return await self._result("kanban_tasks", **params)
+
+    async def issues(self, **params):
+        return await self._result("issues", **params)
 
 
 class WorkerContextDashboard:
@@ -91,10 +104,10 @@ class WorkerContextDashboard:
 
 
 class WorkerContextAdapter:
-    async def kanban_task_detail(self, task_id, request_id=None):
+    async def kanban_task(self, task_id):
         assert task_id == "t_right"
         # Deliberate conflicting creator id proves it cannot be substituted.
-        return 200, {"task": {"id": task_id, "status": "running", "session_id": "creator_1", "last_heartbeat_at": 44}}, {}
+        return BackendResult({"task": {"id": task_id, "status": "running", "session_id": "creator_1", "last_heartbeat_at": 44}})
 
 
 def make_request(query: str) -> Request:
@@ -224,10 +237,8 @@ async def test_adapter_profile_is_provenance_not_filter() -> None:
     )
     assert response.status_code == 200
     assert adapter.calls == [{
-        "method": "GET",
-        "path": "/kanban/tasks",
-        "params": {"status": "running", "limit": "10"},
-        "request_id": "test-request-id",
+        "method": "kanban_tasks",
+        "params": {"status": "running", "limit": 10},
     }]
     payload = response_json(response)
     assert payload["data"] == {"tasks": [{"id": "t1"}]}
@@ -247,10 +258,8 @@ async def test_adapter_issues_defaults_limit() -> None:
     )
     assert response.status_code == 200
     assert adapter.calls == [{
-        "method": "GET",
-        "path": "/issues",
-        "params": {"limit": "25"},
-        "request_id": "test-request-id",
+        "method": "issues",
+        "params": {"limit": 25},
     }]
 
     response = await Router.proxy_adapter_read(
@@ -258,7 +267,7 @@ async def test_adapter_issues_defaults_limit() -> None:
         make_request("profile=management&limit=20"),
         "issues",
     )
-    assert adapter.calls[-1]["params"] == {"limit": "20"}
+    assert adapter.calls[-1]["params"] == {"limit": 20}
 
 
 async def test_adapter_issues_limit_is_bounded() -> None:
@@ -273,7 +282,7 @@ async def test_adapter_issues_limit_is_bounded() -> None:
         "issues",
     )
     assert response.status_code == 200
-    assert adapter.calls[-1]["params"] == {"limit": "100"}
+    assert adapter.calls[-1]["params"] == {"limit": 100}
 
 
 async def test_upstream_failure_is_not_http_200() -> None:
@@ -1591,31 +1600,31 @@ async def test_run_inspector_returns_real_edges_not_an_empty_graph() -> None:
     from agent_mission_control.run_inspector import RunInspector
 
     class Adapter:
-        async def kanban_task_detail(self, task_id, request_id=None):
-            return 200, {"task": {"id": task_id, "session_id": "s-1",
-                                  "assignee": "coder", "current_run_id": 7}}, {}
+        async def kanban_task(self, task_id):
+            return BackendResult({"task": {"id": task_id, "session_id": "s-1",
+                                            "assignee": "coder", "current_run_id": 7}})
 
-        async def kanban_task_runs(self, task_id, request_id=None):
-            return 200, {"runs": [{"id": 7, "status": "done", "outcome": "ok",
-                                   "started_at": "2026-08-10T01:00:00Z"}]}, {}
+        async def kanban_task_runs(self, task_id, limit=50):
+            return BackendResult({"runs": [{"id": 7, "status": "done", "outcome": "ok",
+                                             "started_at": "2026-08-10T01:00:00Z"}]})
 
-        async def kanban_task_events(self, task_id, params=None, request_id=None):
-            return 200, {"events": [{"kind": "moved", "created_at": "2026-08-10T00:00:00Z"}]}, {}
+        async def kanban_task_events(self, task_id, cursor=0, limit=200):
+            return BackendResult({"events": [{"kind": "moved", "created_at": "2026-08-10T00:00:00Z"}]})
 
-        async def kanban_task_attachments(self, task_id, request_id=None):
-            return 200, {"attachments": [{"id": 3, "filename": "log.txt"}]}, {}
+        async def kanban_task_attachments(self, task_id, limit=20):
+            return BackendResult({"attachments": [{"id": 3, "filename": "log.txt"}]})
 
-        async def issues_list(self, limit=100, **params):
-            return 200, {"issues": [
+        async def issues(self, limit=100, **params):
+            return BackendResult({"issues": [
                 {"id": 148, "occurrences": [{"task_ref": "t-1", "event_type": "observed"}]},
-            ]}, {}
+            ]})
 
-        async def permits_list(self, limit=100, **params):
-            return 200, {"permits": [{"id": "p-1", "issue_title": "Issue 148",
-                                      "status": "pending_approval"}]}, {}
+        async def permits(self, limit=100, **params):
+            return BackendResult({"permits": [{"id": "p-1", "issue_title": "Issue 148",
+                                                "status": "pending_approval"}]})
 
-        async def issue_detail(self, issue_id, params=None, request_id=None):
-            return 200, {"issue": {"id": issue_id, "occurrences": []}}, {}
+        async def issue(self, issue_id, occurrence_limit=50):
+            return BackendResult({"issue": {"id": issue_id, "occurrences": []}})
 
     class Dash:
         async def get(self, path, *, params=None, inbound_request_id=None):
@@ -1644,8 +1653,8 @@ async def test_run_inspector_returns_real_edges_not_an_empty_graph() -> None:
 
     # A down source degrades to "no data", never a 500, and stays quiet.
     class Down(Adapter):
-        async def kanban_task_detail(self, task_id, request_id=None):
-            raise UpstreamError(503, None, "adapter down")
+        async def kanban_task(self, task_id):
+            raise DataBackendError(503, "unavailable", "data backend down")
 
     down = CorrelationEngine(providers=build_correlation_providers(Down(), Dash()))
     assert (await down.correlate("task", "t-1"))["coverage"] == "unsupported"
@@ -1653,7 +1662,7 @@ async def test_run_inspector_returns_real_edges_not_an_empty_graph() -> None:
     # An unexpected exception also degrades, but must be logged rather than
     # swallowed — silence here is what hid the broken `request_id` keyword.
     class Broken(Adapter):
-        async def kanban_task_detail(self, task_id, request_id=None):
+        async def kanban_task(self, task_id):
             raise TypeError("bug in this file, not a source outage")
 
     import logging as _logging
@@ -1990,48 +1999,26 @@ def test_audit_summary_logs_decisions_but_never_free_text() -> None:
 
 
 async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> None:
-    """`request_id=` must reach the transport on every typed AdapterClient method.
-
-    Six of them passed `request_id=` to a `_get()` whose keyword was named
-    `inbound_request_id`, so each raised TypeError at call time. Callers wrapped
-    in broad excepts (the correlation providers) turned that into a silently
-    empty graph rather than an error, so nothing surfaced it.
-    """
+    """Production composition must have no HTTP-adapter escape hatch."""
     import inspect as _inspect
 
-    from agent_mission_control.clients import AdapterClient
+    from agent_mission_control import app as app_module
+    from agent_mission_control.config import Settings
+    from agent_mission_control.data_backend import DataBackend
 
-    seen: list[str] = []
-
-    class _Recorder(AdapterClient):
-        async def request(self, method, path, **kwargs):  # type: ignore[override]
-            seen.append(kwargs.get("inbound_request_id"))
-            return 200, {}, {}
-
-    client = _Recorder("http://adapter.invalid", "token")
-    checked = 0
-    for name in dir(client):
-        if name.startswith("_"):
-            continue
-        fn = getattr(client, name)
-        if not _inspect.iscoroutinefunction(fn):
-            continue
-        sig = _inspect.signature(fn)
-        if "request_id" not in sig.parameters:
-            continue
-        # Fill every other required parameter with a throwaway string.
-        args = [
-            "x" for p in sig.parameters.values()
-            if p.name != "request_id"
-            and p.default is _inspect.Parameter.empty
-            and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-        ]
-        seen.clear()
-        await fn(*args, request_id="probe-id")
-        assert seen and seen[-1] == "probe-id", f"{name} dropped request_id"
-        checked += 1
-    assert checked >= 15, f"expected the full typed surface, only saw {checked}"
-    await client.aclose()
+    source = _inspect.getsource(app_module.create_app)
+    assert "AdapterClient" not in source
+    assert "LegacyDataBackendFacade" not in source
+    assert "MISSION_DATA_BACKEND" not in source
+    settings = Settings()
+    assert not hasattr(settings, "adapter_url")
+    assert not hasattr(settings, "adapter_token")
+    assert not hasattr(settings, "data_backend_mode")
+    required = {
+        name for name, value in DataBackend.__dict__.items()
+        if not name.startswith("_") and _inspect.isfunction(value)
+    }
+    assert len(required) >= 25 and {"health", "capabilities", "room_binding"} <= required
 
 
 async def main() -> None:

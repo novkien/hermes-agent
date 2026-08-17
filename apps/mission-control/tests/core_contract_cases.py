@@ -351,27 +351,28 @@ async def test_search_capabilities_alerts_and_pulse_contracts() -> None:
     from agent_mission_control.capabilities import CapabilityRegistry
     from agent_mission_control.pulse import Pulse, cost_class_of
     from agent_mission_control.search import federated_search
+    from agent_mission_control.data_backend import BackendHealth, BackendResult
 
     class Adapter:
-        async def session_search(self, q, limit):
+        async def search_sessions(self, q, limit):
             assert q == "api" and limit == 50
-            return 200, {"results": [{"session_id": "s1", "title": "API session"}]}, {}
+            return BackendResult({"results": [{"session_id": "s1", "title": "API session"}]})
 
-        async def tasks(self, limit):
+        async def kanban_tasks(self, limit):
             assert limit == 100
-            return 200, {"tasks": [{"id": "t1", "title": "Build API", "status": "running"}]}, {}
+            return BackendResult({"tasks": [{"id": "t1", "title": "Build API", "status": "running"}]})
 
-        async def issues_list(self, limit):
-            return 200, {"issues": [{"id": 7, "issue": "API failure", "severity": "high"}]}, {}
+        async def issues(self, limit):
+            return BackendResult({"issues": [{"id": 7, "issue": "API failure", "severity": "high"}]})
 
-        async def permits_list(self, limit):
+        async def permits(self, limit):
             raise RuntimeError("permits offline")
 
         async def health(self):
-            return 200, {}, {}
+            return BackendHealth("ok", "test", [], 1.0)
 
         async def capabilities(self):
-            return 200, {"schema_fingerprint": "fp-new"}, {}
+            return BackendResult({"schema_fingerprint": "fp-new"})
 
     search = await federated_search(Adapter(), "api", limit=500)
     assert search["total"] == 3 and search["degraded"] is True
@@ -730,6 +731,7 @@ async def test_app_middleware_contracts() -> None:
 
 async def test_source_worker_contracts() -> None:
     from agent_mission_control.workers import PollWorker, SourceWorkers, fingerprint_json, fingerprint_tasks
+    from agent_mission_control.data_backend import BackendResult
 
     class Bus:
         def __init__(self):
@@ -746,20 +748,20 @@ async def test_source_worker_contracts() -> None:
             self.fingerprints.append((source, fingerprint))
 
     class Adapter:
-        async def board_summary(self):
-            return 200, {"running": 1}, {}
+        async def kanban_summary(self):
+            return BackendResult({"running": 1})
 
-        async def tasks(self, limit):
-            return 200, [{"id": "t1", "status": "running", "current_run_id": "r1"}], {}
+        async def kanban_tasks(self, limit):
+            return BackendResult([{"id": "t1", "status": "running", "current_run_id": "r1"}])
 
-        async def permits_list(self, limit):
-            return 200, [{"permit_id": "p1", "status": "pending_approval"}], {}
+        async def permits(self, limit):
+            return BackendResult([{"permit_id": "p1", "status": "pending_approval"}])
 
-        async def issues_list(self, limit):
-            return 200, [{"id": 7, "status": "open", "severity": "high"}], {}
+        async def issues(self, limit):
+            return BackendResult([{"id": 7, "status": "open", "severity": "high"}])
 
         async def capabilities(self):
-            return 200, {"schema_fingerprint": {"sha256_ddl": "fp-1"}}, {}
+            return BackendResult({"schema_fingerprint": {"sha256_ddl": "fp-1"}})
 
     class Dashboard:
         async def get(self, path):

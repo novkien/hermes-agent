@@ -16,9 +16,9 @@ Global envelope + deep-link hrefs (route + entity id).
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
-from .clients import AdapterClient
+from .data_backend import BackendResult, DataBackend
 
 DEEP_LINKS = {
     "sessions": ("/sessions/{id}", "session_id"),
@@ -48,21 +48,6 @@ async def _fetch_with_timeout(coro, timeout: float, default: Any):
         return "__ERROR__"
 
 
-def _status_tuple(result: Any) -> Optional[tuple[int, Any]]:
-    """Normalize adapter responses: S4 client returns (status, body, headers);
-    fakes return objects with .status_code/.json()."""
-    if isinstance(result, tuple):
-        if len(result) >= 2:
-            return result[0], result[1]
-        return None
-    if hasattr(result, "status_code"):
-        try:
-            return result.status_code, result.json()
-        except Exception:
-            return result.status_code, None
-    return None
-
-
 def _rows_from(body: Any, keys: tuple[str, ...]) -> list[dict]:
     if isinstance(body, list):
         return body
@@ -74,24 +59,23 @@ def _rows_from(body: Any, keys: tuple[str, ...]) -> list[dict]:
     return []
 
 
-async def search_sessions(adapter: AdapterClient, q: str, limit: int) -> dict:
+async def search_sessions(adapter: DataBackend, q: str, limit: int) -> dict:
     timed_out = False
     degraded = False
     results: list[dict] = []
     try:
         r = await _fetch_with_timeout(
-            adapter.session_search(q, limit=limit), SOURCE_TIMEOUT_SECONDS, None
+            adapter.search_sessions(q, limit=limit), SOURCE_TIMEOUT_SECONDS, None
         )
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
             degraded = True
         else:
-            st = _status_tuple(r)
-            if st is None or st[0] >= 400:
+            if not isinstance(r, BackendResult):
                 degraded = True
             else:
-                raw = _rows_from(st[1], ("results", "data"))
+                raw = _rows_from(r.data, ("results", "data"))
                 for item in raw[:limit]:
                     sid = item.get("session_id") or item.get("id") or ""
                     results.append({
@@ -120,22 +104,23 @@ def _filter_rows(rows: list[dict], q: str, fields: list[str]) -> list[dict]:
     return out
 
 
-async def search_tasks(adapter: AdapterClient, q: str, limit: int) -> dict:
+async def search_tasks(adapter: DataBackend, q: str, limit: int) -> dict:
     timed_out = False
     degraded = False
     results: list[dict] = []
     try:
-        r = await _fetch_with_timeout(adapter.tasks(limit=100), SOURCE_TIMEOUT_SECONDS, None)
+        r = await _fetch_with_timeout(
+            adapter.kanban_tasks(limit=100), SOURCE_TIMEOUT_SECONDS, None
+        )
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
             degraded = True
         else:
-            st = _status_tuple(r)
-            if st is None or st[0] >= 400:
+            if not isinstance(r, BackendResult):
                 degraded = True
             else:
-                rows = _rows_from(st[1], ("data", "tasks", "items"))
+                rows = _rows_from(r.data, ("tasks", "items"))
                 matched = _filter_rows(rows, q, ["title", "assignee", "status", "body"])
                 for t in matched[:limit]:
                     tid = t.get("id", "")
@@ -157,22 +142,21 @@ async def search_tasks(adapter: AdapterClient, q: str, limit: int) -> dict:
     }
 
 
-async def search_issues(adapter: AdapterClient, q: str, limit: int) -> dict:
+async def search_issues(adapter: DataBackend, q: str, limit: int) -> dict:
     timed_out = False
     degraded = False
     results: list[dict] = []
     try:
-        r = await _fetch_with_timeout(adapter.issues_list(limit=100), SOURCE_TIMEOUT_SECONDS, None)
+        r = await _fetch_with_timeout(adapter.issues(limit=100), SOURCE_TIMEOUT_SECONDS, None)
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
             degraded = True
         else:
-            st = _status_tuple(r)
-            if st is None or st[0] >= 400:
+            if not isinstance(r, BackendResult):
                 degraded = True
             else:
-                rows = _rows_from(st[1], ("data", "issues", "items"))
+                rows = _rows_from(r.data, ("issues", "items"))
                 matched = _filter_rows(rows, q, ["issue", "context", "status", "severity"])
                 for i in matched[:limit]:
                     iid = i.get("id", "")
@@ -194,22 +178,21 @@ async def search_issues(adapter: AdapterClient, q: str, limit: int) -> dict:
     }
 
 
-async def search_permits(adapter: AdapterClient, q: str, limit: int) -> dict:
+async def search_permits(adapter: DataBackend, q: str, limit: int) -> dict:
     timed_out = False
     degraded = False
     results: list[dict] = []
     try:
-        r = await _fetch_with_timeout(adapter.permits_list(limit=100), SOURCE_TIMEOUT_SECONDS, None)
+        r = await _fetch_with_timeout(adapter.permits(limit=100), SOURCE_TIMEOUT_SECONDS, None)
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
             degraded = True
         else:
-            st = _status_tuple(r)
-            if st is None or st[0] >= 400:
+            if not isinstance(r, BackendResult):
                 degraded = True
             else:
-                rows = _rows_from(st[1], ("data", "permits", "items"))
+                rows = _rows_from(r.data, ("permits", "items"))
                 matched = _filter_rows(rows, q, ["permit_id", "issue_title", "status", "severity", "source"])
                 for p in matched[:limit]:
                     pid = p.get("permit_id", "")
@@ -232,7 +215,7 @@ async def search_permits(adapter: AdapterClient, q: str, limit: int) -> dict:
     }
 
 
-async def federated_search(adapter: AdapterClient, q: str, limit: int = 20) -> dict:
+async def federated_search(adapter: DataBackend, q: str, limit: int = 20) -> dict:
     """Fan out to all 4 sources with bounded per-source timeouts + cancellation."""
     per_source_limit = max(1, min(limit, 50))
     coros = [

@@ -1,9 +1,8 @@
 """Configuration for agent-mission-control.
 
-Every value is read from the environment (or an env-backed file for the
-9119 dashboard password). No secrets live in source. Values are resolved
-once per ``Settings`` instance; tests construct ``Settings(overrides=...)``
-directly.
+Every value is read from the environment (or an env-backed file for an
+upstream credential). No secrets live in source. Values are resolved once per
+``Settings`` instance; tests construct ``Settings(overrides=...)`` directly.
 """
 
 from __future__ import annotations
@@ -79,9 +78,6 @@ class Settings:
     # --- upstream clients ---
     dashboard_url: str = "http://127.0.0.1:9119"
     dashboard_basic_auth_password: str | None = None
-    adapter_url: str = "http://192.168.1.128:8643"
-    adapter_token: str | None = None
-    data_backend_mode: str = "external"
     hermes_home: str = "~/.hermes"
     gateway_url: str = "http://127.0.0.1:8642"
     gateway_token: str | None = None
@@ -179,9 +175,6 @@ class Settings:
                 _env("DASHBOARD_BASIC_AUTH_PASSWORD")
                 or _read_password_file(_env("DASHBOARD_BASIC_AUTH_PASSWORD_FILE"))
             ),
-            adapter_url=_env("ADAPTER_URL", "http://192.168.1.128:8643") or "http://192.168.1.128:8643",
-            adapter_token=_env("ADAPTER_TOKEN"),
-            data_backend_mode=_env("MISSION_DATA_BACKEND", "external") or "external",
             hermes_home=_env("HERMES_HOME", "~/.hermes") or "~/.hermes",
             gateway_url=_env("HERMES_GATEWAY_URL", "http://127.0.0.1:8642") or "http://127.0.0.1:8642",
             gateway_token=(

@@ -1,0 +1,34 @@
+[Unit]
+Description=Hermes AgentOS Mission Control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jarvis/.hermes/mission-control
+Environment="HERMES_HOME=/home/jarvis/.hermes"
+Environment="PYTHONPATH=/home/jarvis/.hermes/hermes-agent/apps/mission-control"
+Environment="FRONTEND_DIR=/home/jarvis/.hermes/hermes-agent/apps/mission-control/frontend/dist"
+Environment="STORE_PATH=/home/jarvis/.hermes/mission-control/agentos-dashboard.db"
+Environment="DASHBOARD_STORE_PATH=/home/jarvis/.hermes/mission-control/store.db"
+Environment="BIND_HOST=127.0.0.1"
+Environment="MISSION_CONTROL_PORT=51763"
+Environment="READ_MODEL_PATH=/home/jarvis/.hermes/workspace/state/mission-control-live.db"
+Environment="ALLOWED_ORIGIN=http://127.0.0.1:51763"
+Environment="ALLOWED_HOST=127.0.0.1:51763"
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=-/home/jarvis/.hermes/mission-control.env
+ExecStart="/home/jarvis/.hermes/venv/bin/python" -m hermes_cli.mission_control
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jarvis/.hermes/mission-control /home/jarvis/.hermes/hermes-agent /home/jarvis/.hermes/hermes-plugins /home/jarvis/.hermes/skills /home/jarvis/.hermes/workspace/skills-pack /home/jarvis/agents /home/jarvis/.hermes/repos/hermes-skills.git /home/jarvis/.hermes/memories /home/jarvis/.hermes/workspace/state
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

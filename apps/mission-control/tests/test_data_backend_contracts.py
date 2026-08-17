@@ -15,14 +15,35 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_mission_control.data_backend import (
+    BackendHealth,
+    BackendResult,
     DataBackend,
     DataBackendError,
-    LegacyDataBackendFacade,
     LocalDataBackend,
-    ParityComparator,
     Settings,
+    read_call,
 )
 from agent_mission_control.data_backend import db as backend_db
+from agent_mission_control.data_backend.queries import (
+    KANBAN_BOARD_TABLES,
+    kanban_boards_capabilities,
+)
+
+
+def normalized(value):
+    if isinstance(value, BackendResult):
+        value = value.to_envelope()
+    elif isinstance(value, BackendHealth):
+        value = value.to_payload()
+    if isinstance(value, dict):
+        return {
+            key: normalized(child)
+            for key, child in sorted(value.items())
+            if key not in {"query_ms", "fetched_at", "uptime", "request_id"}
+        }
+    if isinstance(value, (list, tuple)):
+        return [normalized(child) for child in value]
+    return value
 
 
 TASK_SCHEMA = """
@@ -437,7 +458,6 @@ async def exercise_backend(root: Path) -> None:
     assert "never-return-this" not in serialized_binding
 
     shadow = LocalDataBackend(Settings(root / "hermes"))
-    comparator = ParityComparator(backend, shadow)
     parity_cases = (
         ("health", (), {}),
         ("capabilities", (), {}),
@@ -464,33 +484,32 @@ async def exercise_backend(root: Path) -> None:
         ("room_binding", (), {}),
     )
     for method, args, kwargs in parity_cases:
-        report = await comparator.compare(method, *args, **kwargs)
-        assert report.matches, (method, report.primary, report.shadow)
+        primary = await getattr(backend, method)(*args, **kwargs)
+        secondary = await getattr(shadow, method)(*args, **kwargs)
+        assert normalized(primary) == normalized(secondary), method
+
+    # The browser compatibility path is an explicit typed dispatch table,
+    # never an arbitrary HTTP proxy.
+    result = await read_call(
+        backend, "/kanban/tasks", {"board": "all", "page": "1", "limit": "2"}
+    )
+    assert isinstance(result, BackendResult) and len(result.data) == 2
+    result = await read_call(backend, "/permits", {"page": "1", "limit": "2"})
+    assert isinstance(result, BackendResult) and len(result.data) <= 2
+    result = await read_call(backend, "/issues", {"page": "1", "limit": "2"})
+    assert isinstance(result, BackendResult) and len(result.data) <= 2
     try:
-        await comparator.compare("save_memory_file", "memory", "forbidden shadow")
-    except ValueError:
-        pass
+        await read_call(backend, "/kanban/tasks", {"limit": "not-an-integer"})
+    except DataBackendError as exc:
+        assert exc.status == 422
     else:
-        raise AssertionError("parity comparator accepted a mutation")
-    facade = LegacyDataBackendFacade(backend)
-    status, envelope, _ = await facade.request(
-        "GET", "/kanban/tasks", params={"board": "all", "page": "1", "limit": "2"}
-    )
-    assert status == 200 and len(envelope["data"]) == 2
-    status, envelope, _ = await facade.request(
-        "GET", "/permits", params={"page": "1", "limit": "2"}
-    )
-    assert status == 200 and len(envelope["data"]) <= 2
-    status, envelope, _ = await facade.request(
-        "GET", "/issues", params={"page": "1", "limit": "2"}
-    )
-    assert status == 200 and len(envelope["data"]) <= 2
-    status, _, _ = await facade.request(
-        "GET", "/kanban/tasks", params={"limit": "not-an-integer"}
-    )
-    assert status == 422
-    status, _, _ = await facade.request("GET", "/not-allowlisted")
-    assert status == 404
+        raise AssertionError("typed dispatch accepted an invalid integer")
+    try:
+        await read_call(backend, "/not-allowlisted")
+    except DataBackendError as exc:
+        assert exc.status == 404
+    else:
+        raise AssertionError("typed dispatch accepted an unknown path")
     await shadow.aclose()
 
     memory = await backend.memory_file("memory")
@@ -552,9 +571,40 @@ def test_in_process_package_has_no_http_auth_or_home_coupling() -> None:
         assert forbidden not in combined, forbidden
 
 
+def test_capabilities_degrade_one_unavailable_board() -> None:
+    class UnavailableStore:
+        def fingerprint(self, *, recompute: bool = False):
+            raise sqlite3.OperationalError("unable to open database file")
+
+        def row_count(self, table: str):
+            raise AssertionError(f"row_count must not run for unreachable board: {table}")
+
+    class Registry:
+        def board_names(self):
+            return ["transient"]
+
+        def _store(self, name: str):
+            assert name == "transient"
+            return UnavailableStore()
+
+    result = kanban_boards_capabilities(Registry())
+    assert result == {
+        "boards": [
+            {
+                "board": "transient",
+                "schema_fingerprint": None,
+                "schema_drift": False,
+                "reachable": False,
+                "row_counts": {table: None for table in KANBAN_BOARD_TABLES},
+            }
+        ]
+    }
+
+
 def main() -> None:
     test_read_only_statement_guard()
     test_in_process_package_has_no_http_auth_or_home_coupling()
+    test_capabilities_degrade_one_unavailable_board()
     with tempfile.TemporaryDirectory(prefix="mission-control-data-backend-") as temp:
         asyncio.run(exercise_backend(Path(temp)))
     print("DATA_BACKEND_CONTRACT_TESTS=PASS")

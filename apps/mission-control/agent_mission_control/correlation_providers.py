@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from .clients import UpstreamError
+from .data_backend import BackendResult, DataBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,8 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
 
     async def _adapter(call, *args, **kwargs) -> Any:
         try:
-            status, body, _ = await call(*args, **kwargs)
-        except UpstreamError:
+            result = await call(*args, **kwargs)
+        except DataBackendError:
             # A down or slow source degrades to "no data"; that is not an error.
             return None
         except Exception:  # noqa: BLE001
@@ -65,13 +65,13 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
             # it silently once cost a fully empty graph, so it gets logged.
             logger.exception("correlation provider failed: %s", getattr(call, "__name__", call))
             return None
-        if status >= 400:
+        if not isinstance(result, BackendResult):
             return None
-        return _unwrap(body)
+        return result.data
 
     # ---- single-entity lookups (primary key) ----------------------------
     async def task(task_id) -> Optional[dict]:
-        body = await _adapter(adapter.kanban_task_detail, str(task_id))
+        body = await _adapter(adapter.kanban_task, str(task_id))
         if isinstance(body, dict):
             return body.get("task") if isinstance(body.get("task"), dict) else body
         return None
@@ -90,7 +90,11 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
         return None
 
     async def issue(issue_id) -> Optional[dict]:
-        body = await _adapter(adapter.issue_detail, str(issue_id))
+        try:
+            numeric_id = int(issue_id)
+        except (TypeError, ValueError):
+            return None
+        body = await _adapter(adapter.issue, numeric_id)
         if isinstance(body, dict):
             return body.get("issue") if isinstance(body.get("issue"), dict) else body
         return None
@@ -114,7 +118,7 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
         return [o for o in occ if isinstance(o, dict)] if isinstance(occ, list) else []
 
     async def _issues_page() -> list[dict]:
-        body = await _adapter(adapter.issues_list, limit=_REVERSE_SCAN_LIMIT)
+        body = await _adapter(adapter.issues, limit=_REVERSE_SCAN_LIMIT)
         return _rows(body, "issues", "items")
 
     async def issue_occurrences_by_task(task_id) -> list[dict]:
@@ -141,7 +145,7 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
         from .correlation import parse_permit_issue
 
         wanted = str(issue_id)
-        body = await _adapter(adapter.permits_list, limit=_REVERSE_SCAN_LIMIT)
+        body = await _adapter(adapter.permits, limit=_REVERSE_SCAN_LIMIT)
         out: list[dict] = []
         for row in _rows(body, "permits", "items"):
             title = row.get("issue_title") or row.get("title") or ""

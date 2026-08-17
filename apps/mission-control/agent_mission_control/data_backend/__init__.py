@@ -1,7 +1,7 @@
 """Bounded in-process Hermes data backend."""
 
 from .config import Settings, SourceSpec, build_settings
-from .compat import HttpDataBackend, LegacyDataBackendFacade, ParityComparator, ParityReport
+from .dispatch import read_call
 from .local import LocalDataBackend
 from .protocol import (
     BackendHealth,
@@ -17,11 +17,8 @@ __all__ = [
     "DataBackend",
     "DataBackendError",
     "JsonObject",
-    "HttpDataBackend",
-    "LegacyDataBackendFacade",
     "LocalDataBackend",
-    "ParityComparator",
-    "ParityReport",
+    "read_call",
     "Settings",
     "SourceSpec",
     "build_settings",

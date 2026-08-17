@@ -24,12 +24,12 @@ from fastapi.responses import JSONResponse
 from . import alerts as alerts_mod
 from .cache import Cache
 from .capabilities import CapabilityRegistry
-from .clients import AdapterClient, DashboardClient, GatewayClient, new_request_id
+from .clients import DashboardClient, GatewayClient, new_request_id
 from .config import Settings, should_refuse_start
 from .correlation import CorrelationEngine
 from .correlation_providers import build_correlation_providers
 from .data_backend import (
-    LegacyDataBackendFacade,
+    DataBackend,
     LocalDataBackend,
     Settings as DataBackendSettings,
 )
@@ -209,7 +209,7 @@ class AppDeps:
         store: Store,
         dashboard: DashboardClient,
         gateway: GatewayClient,
-        adapter: AdapterClient,
+        adapter: DataBackend,
         cache: Cache,
         registry: CapabilityRegistry,
         router: Router,
@@ -305,16 +305,7 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             s.gateway_url, s.gateway_token, nas_jwt_secret=s.nas_jwt_secret,
             stream_read_timeout=s.chat_stream_read_timeout_seconds,
         )
-        if s.data_backend_mode == "local":
-            adapter = LegacyDataBackendFacade(
-                LocalDataBackend(DataBackendSettings(s.hermes_home))
-            )
-        elif s.data_backend_mode == "external":
-            adapter = AdapterClient(s.adapter_url, s.adapter_token)
-        else:
-            raise RuntimeError(
-                "MISSION_DATA_BACKEND must be either 'external' or 'local'"
-            )
+        adapter = LocalDataBackend(DataBackendSettings(s.hermes_home))
         runner_manager = RunnerManager(
             hermes_executable=s.runner_hermes_executable,
             pool_max=s.runner_pool_max,

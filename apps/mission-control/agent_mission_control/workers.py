@@ -26,7 +26,8 @@ import time
 from typing import Any, Awaitable, Callable, Optional
 
 from .cache import Cache
-from .clients import AdapterClient, DashboardClient, GatewayClient
+from .clients import DashboardClient, GatewayClient
+from .data_backend import BackendResult, DataBackend
 from .event_bus import EventBus
 from .live_resources import RESOURCE_SPECS
 from .read_model import READ_MODEL_PROJECTOR_VERSION, ReadModel, project_entity
@@ -139,7 +140,7 @@ class SourceWorkers:
         cache: Cache,
         dashboard: DashboardClient,
         gateway: GatewayClient,
-        adapter: AdapterClient,
+        adapter: DataBackend,
         cfg: Any,
         alert_engine: Any = None,
         read_model: ReadModel | None = None,
@@ -205,21 +206,16 @@ class SourceWorkers:
 
     # ---- kanban -----------------------------------------------------------
     async def _fetch_kanban(self) -> dict:
-        summary = await self.adapter.board_summary()
-        tasks = await self.adapter.tasks(limit=100)
+        summary = await self.adapter.kanban_summary()
+        tasks = await self.adapter.kanban_tasks(limit=100)
         return {
-            "summary": self._adapter_data(summary, {}),
-            "tasks": self._adapter_data(tasks, []),
+            "summary": self._backend_data(summary, {}),
+            "tasks": self._backend_data(tasks, []),
         }
 
     @staticmethod
-    def _adapter_data(response: Any, default: Any) -> Any:
-        if not isinstance(response, tuple) or len(response) < 2 or response[0] >= 400:
-            return default
-        body = response[1]
-        if isinstance(body, dict) and "data" in body:
-            return body.get("data", default)
-        return body
+    def _backend_data(response: Any, default: Any) -> Any:
+        return response.data if isinstance(response, BackendResult) else default
 
     def _fp_kanban(self, data: dict) -> str:
         running = [
@@ -268,8 +264,8 @@ class SourceWorkers:
 
     # ---- permits -----------------------------------------------------------
     async def _fetch_permits(self) -> list[dict]:
-        r = await self.adapter.permits_list(limit=100)
-        data = self._adapter_data(r, [])
+        r = await self.adapter.permits(limit=100)
+        data = self._backend_data(r, [])
         return data if isinstance(data, list) else []
 
     def _fp_permits(self, data: list) -> str:
@@ -295,8 +291,8 @@ class SourceWorkers:
 
     # ---- issues ------------------------------------------------------------
     async def _fetch_issues(self) -> list[dict]:
-        r = await self.adapter.issues_list(limit=100)
-        data = self._adapter_data(r, [])
+        r = await self.adapter.issues(limit=100)
+        data = self._backend_data(r, [])
         return data if isinstance(data, list) else []
 
     def _fp_issues(self, data: list) -> str:
@@ -488,10 +484,8 @@ class SourceWorkers:
 
     # ---- adapter capabilities (R2 fingerprint detection) --------------------
     async def _fetch_capabilities(self) -> dict:
-        s, body, _ = await self.adapter.capabilities()
-        if s >= 400:
-            raise RuntimeError(f"capabilities fetch failed: {s}")
-        return body
+        result = await self.adapter.capabilities()
+        return result.data if isinstance(result.data, dict) else {}
 
     def _fp_capabilities(self, data: dict) -> str:
         fp = data.get("schema_fingerprint") or data.get("fingerprint") or data.get("global_fingerprint") or ""
@@ -685,22 +679,21 @@ class SourceWorkers:
         return body if isinstance(body, dict) else {}
 
     async def _fetch_artifact_metadata(self) -> list[dict]:
-        status, body, _headers = await self.adapter.tasks(limit=25)
-        if status >= 400:
-            return []
-        payload = body.get("data", body) if isinstance(body, dict) else {}
+        result = await self.adapter.kanban_tasks(limit=25)
+        payload = result.data
         tasks = self._list_from(payload, "tasks", "items")[:25]
         rows: list[dict] = []
         for task in tasks:
             task_id = task.get("id")
             if not task_id:
                 continue
-            status, detail, _headers = await self.adapter.request(
-                "GET", f"/kanban/tasks/{task_id}/attachments", params={"limit": 20}
-            )
-            if status >= 400:
+            try:
+                detail = await self.adapter.kanban_task_attachments(
+                    str(task_id), limit=20
+                )
+            except Exception:
                 continue
-            data = detail.get("data", detail) if isinstance(detail, dict) else {}
+            data = detail.data
             for attachment in self._list_from(data, "attachments", "items"):
                 attachment_id = attachment.get("id") or attachment.get("name")
                 if attachment_id in (None, ""):
@@ -715,10 +708,7 @@ class SourceWorkers:
         return rows[:500]
 
     async def _fetch_room_inventory(self) -> tuple[list[dict], list[dict]]:
-        status, envelope, _headers = await self.adapter.request("GET", "/room-binding")
-        if status >= 400:
-            return [], []
-        payload = envelope.get("data", envelope) if isinstance(envelope, dict) else {}
+        payload = (await self.adapter.room_binding()).data
         slots = self._list_from(payload, "room_slots")
         occupancy = self._list_from(payload, "live_occupancy")
         reservations = self._list_from(payload, "reservations")
@@ -752,12 +742,11 @@ class SourceWorkers:
 
         sessions: list[dict] = []
         for chat_id in sorted({str(row.get("chat_id")) for row in occupancy if row.get("chat_id")}):
-            status, body, _headers = await self.adapter.request(
-                "GET", "/room-sessions", params={"chat_id": chat_id, "limit": 200}
-            )
-            if status >= 400:
+            try:
+                result = await self.adapter.room_sessions(chat_id, limit=200)
+            except Exception:
                 continue
-            data = body.get("data", body) if isinstance(body, dict) else {}
+            data = result.data
             for row in self._list_from(data, "sessions", "items"):
                 session_id = row.get("session_id") or row.get("id")
                 if session_id in (None, ""):
@@ -766,8 +755,7 @@ class SourceWorkers:
         return bindings, sessions[:1000]
 
     def _memory_inventory(self) -> list[dict]:
-        backend = getattr(self.adapter, "backend", None)
-        memory_dir = getattr(getattr(backend, "settings", None), "memory_dir", None)
+        memory_dir = getattr(getattr(self.adapter, "settings", None), "memory_dir", None)
         if memory_dir is None:
             return []
         rows = []

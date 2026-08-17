@@ -155,6 +155,10 @@ class LocalDataBackend:
             raise DataBackendError(exc.status, code, exc.detail) from None
         except ValueError as exc:
             raise DataBackendError(422, "invalid_params", str(exc)) from None
+        except sqlite3.Error:
+            raise DataBackendError(500, "backend_error", "data source query failed") from None
+        except OSError:
+            raise DataBackendError(500, "backend_error", "data source unavailable") from None
 
     async def _result(
         self, function: Callable[..., JsonObject], *args: Any, **kwargs: Any

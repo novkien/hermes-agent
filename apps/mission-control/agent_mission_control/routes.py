@@ -4,11 +4,11 @@ static serving, SSE stub, capability/audit endpoints.
 The app factory in ``app.py`` wires everything together; this module keeps the
 route/security logic separate for testability.
 
-Upstream auth contract (stage1 evidence + operator correction 2026-08-07):
+Upstream/runtime contract (stage1 evidence + local-backend cutover):
 - Dashboard 9119:  X-Hermes-Session-Token (REST read surface; NO chat/stream)
 - Gateway   8642:  Authorization: Bearer <API_SERVER_KEY>; chat/stream lives
                     HERE (POST /api/sessions/{id}/chat/stream, api_server.py)
-- Adapter   8643:  Authorization: Bearer <ADAPTER_TOKEN>
+- Hermes data:     typed in-process DataBackend; no HTTP auth/hop
 """
 
 from __future__ import annotations
@@ -42,10 +42,15 @@ from .read_model import ReadModel
 from .run_inspector import RunInspector
 from .runner_manager import RunnerManager, RunnerSpawnError
 from .clients import (
-    AdapterClient,
     DashboardClient,
     GatewayClient,
     UpstreamError,
+)
+from .data_backend import (
+    BackendHealth,
+    DataBackend,
+    DataBackendError,
+    read_call as read_backend_path,
 )
 from .config import Settings
 from .ip_utils import CidrList, resolve_client_ip
@@ -965,7 +970,7 @@ class Router:
         store: Store,
         dashboard: DashboardClient,
         gateway: GatewayClient,
-        adapter: AdapterClient,
+        adapter: DataBackend,
         cache: Cache,
         registry: CapabilityRegistry,
         event_bus: EventBus | None = None,
@@ -1214,14 +1219,11 @@ class Router:
         rid = request.state.request_id
 
         try:
-            status, body, _headers = await self.adapter.memory_file(filename, request_id=rid)
-        except UpstreamError as e:
+            result = await self.adapter.memory_file(filename)
+        except DataBackendError as e:
             return _json_error(upstream_error_status(e.status), "memory_read_failed",
-                               str(e.detail or "adapter unavailable"), rid)
-        if status >= 400:
-            return _json_error(upstream_error_status(status), "memory_read_failed",
-                               "adapter rejected memory read", rid)
-        data, upstream_meta = split_upstream_envelope(body)
+                               e.detail or "data backend unavailable", rid)
+        data, upstream_meta = result.data, result.meta
 
         return JSONResponse(
             self._envelope(
@@ -1272,20 +1274,14 @@ class Router:
                                request_id=rid)
 
         try:
-            status, response_body, _headers = await self.adapter.memory_file_write(
-                filename, content, request_id=rid
-            )
-        except UpstreamError as e:
+            result = await self.adapter.save_memory_file(filename, content)
+        except DataBackendError as e:
             self._record_audit_result(rid, 500, f"error:{type(e).__name__}")
             return _json_error(upstream_error_status(e.status), "memory_write_failed",
-                               str(e.detail or "adapter unavailable"), request_id=rid)
-        if status >= 400:
-            self._record_audit_result(rid, status, "adapter_rejected")
-            return _json_error(upstream_error_status(status), "memory_write_failed",
-                               "adapter rejected memory write", request_id=rid)
+                               e.detail or "data backend unavailable", request_id=rid)
 
         self._record_audit_result(rid, 200, "ok")
-        data, upstream_meta = split_upstream_envelope(response_body)
+        data, upstream_meta = result.data, result.meta
         return JSONResponse(
             self._envelope(
                 data, source_id="adapter", profile_id=profile_id, freshness="live",
@@ -1365,15 +1361,17 @@ class Router:
                     links[session_id] = {**unresolved, "reason": "canonical_seed_missing"}
                     return
                 try:
-                    status, body, _headers = await self.adapter.kanban_task_detail(task_id, request_id=rid)
-                except UpstreamError:
-                    degraded = True
-                    links[session_id] = {**unresolved, "reason": "adapter_unavailable"}
+                    result = await self.adapter.kanban_task(task_id)
+                except DataBackendError as exc:
+                    if exc.status == 404:
+                        links[session_id] = {**unresolved, "reason": "task_not_found"}
+                    else:
+                        degraded = True
+                        links[session_id] = {
+                            **unresolved, "reason": "data_backend_unavailable"
+                        }
                     return
-                if status >= 400:
-                    links[session_id] = {**unresolved, "reason": "task_not_found"}
-                    return
-                task = record(body, ("task", "data")) or {}
+                task = record(result.data, ("task", "data")) or {}
                 if not task:
                     links[session_id] = {**unresolved, "reason": "task_unreadable"}
                     return
@@ -1575,22 +1573,14 @@ class Router:
                                f"audit write failed: {type(e).__name__}", rid)
 
         try:
-            status, response_body, _ = await call(entity_id, body, request_id=rid)
-        except UpstreamError as e:
+            result = await call(entity_id, body)
+        except DataBackendError as e:
             self._record_audit_result(rid, e.status, f"error:{type(e).__name__}")
             return _json_error(upstream_error_status(e.status), "decision_failed",
-                               str(e.detail or "adapter unavailable"), rid)
-        if status >= 400:
-            self._record_audit_result(rid, status, f"adapter_rejected:{status}")
-            detail = ""
-            if isinstance(response_body, dict):
-                detail = str(response_body.get("detail")
-                             or (response_body.get("error") or {}).get("message") or "")
-            return _json_error(upstream_error_status(status), "decision_rejected",
-                               detail or "adapter rejected the decision", rid)
+                               e.detail or "data backend unavailable", rid)
 
-        self._record_audit_result(rid, status, "ok")
-        data, upstream_meta = split_upstream_envelope(response_body)
+        self._record_audit_result(rid, 200, "ok")
+        data, upstream_meta = result.data, result.meta
         bus = getattr(self, "event_bus", None)
         if bus is not None and event:
             event_name, entity_type = event
@@ -1627,7 +1617,7 @@ class Router:
 
     async def permit_decision(self, request: Request, permit_id: str) -> Response:
         return await self._adapter_decision(
-            request, call=self.adapter.permit_decision, entity_id=permit_id,
+            request, call=self.adapter.decide_permit, entity_id=permit_id,
             target=f"/permits/{permit_id}/decision",
             audit_action="adapter.permit.decide",
             allowed_fields=self.PERMIT_DECISION_FIELDS,
@@ -1660,7 +1650,7 @@ class Router:
 
     async def issue_update(self, request: Request, issue_id: str) -> Response:
         return await self._adapter_decision(
-            request, call=self.adapter.issue_update, entity_id=issue_id,
+            request, call=self.adapter.update_issue, entity_id=issue_id,
             target=f"/issues/{issue_id}/update",
             audit_action="adapter.issue.update",
             allowed_fields=self.ISSUE_UPDATE_FIELDS,
@@ -1924,30 +1914,21 @@ class Router:
         )
         rid = request.state.request_id
         try:
-            status, body, _ = await self.adapter.request(
-                "GET", normalized, params=params or None, inbound_request_id=rid
-            )
-        except UpstreamError as e:
-            detail = str(e.detail or "upstream error")
+            result = await read_backend_path(self.adapter, normalized, params)
+        except DataBackendError as e:
+            detail = str(e.detail or "data backend error")
             return JSONResponse(
                 self._envelope(
                     {"error": detail}, source_id="adapter", profile_id=profile,
                     freshness="unavailable", request_id=rid,
-                    degraded_reason=f"upstream_error:{e.status}",
+                    degraded_reason=f"data_backend_error:{e.status}",
                 ),
                 status_code=upstream_error_status(e.status),
             )
-        data, upstream_meta = split_upstream_envelope(body)
-        if status >= 400:
-            return JSONResponse(
-                self._envelope(
-                    data, source_id="adapter", profile_id=profile,
-                    freshness="unavailable", request_id=rid,
-                    degraded_reason=f"upstream_status:{status}",
-                    upstream_meta=upstream_meta,
-                ),
-                status_code=status,
-            )
+        if isinstance(result, BackendHealth):
+            data, upstream_meta = result.to_payload(), {}
+        else:
+            data, upstream_meta = result.data, result.meta
         return JSONResponse(
             self._envelope(
                 data, source_id="adapter", profile_id=profile,

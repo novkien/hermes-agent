@@ -548,19 +548,31 @@ def kanban_boards_capabilities(registry: KanbanBoardRegistry) -> dict[str, Any]:
     boards = []
     for name in registry.board_names():
         store = registry._store(name)
-        fp = store.fingerprint()
-        entry: dict[str, Any] = {"board": name, "schema_fingerprint": fp}
+        entry: dict[str, Any] = {
+            "board": name,
+            "schema_fingerprint": None,
+            "schema_drift": False,
+            "reachable": False,
+            "row_counts": {table: None for table in KANBAN_BOARD_TABLES},
+        }
         try:
+            fp = store.fingerprint()
+            entry["schema_fingerprint"] = fp
+            entry["reachable"] = True
             current = store.fingerprint(recompute=True)
             entry["schema_drift"] = current != fp
         except Exception:
-            entry["schema_drift"] = False
-        entry["row_counts"] = {}
-        for table in KANBAN_BOARD_TABLES:
-            try:
-                entry["row_counts"][table] = store.row_count(table)
-            except Exception:
-                entry["row_counts"][table] = None
+            # Boards are discovered from a live directory. A board database may
+            # be replaced, archived, or temporarily unavailable between the
+            # directory scan and this query. Report that board as unreachable
+            # without taking down the capabilities response for every source.
+            pass
+        if entry["reachable"]:
+            for table in KANBAN_BOARD_TABLES:
+                try:
+                    entry["row_counts"][table] = store.row_count(table)
+                except Exception:
+                    entry["row_counts"][table] = None
         boards.append(entry)
     return {"boards": boards}
 
