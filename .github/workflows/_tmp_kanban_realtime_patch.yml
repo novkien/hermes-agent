@@ -52,22 +52,16 @@ jobs:
 
           chat = Path("apps/mission-control/frontend/dist/tabs/chat.js")
           source = chat.read_text()
-          old = '''function startMirror() {
+          marker = '  function startMirror(sessionId, sessionProfile, list) {'
+          start = source.index(marker)
+          end = source.find('\n  function ', start + len(marker))
+          if end < 0:
+              end = len(source)
+          old_block = source[start:end]
+          assert 'mirrorTimer = setInterval' not in old_block, 'mirror interval already installed upstream'
+          assert "document.addEventListener('visibilitychange', mirrorVisibility);" in old_block
+          new_block = '''  function startMirror(sessionId, sessionProfile, list) {
             stopMirror();
-            if (!selectedSessionId || !isUnifiedThread(selectedSessionId)) return;
-            const mirrorSessionId = selectedSessionId;
-            const mirrorProfileId = profile.id;
-            mirrorVisibility = () => {
-              if (document.hidden) return;
-              mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
-            };
-            document.addEventListener("visibilitychange", mirrorVisibility);
-          }'''
-          new = '''function startMirror() {
-            stopMirror();
-            if (!selectedSessionId || !isUnifiedThread(selectedSessionId)) return;
-            const mirrorSessionId = selectedSessionId;
-            const mirrorProfileId = profile.id;
 
             const scheduleMirror = () => {
               if (mirrorTimer) clearInterval(mirrorTimer);
@@ -75,21 +69,20 @@ jobs:
                 ? MIRROR_HIDDEN_INTERVAL_MS
                 : MIRROR_INTERVAL_MS;
               mirrorTimer = setInterval(() => {
-                mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
+                mirrorThread(sessionId, sessionProfile, list).catch(() => null);
               }, intervalMs);
             };
 
             mirrorVisibility = () => {
               scheduleMirror();
               if (!document.hidden) {
-                mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
+                mirrorThread(sessionId, sessionProfile, list).catch(() => null);
               }
             };
-            document.addEventListener("visibilitychange", mirrorVisibility);
+            document.addEventListener('visibilitychange', mirrorVisibility);
             scheduleMirror();
           }'''
-          assert source.count(old) == 1, "startMirror implementation changed upstream"
-          chat.write_text(source.replace(old, new, 1))
+          chat.write_text(source[:start] + new_block + source[end:])
 
           Path(".github/workflows/_tmp_kanban_realtime_patch.yml").unlink()
           PY
