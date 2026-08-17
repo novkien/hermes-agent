@@ -20,6 +20,8 @@ Exposes an HTTP server with endpoints:
 - POST /v1/runs/{run_id}/approval — resolve a pending run approval
 - POST /v1/runs/{run_id}/steer      — inject guidance into a running agent
 - POST /v1/runs/{run_id}/stop       — interrupt a running agent
+- POST /v1/operator/actions/{name}  — invoke an explicitly operator-exposed
+                                       plugin action without involving a model
 - GET  /health                     — health check
 - GET  /health/detailed            — rich status for cross-container dashboard probing
 
@@ -2254,6 +2256,11 @@ class APIServerAdapter(BasePlatformAdapter):
             ("GET", "/v1/capabilities", self._handle_capabilities),
             ("GET", "/v1/skills", self._handle_skills),
             ("GET", "/v1/toolsets", self._handle_toolsets),
+            # This is deliberately *not* a general tool-execution endpoint.
+            # A registered tool must explicitly opt in with
+            # ``x-hermes-operator-action: true`` in its schema before the
+            # bearer-authenticated operator surface can invoke it.
+            ("POST", "/v1/operator/actions/{action}", self._handle_operator_action),
             ("GET", "/api/sessions", self._handle_list_sessions),
             ("POST", "/api/sessions", self._handle_create_session),
             # Before /api/sessions/{session_id}: "running" is a literal path, and
@@ -3360,6 +3367,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 "run_steer": True,
                 "run_approval_response": True,
                 "tool_progress_events": True,
+                "operator_actions": True,
                 "approval_events": True,
                 "session_resources": True,
                 "model_options": True,
@@ -3392,6 +3400,11 @@ class APIServerAdapter(BasePlatformAdapter):
                 "run_stop": {"method": "POST", "path": "/v1/runs/{run_id}/stop"},
                 "skills": {"method": "GET", "path": "/v1/skills"},
                 "toolsets": {"method": "GET", "path": "/v1/toolsets"},
+                "operator_action": {
+                    "method": "POST",
+                    "path": "/v1/operator/actions/{action}",
+                    "note": "Only plugin tools with x-hermes-operator-action=true are accepted.",
+                },
                 "sessions": {"method": "GET", "path": "/api/sessions"},
                 "session_create": {"method": "POST", "path": "/api/sessions"},
                 "session": {"method": "GET", "path": "/api/sessions/{session_id}"},
@@ -3404,6 +3417,101 @@ class APIServerAdapter(BasePlatformAdapter):
                 "session_model_lock": {"method": "POST", "path": "/api/sessions/{session_id}/model"},
             },
         })
+
+    async def _handle_operator_action(self, request: "web.Request") -> "web.Response":
+        """Invoke one plugin action that has explicitly opted into operator use.
+
+        This bridges trusted control planes to the exact registered plugin
+        handler.  It intentionally does not discover arbitrary tools, does not
+        accept a tool name in the body, and keeps model-facing tool dispatch
+        out of the request path.  Long-running handlers execute in a worker so
+        an action that synchronizes with the gateway loop cannot block aiohttp.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        action = str(request.match_info.get("action") or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", action):
+            return web.json_response(
+                _openai_error("Unknown operator action", code="operator_action_unknown"),
+                status=404,
+            )
+        try:
+            arguments = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response(
+                _openai_error("Operator action body must be a JSON object", code="invalid_request"),
+                status=400,
+            )
+        if not isinstance(arguments, dict):
+            return web.json_response(
+                _openai_error("Operator action body must be a JSON object", code="invalid_request"),
+                status=400,
+            )
+
+        # Importing the registry is not enough: plugin discovery is normally a
+        # side effect of model_tools import, while this endpoint must remain
+        # model-free.  The gateway has already loaded its plugins at startup,
+        # and this defensive discovery is idempotent for focused test/runtime
+        # hosts that reach the HTTP adapter first.
+        try:
+            from hermes_cli.plugins import discover_plugins
+            from tools.registry import registry
+
+            discover_plugins()
+            entry = registry.get_entry(action)
+        except Exception:
+            logger.exception("operator action registry lookup failed: %s", action)
+            return web.json_response(
+                _openai_error("Operator action registry is unavailable", code="operator_action_unavailable"),
+                status=503,
+            )
+
+        if entry is None or entry.schema.get("x-hermes-operator-action") is not True:
+            return web.json_response(
+                _openai_error("Unknown operator action", code="operator_action_unknown"),
+                status=404,
+            )
+        if entry.check_fn is not None:
+            try:
+                if not entry.check_fn():
+                    return web.json_response(
+                        _openai_error("Operator action is unavailable", code="operator_action_unavailable"),
+                        status=503,
+                    )
+            except Exception:
+                logger.exception("operator action availability check failed: %s", action)
+                return web.json_response(
+                    _openai_error("Operator action is unavailable", code="operator_action_unavailable"),
+                    status=503,
+                )
+
+        result = await asyncio.to_thread(registry.dispatch, action, arguments)
+        if not isinstance(result, str):
+            logger.error("operator action %s returned unsupported result type", action)
+            return web.json_response(
+                _openai_error("Operator action returned an invalid result", code="operator_action_invalid_result"),
+                status=502,
+            )
+        try:
+            payload = json.loads(result)
+        except ValueError:
+            logger.error("operator action %s returned non-JSON output", action)
+            return web.json_response(
+                _openai_error("Operator action returned an invalid result", code="operator_action_invalid_result"),
+                status=502,
+            )
+        if not isinstance(payload, dict):
+            return web.json_response(
+                _openai_error("Operator action returned an invalid result", code="operator_action_invalid_result"),
+                status=502,
+            )
+        # A handler's structured failure is an action conflict rather than a
+        # transport success.  Its full safe detail remains available to the
+        # control plane without turning a refused reset into a false positive.
+        status = 200 if payload.get("success") is True else 409
+        return web.json_response(payload, status=status)
 
     async def _handle_skills(self, request: "web.Request") -> "web.Response":
         """GET /v1/skills — list installed skills visible to the API-server agent.

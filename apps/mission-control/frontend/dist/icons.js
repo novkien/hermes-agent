@@ -41,11 +41,6 @@ const ICONS = {
     ['rect', { x: 9.5, y: 4, width: 5, height: 10, rx: 1.3 }],
     ['rect', { x: 16, y: 4, width: 5, height: 13, rx: 1.3 }],
   ],
-  'run-inspector': [
-    ['circle', { cx: 10, cy: 10, r: 6.2 }],
-    ['line', { x1: 14.4, y1: 14.4, x2: 20.5, y2: 20.5 }],
-    ['path', { d: 'M7.6 10l1.7 1.8 3-3.6', 'stroke-linejoin': 'round' }],
-  ],
   cron: [
     ['circle', { cx: 12, cy: 12, r: 8.2 }],
     ['line', { x1: 12, y1: 12, x2: 12, y2: 7 }],
@@ -360,7 +355,6 @@ export const ROUTE_ICONS = Object.freeze({
   sessions: 'sessions',
   fleet: 'fleet',
   kanban: 'kanban',
-  'run-inspector': 'run-inspector',
   cron: 'cron',
   activity: 'activity',
   alerts: 'alerts',

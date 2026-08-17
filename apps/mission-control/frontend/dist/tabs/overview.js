@@ -418,7 +418,7 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate, li
         route: 'kanban',
         renderRow: (task) => el('button', {
           class: 'section-row section-row-flex', type: 'button',
-          onclick: () => navigate && navigate('run-inspector', { task: task.id }),
+          onclick: () => navigate && navigate('kanban', { view: 'inspect', task: task.id }),
         }, [
           el('span', { class: 'cell-strong', text: task.title || task.id, title: task.title || '' }),
           statusChip('running', task.status || 'running'),

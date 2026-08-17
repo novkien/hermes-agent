@@ -24,6 +24,13 @@ Safety contract for ``sync``:
 8. if stash restoration conflicts, stop and keep the stash entry;
 9. optionally commit restored local work after a clean synchronization.
 
+The per-repository dashboard ``Safe sync`` action additionally rebase-merges
+the PRs that were open when the action began, oldest first, before performing
+the local synchronization. It re-reads each pending PR immediately before
+merging to obtain its current head SHA, and stops at the first GitHub rejection
+or local synchronization failure. Scheduled and bulk synchronization stay
+local-only.
+
 No reset --hard, clean, force push, stash drop, or automatic conflict resolution is
 performed.
 """
@@ -150,9 +157,7 @@ def default_repository_registry() -> dict[str, RepoSpec]:
     plugins_paths = _env_path(
         "REPO_SYNC_HERMES_PLUGINS_PATH",
         (
-            f"{home}/hermes-plugins",
-            f"{home}/.hermes/hermes-plugins",
-            f"{home}/.hermes/repos/hermes-plugins",
+            f"{home}/.hermes/plugins",
         ),
     )
     agents_paths = _env_path(
@@ -346,7 +351,15 @@ class GitHubRestClient:
             ) from exc
 
     def open_pulls(self, spec: RepoSpec, *, limit: int = 10) -> list[dict[str, Any]]:
-        query = urlencode({"state": "open", "base": spec.branch, "per_page": min(limit, 30)})
+        query = urlencode(
+            {
+                "state": "open",
+                "base": spec.branch,
+                "sort": "created",
+                "direction": "asc",
+                "per_page": min(limit, 30),
+            }
+        )
         rows = self.request("GET", f"/repos/{spec.repo_full_name}/pulls?{query}")
         if not isinstance(rows, list):
             return []
@@ -360,8 +373,10 @@ class GitHubRestClient:
                     "state": row.get("state"),
                     "head": (row.get("head") or {}).get("ref"),
                     "head_sha": (row.get("head") or {}).get("sha"),
+                    "node_id": row.get("node_id"),
                     "base": (row.get("base") or {}).get("ref"),
                     "user": ((row.get("user") or {}).get("login")),
+                    "created_at": row.get("created_at"),
                     "updated_at": row.get("updated_at"),
                     "html_url": row.get("html_url"),
                 }
@@ -382,6 +397,76 @@ class GitHubRestClient:
                 details={"response": payload, "pull_number": int(number)},
             )
         return payload
+
+    def mark_pull_ready_for_review(
+        self, spec: RepoSpec, number: int, *, pull_node_id: str | None
+    ) -> dict[str, Any]:
+        """Convert a draft PR to ready-for-review through GitHub GraphQL."""
+        if not pull_node_id:
+            raise GitHubApiError(
+                "github_draft_ready_failed",
+                f"GitHub did not provide a node id for draft PR #{number}",
+                details={"pull_number": int(number)},
+            )
+        query = """
+        mutation MarkPullRequestReady($pullRequestId: ID!) {
+          markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+            pullRequest { id isDraft }
+          }
+        }
+        """
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+            "User-Agent": "AgentOS-Repository-Sync",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        body = json.dumps(
+            {"query": query, "variables": {"pullRequestId": pull_node_id}}
+        ).encode("utf-8")
+        req = UrlRequest("https://api.github.com/graphql", method="POST", headers=headers, data=body)
+        try:
+            with urlopen(req, timeout=self.timeout) as response:  # noqa: S310 - fixed GitHub host
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {"message": raw}
+            raise GitHubApiError(
+                "github_draft_ready_failed",
+                str(payload.get("message") or f"GitHub API HTTP {exc.code}"),
+                details={"status": exc.code, "pull_number": int(number), "response": payload},
+            ) from exc
+        except URLError as exc:
+            raise GitHubApiError(
+                "github_unavailable",
+                f"GitHub API unavailable: {exc.reason}",
+                details={"pull_number": int(number)},
+            ) from exc
+        if not isinstance(payload, dict):
+            raise GitHubApiError(
+                "github_draft_ready_failed",
+                "GitHub returned an invalid response while marking the pull request ready",
+                details={"pull_number": int(number)},
+            )
+        if payload.get("errors"):
+            raise GitHubApiError(
+                "github_draft_ready_failed",
+                str(payload["errors"][0].get("message") or "GitHub rejected the draft transition"),
+                details={"pull_number": int(number), "response": payload},
+            )
+        ready = ((payload.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest")
+        if not isinstance(ready, dict) or ready.get("isDraft") is not False:
+            raise GitHubApiError(
+                "github_draft_ready_failed",
+                "GitHub did not mark the pull request ready for review",
+                details={"pull_number": int(number), "response": payload},
+            )
+        return ready
 
     def sync_fork(self, spec: RepoSpec) -> dict[str, Any]:
         raise RepositorySyncError(
@@ -879,13 +964,37 @@ class RepositorySyncService:
         trigger: str = "manual",
         wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
+        """Synchronize a local checkout without changing GitHub PR state.
+
+        This remains the entry point for cron and bulk synchronization. The
+        browser's per-repository Safe sync action uses ``safe_sync`` instead.
+        """
+        return self._sync_local(
+            name,
+            auto_commit=auto_commit,
+            commit_message=commit_message,
+            trigger=trigger,
+            wait_seconds=wait_seconds,
+        )
+
+    def _sync_local(
+        self,
+        name: str,
+        *,
+        auto_commit: bool = False,
+        commit_message: str | None = None,
+        trigger: str = "manual",
+        wait_seconds: float = 0.0,
+        lock_held: bool = False,
+    ) -> dict[str, Any]:
         spec = self.spec(name)
         event = self._event_base(spec, "sync", trigger)
         backup_branch: str | None = None
         stash_ref: str | None = None
         stash_sha: str | None = None
         try:
-            with self.store.lock(name, wait_seconds=wait_seconds):
+            lock = contextlib.nullcontext() if lock_held else self.store.lock(name, wait_seconds=wait_seconds)
+            with lock:
                 before = self.status(
                     name, fetch=True, include_github=False, include_last_operation=False
                 )
@@ -1013,6 +1122,121 @@ class RepositorySyncService:
                 status="error",
                 backup_branch=backup_branch,
                 stash_sha=stash_sha,
+                error={"code": "unexpected_error", "message": f"{type(exc).__name__}: {exc}"},
+            )
+
+    @staticmethod
+    def _pull_timeline_key(pull: dict[str, Any]) -> tuple[str, int]:
+        """Order PRs predictably, including older API responses without dates."""
+        try:
+            number = int(pull.get("number") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        return (str(pull.get("created_at") or ""), number)
+
+    def safe_sync(
+        self,
+        name: str,
+        *,
+        auto_commit: bool = False,
+        commit_message: str | None = None,
+        trigger: str = "manual",
+        wait_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Rebase-merge the initial PR timeline, then synchronize locally.
+
+        A single repository lock covers the GitHub merge sequence and the local
+        pull so concurrent dashboard requests cannot interleave the timeline.
+        New PRs opened after the action begins are intentionally left for the
+        next Safe sync instead of being merged without the initiating user's
+        knowledge.
+        """
+        spec = self.spec(name)
+        event = self._event_base(spec, "safe_sync", trigger)
+        merged_pulls: list[dict[str, Any]] = []
+        skipped_pulls: list[int] = []
+        try:
+            with self.store.lock(name, wait_seconds=wait_seconds):
+                initial = self.github.open_pulls(spec, limit=30)
+                timeline = [
+                    int(pull["number"])
+                    for pull in sorted(initial, key=self._pull_timeline_key)
+                    if isinstance(pull.get("number"), int) or str(pull.get("number") or "").isdigit()
+                ]
+
+                for number in timeline:
+                    current = {
+                        int(pull["number"]): pull
+                        for pull in self.github.open_pulls(spec, limit=30)
+                        if isinstance(pull.get("number"), int) or str(pull.get("number") or "").isdigit()
+                    }
+                    pull = current.get(number)
+                    if pull is None:
+                        skipped_pulls.append(number)
+                        continue
+                    try:
+                        marked_ready = None
+                        if pull.get("draft"):
+                            marked_ready = self.github.mark_pull_ready_for_review(
+                                spec,
+                                number,
+                                pull_node_id=str(pull.get("node_id") or "") or None,
+                            )
+                        payload = self.github.merge_pr_rebase(
+                            spec, number, expected_head_sha=str(pull.get("head_sha") or "") or None
+                        )
+                    except RepositorySyncError as exc:
+                        details = dict(exc.details)
+                        details.update({"pull_number": number, "pull": pull, "merged_pulls": merged_pulls})
+                        return self._finish_event(
+                            event,
+                            ok=False,
+                            status="error",
+                            merged_pulls=merged_pulls,
+                            skipped_pulls=skipped_pulls,
+                            error={"code": exc.code, "message": str(exc), "details": details},
+                        )
+                    merged_pulls.append(
+                        {
+                            "number": number,
+                            "head_sha": pull.get("head_sha"),
+                            "marked_ready": marked_ready,
+                            "github": payload,
+                        }
+                    )
+
+                local_sync = self._sync_local(
+                    name,
+                    auto_commit=auto_commit,
+                    commit_message=commit_message,
+                    trigger=f"{trigger}:safe-sync",
+                    lock_held=True,
+                )
+                return self._finish_event(
+                    event,
+                    ok=bool(local_sync.get("ok")),
+                    status="ok" if local_sync.get("ok") else "error",
+                    merged_pulls=merged_pulls,
+                    skipped_pulls=skipped_pulls,
+                    production_sync=local_sync,
+                    error=local_sync.get("error"),
+                )
+        except RepositorySyncError as exc:
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                merged_pulls=merged_pulls,
+                skipped_pulls=skipped_pulls,
+                error={"code": exc.code, "message": str(exc), "details": exc.details},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                merged_pulls=merged_pulls,
+                skipped_pulls=skipped_pulls,
                 error={"code": "unexpected_error", "message": f"{type(exc).__name__}: {exc}"},
             )
 

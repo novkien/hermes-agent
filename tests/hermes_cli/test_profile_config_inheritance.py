@@ -1,10 +1,9 @@
 """Tests for profile config inheritance from the root config.yaml.
 
-Contract (top-level presence semantics):
+Contract (field-wise inheritance semantics):
 
-* A profile inherits a root config.yaml key ONLY when the profile's own
-  config.yaml does not define that top-level key.
-* A profile-owned key wins wholesale: root sub-keys are never merged into it.
+* A profile inherits root config fields it does not explicitly override.
+* Dictionary sections merge recursively; scalar and list profile values win.
 * Root telegram-scoped keys (``telegram``, ``platforms``, ``session``,
   ``sessions.channel_overrides`` and numeric thread ids) never reach a
   profile's effective config.
@@ -103,14 +102,18 @@ def test_inherits_root_keys_absent_from_profile(profile_env):
     assert "inherit_root_config" not in cfg
 
 
-def test_profile_owned_key_wins_wholesale(profile_env):
+def test_profile_overrides_dict_fields_and_inherits_siblings(profile_env):
     cfg = load_config()
-    assert cfg["model"] == {"context_length": 1000000}
+    assert cfg["model"]["default"] == "normal"
+    assert cfg["model"]["provider"] == "9router"
+    assert cfg["model"]["context_length"] == 1000000
     monitor = cfg["auxiliary"]["monitor"]
     assert monitor["api_key"] == ""
-    assert monitor["timeout"] == 60
+    assert monitor["timeout"] == 999999
     assert "root-monitor-key" not in str(monitor)
-    assert cfg["auxiliary"]["background_review"].get("interval_hours") != 99
+    background_review = cfg["auxiliary"]["background_review"]
+    assert background_review["enabled"] is True
+    assert background_review["interval_hours"] == 99
 
 
 def test_telegram_and_channel_overrides_never_inherited(profile_env):
@@ -204,13 +207,12 @@ def test_empty_owned_section_survives_save_round_trip(profile_env, monkeypatch):
     monkeypatch.setattr(cfgmod, "get_config_path", lambda: worker)
     cfgmod._LOAD_CONFIG_CACHE.clear()
     cfg = load_config()
-    assert cfg["mcp"] == {"auto_reload_on_config_change": True}
-    assert "model" not in cfg["mcp"]
+    assert cfg["mcp"] == {"auto_reload_on_config_change": True, "model": "normal"}
     cfgmod.save_config(cfg)
     raw = yaml.safe_load(worker.read_text(encoding="utf-8"))
     assert "mcp" in raw
     reloaded = load_config()
-    assert "model" not in reloaded["mcp"]
+    assert reloaded["mcp"]["model"] == "normal"
 
 
 def test_gateway_loader_applies_inheritance(profile_env, monkeypatch):
@@ -236,5 +238,8 @@ def test_cli_loader_applies_inheritance(profile_env, monkeypatch):
     cfg = cli_mod.load_cli_config()
     assert cfg["cron"]["allow_agent_scheduling"] is True
     assert cfg["fleet"] == {"enabled": True}
+    assert cfg["model"]["default"] == "normal"
+    assert cfg["model"]["provider"] == "9router"
+    assert cfg["model"]["context_length"] == 1000000
     assert cfg["telegram"]["allowed_chats"] == ["-1001"]
     assert "group_topics" not in str(cfg.get("telegram", {}))

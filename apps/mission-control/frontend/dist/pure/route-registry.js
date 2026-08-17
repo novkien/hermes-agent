@@ -15,7 +15,6 @@ export const ROUTES = Object.freeze({
   sessions: route('sessions', 'Sessions', { group: 'OPERATE', module: 'tabs/sessions.js' }),
   fleet: route('fleet', 'Fleet / Topology', { group: 'OPERATE', module: 'tabs/fleet.js' }),
   kanban: route('kanban', 'Kanban', { group: 'OPERATE', module: 'tabs/kanban.js' }),
-  'run-inspector': route('run-inspector', 'Run Inspector', { group: 'OPERATE', module: 'tabs/run-inspector.js' }),
   cron: route('cron', 'Cron', { group: 'OPERATE', module: 'tabs/cron.js' }),
   activity: route('activity', 'Activity', { group: 'OPERATE', module: 'tabs/activity.js' }),
   alerts: route('alerts', 'Alerts', { group: 'OPERATE', module: 'tabs/alerts.js' }),

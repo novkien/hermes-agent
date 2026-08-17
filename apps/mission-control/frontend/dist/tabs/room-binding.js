@@ -15,6 +15,7 @@ import { icon } from '../icons.js';
 import { createTable } from '../components/table.js';
 import { createDetail } from '../components/detail.js';
 import { createStatRow } from '../components/stat.js';
+import { toast } from '../components/toast.js';
 import {
   loadEnvelope, tabToolbar, sideHint, paint,
 } from './_kit.js';
@@ -108,6 +109,9 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
   let meta = null;
   let selected = null;
   let unsubscribe = null;
+  let resettingSlot = null;
+  let resetConfirmationSlot = null;
+  let lastReset = null;
   let loadedFromSource = false;
 
   const table = createTable({
@@ -256,7 +260,7 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
       {
         label: 'Longest hold',
         value: oldest ? fmtAge(oldest) : '—',
-        iconName: 'run-inspector',
+        iconName: 'kanban',
         seriesIndex: 5,
         foot: oldest ? fmtTime(oldest) : '',
       },
@@ -287,7 +291,7 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
       subtitle: rows.length ? `${occupied} of ${rows.length} slots in use` : '',
       meta,
       onRefresh: () => load(),
-      actions: [el('span', { class: 'chip chip-info', text: 'monitoring only' })],
+      actions: [el('span', { class: 'chip chip-info', text: 'plugin-owned reset' })],
     }));
   }
 
@@ -313,6 +317,114 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
     renderSide();
   }
 
+  async function resetSlot(row) {
+    resetConfirmationSlot = null;
+    resettingSlot = row.id;
+    renderSide();
+    try {
+      const result = await api.post(
+        `/api/room-slots/${encodeURIComponent(row.slot)}/reset?confirm=true`,
+        {},
+        { profile },
+      );
+      const outcome = result.data || {};
+      const resetCount = Number(outcome.reset_count) || 0;
+      const targetCount = Number(outcome.target_count) || row.seats.length;
+      lastReset = {
+        slot: row.id,
+        ok: resetCount === targetCount,
+        summary: outcome.summary || '',
+        results: Array.isArray(outcome.results) ? outcome.results : [],
+        requestId: result.meta?.request_id || '',
+      };
+      toast(
+        resetCount === targetCount
+          ? `Room slot ${row.slot}: ${resetCount} sessions reset and verified`
+          : `Room slot ${row.slot}: reset did not complete`,
+        {
+          tone: resetCount === targetCount ? 'ok' : 'warn',
+          detail: outcome.summary || result.meta?.request_id || '',
+          timeout: resetCount === targetCount ? 6500 : 10000,
+        },
+      );
+      await load();
+    } catch (err) {
+      lastReset = {
+        slot: row.id,
+        ok: false,
+        error: err.message || 'The reset request was refused before a session could be reset.',
+        requestId: err.request_id || '',
+        results: [],
+      };
+      toast(`Room slot ${row.slot}: reset was refused`, {
+        tone: 'danger',
+        detail: err.message || err.request_id || 'No session was reported reset.',
+        timeout: 10000,
+      });
+    } finally {
+      resettingSlot = null;
+      renderSide();
+    }
+  }
+
+  function resetOutcome(row) {
+    if (!lastReset || lastReset.slot !== row.id) return null;
+    const rows = lastReset.results;
+    return el('div', {
+      class: `room-slot-reset-outcome ${lastReset.ok ? 'is-ok' : 'is-danger'}`,
+      role: 'status',
+    }, [
+      el('div', { class: 'room-slot-reset-outcome-title', text: lastReset.ok ? 'Reset verified' : 'Reset not completed' }),
+      el('div', {
+        class: 'room-slot-reset-outcome-summary',
+        text: lastReset.error || lastReset.summary || 'No plugin result was returned.',
+      }),
+      rows.length
+        ? el('div', { class: 'room-slot-reset-results mono' }, rows.map((entry) => {
+          const thread = entry?.thread_id || 'unknown thread';
+          const oldId = entry?.old_session_id || 'unbound';
+          const newId = entry?.new_session_id || entry?.outcome || 'not reset';
+          return el('div', { text: `${thread}: ${oldId} → ${newId}` });
+        }))
+        : null,
+      lastReset.requestId
+        ? el('div', { class: 'room-slot-reset-request mono', text: `request ${lastReset.requestId}` })
+        : null,
+    ].filter(Boolean));
+  }
+
+  function resetAction(row, resetInProgress) {
+    if (resetInProgress) {
+      return el('button', {
+        class: 'btn btn-sm btn-danger', type: 'button', disabled: 'disabled',
+        'aria-busy': 'true', text: 'Resetting 4 sessions…',
+      });
+    }
+    if (resetConfirmationSlot !== row.id) {
+      return el('button', {
+        class: 'btn btn-sm btn-danger', type: 'button',
+        title: 'Prepare a reset for the CEO, coder, research, and system sessions in this slot',
+        onclick: () => { resetConfirmationSlot = row.id; renderSide(); },
+      }, [icon('warning', { size: 12 }), ' Reset 4 sessions']);
+    }
+    return el('div', { class: 'room-slot-reset-confirm' }, [
+      el('div', {
+        class: 'field-hint',
+        text: 'This will reset the four configured sessions. Active work remains protected by the plugin.',
+      }),
+      el('div', { class: 'room-slot-reset-confirm-actions' }, [
+        el('button', {
+          class: 'btn btn-sm', type: 'button', text: 'Cancel',
+          onclick: () => { resetConfirmationSlot = null; renderSide(); },
+        }),
+        el('button', {
+          class: 'btn btn-sm btn-danger', type: 'button',
+          onclick: () => resetSlot(row),
+        }, [icon('warning', { size: 12 }), ' Confirm reset 4 sessions']),
+      ]),
+    ]);
+  }
+
   function renderSide() {
     if (!inspectorHost) return;
     if (!selected) {
@@ -325,7 +437,8 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
     }
 
     const row = selected;
-    paint(inspectorHost, createDetail({
+    const resetInProgress = resettingSlot === row.id;
+    const detail = createDetail({
       title: `Room slot ${row.slot}`,
       meta,
       chips: [
@@ -350,13 +463,19 @@ export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate,
         ? [{ label: 'Task', text: String(row.task_id), onClick: () => navigate('kanban', { task: row.task_id }) }]
         : [],
       actions: [
-        el('div', { class: 'field-hint' }, [
-          icon('lock', { size: 11 }),
-          ' Release is owned by the session-injector plugin and is not proxied.',
+        el('div', { class: 'room-slot-reset-control' }, [
+          el('div', { class: 'field-hint' }, [
+            icon('lock', { size: 11 }),
+            'Resets are executed by the session-injector plugin; this dashboard only selects this slot’s four configured threads.',
+          ]),
+          resetAction(row, resetInProgress),
+          resetOutcome(row),
         ]),
       ],
       raw: row.raw,
-    }));
+    });
+    detail.classList.add('room-slot-detail');
+    paint(inspectorHost, detail);
   }
 
   function bindEvents() {

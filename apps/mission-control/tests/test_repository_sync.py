@@ -22,6 +22,7 @@ from agent_mission_control.repository_runner import RepositoryGitRunner  # noqa:
 from agent_mission_control.repository_sync import (  # noqa: E402
     OperationStore,
     RepoSpec,
+    RepositorySyncError,
     RepositorySyncService,
     default_repository_registry,
 )
@@ -33,6 +34,40 @@ class OfflineGithub:
 
     def fork_drift(self, _spec):
         raise AssertionError("upstream drift must never be queried")
+
+
+class TimelineGithub:
+    """In-memory GitHub double for the dashboard Safe sync merge sequence."""
+
+    def __init__(self, pulls, *, reject_numbers=()):
+        self.pulls = [dict(pull) for pull in pulls]
+        self.reject_numbers = set(reject_numbers)
+        self.merge_calls = []
+        self.ready_calls = []
+        self.open_calls = 0
+
+    def open_pulls(self, _spec, *, limit=10):
+        self.open_calls += 1
+        return [dict(pull) for pull in self.pulls[:limit]]
+
+    def merge_pr_rebase(self, _spec, number, *, expected_head_sha=None):
+        self.merge_calls.append((number, expected_head_sha))
+        if number in self.reject_numbers:
+            raise RepositorySyncError(
+                "github_merge_rejected",
+                f"PR #{number} has merge conflicts",
+                details={"pull_number": number},
+            )
+        self.pulls = [pull for pull in self.pulls if pull["number"] != number]
+        return {"merged": True, "sha": f"merged-{number}"}
+
+    def mark_pull_ready_for_review(self, _spec, number, *, pull_node_id=None):
+        self.ready_calls.append((number, pull_node_id))
+        for pull in self.pulls:
+            if pull["number"] == number:
+                pull["draft"] = False
+                return {"id": pull_node_id or f"node-{number}", "isDraft": False}
+        raise AssertionError(f"missing PR #{number}")
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -181,6 +216,74 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         self.assertTrue(result["committed_sha"])
         self.assertEqual(result["pushed_sha"], result["committed_sha"])
         self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+
+    def test_dashboard_safe_sync_merges_initial_prs_including_drafts_then_pulls_local(self):
+        self.push_remote_file("merged-on-origin.txt", "remote\n", "remote merge result")
+        github = TimelineGithub(
+            [
+                {
+                    "number": 22,
+                    "created_at": "2026-08-16T11:00:00Z",
+                    "head_sha": "head-22",
+                    "draft": False,
+                },
+                {
+                    "number": 11,
+                    "created_at": "2026-08-16T10:00:00Z",
+                    "head_sha": "head-11",
+                    "node_id": "node-11",
+                    "draft": True,
+                },
+            ]
+        )
+        self.service.github = github
+
+        result = self.service.safe_sync("demo", trigger="dashboard", auto_commit=False)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual([row["number"] for row in result["merged_pulls"]], [11, 22])
+        self.assertEqual(github.merge_calls, [(11, "head-11"), (22, "head-22")])
+        self.assertEqual(github.ready_calls, [(11, "node-11")])
+        self.assertGreaterEqual(github.open_calls, 3)
+        self.assertTrue(result["production_sync"]["ok"], result)
+        self.assertTrue((self.prod / "merged-on-origin.txt").exists())
+
+    def test_dashboard_safe_sync_stops_at_first_pr_merge_rejection_without_pulling_local(self):
+        self.push_remote_file("not-pulled.txt", "remote\n", "remote update")
+        github = TimelineGithub(
+            [
+                {
+                    "number": 11,
+                    "created_at": "2026-08-16T10:00:00Z",
+                    "head_sha": "head-11",
+                    "draft": False,
+                },
+                {
+                    "number": 22,
+                    "created_at": "2026-08-16T11:00:00Z",
+                    "head_sha": "head-22",
+                    "draft": False,
+                },
+                {
+                    "number": 33,
+                    "created_at": "2026-08-16T12:00:00Z",
+                    "head_sha": "head-33",
+                    "draft": False,
+                },
+            ],
+            reject_numbers={22},
+        )
+        self.service.github = github
+
+        result = self.service.safe_sync("demo", trigger="dashboard", auto_commit=False)
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["error"]["code"], "github_merge_rejected")
+        self.assertEqual(result["error"]["details"]["pull_number"], 22)
+        self.assertEqual([row["number"] for row in result["merged_pulls"]], [11])
+        self.assertEqual(github.merge_calls, [(11, "head-11"), (22, "head-22")])
+        self.assertNotIn("production_sync", result)
+        self.assertFalse((self.prod / "not-pulled.txt").exists())
 
     def test_status_does_not_query_upstream_drift(self):
         status = self.service.status("demo", fetch=False, include_github=True)

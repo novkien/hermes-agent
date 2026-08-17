@@ -371,7 +371,8 @@ html, body {
   background: var(--surface-2);
   backdrop-filter: blur(16px);
   border-left: 1px solid var(--border);
-  padding: var(--space-3);
+  box-sizing: border-box;
+  padding: var(--space-4) var(--space-3) var(--space-5);
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -2210,6 +2211,50 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
   white-space: pre-wrap; word-break: break-word; color: var(--text-dim);
 }
 
+/* Room Binding is deliberately detail-heavy: the inspector needs an internal
+   rhythm so state labels, long identifiers and seat controls never appear to
+   scrape against the shell edge.  The generic inspector padding above fixes
+   every tab; these rules give a selected Room slot a compact operator card. */
+.room-slot-detail { gap: var(--space-4); }
+.room-slot-detail .detail-head {
+  padding: 0 var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.room-slot-detail .detail-dl {
+  grid-template-columns: minmax(86px, 39%) minmax(0, 1fr);
+  gap: 7px var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--elev-1-border);
+  border-radius: var(--radius-md);
+  background: var(--elev-1-bg);
+}
+.room-slot-detail .detail-dt { align-self: center; }
+.room-slot-detail .detail-dd { min-width: 0; color: var(--text-dim); }
+.room-slot-detail .detail-section { gap: var(--space-2); }
+.room-slot-detail .detail-section-title { padding-left: var(--space-1); }
+.room-slot-detail .choice-row { padding: var(--space-2) var(--space-3); }
+.room-slot-detail .detail-raw { padding: 0 var(--space-1); }
+.room-slot-reset-control { display: grid; gap: var(--space-3); width: 100%; }
+.room-slot-reset-control .field-hint { line-height: 1.55; }
+.room-slot-reset-control .btn { justify-self: start; }
+.room-slot-reset-outcome {
+  display: grid; gap: 5px; padding: var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--elev-1-bg); font-size: var(--fs-xs);
+}
+.room-slot-reset-outcome.is-ok { border-color: rgba(var(--ok-rgb), 0.38); background: rgba(var(--ok-rgb), 0.07); }
+.room-slot-reset-outcome.is-danger { border-color: rgba(var(--danger-rgb), 0.42); background: rgba(var(--danger-rgb), 0.07); }
+.room-slot-reset-outcome-title { font-weight: 700; color: var(--text); }
+.room-slot-reset-outcome-summary { color: var(--text-dim); line-height: 1.45; }
+.room-slot-reset-results { display: grid; gap: 3px; color: var(--text-faint); overflow-wrap: anywhere; }
+.room-slot-reset-request { color: var(--text-faint); overflow-wrap: anywhere; }
+.room-slot-reset-confirm {
+  display: grid; gap: var(--space-2); padding: var(--space-3);
+  border: 1px solid rgba(var(--danger-rgb), 0.35); border-radius: var(--radius-md);
+  background: rgba(var(--danger-rgb), 0.06);
+}
+.room-slot-reset-confirm-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
 /* --- stat tiles ------------------------------------------------------ */
 .stat-row { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .stat {
@@ -2449,7 +2494,7 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
 }
 .tab-banner > :last-child { margin-left: auto; }
 /* A bare <input class="input"> defaults to the browser's intrinsic ~20ch
-   width, which clips longer placeholders like Run Inspector's picker
+   width, which clips longer placeholders like Kanban's run-analysis picker
    ("Task id, or pick one below…"). Let it grow to fill the banner row. */
 .tab-banner input.input { flex: 1 1 240px; min-width: 0; }
 
@@ -2476,7 +2521,7 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
    Stage 6 surfaces — correlation graph, trajectory timeline, room topology
    ====================================================================== */
 
-/* --- correlation graph (run-inspector.js) ----------------------------- */
+/* --- correlation graph (kanban-analysis.js) --------------------------- */
 .graph-lanes { display: flex; flex-direction: column; gap: var(--space-2); }
 .graph-lane { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 .graph-lane-title {
@@ -2519,7 +2564,7 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
 .graph-edge { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; font-size: var(--fs-xs); }
 .graph-edge > .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- trajectory timeline (run-inspector.js) --------------------------- */
+/* --- trajectory timeline (kanban-analysis.js) ------------------------- */
 .timeline { list-style: none; margin: 0; padding: 0 0 0 var(--space-4); position: relative; }
 .timeline::before { content: ""; position: absolute; left: 4px; top: 6px; bottom: 6px; width: 1px; background: var(--border-strong); }
 .timeline-item { position: relative; display: flex; gap: var(--space-3); padding: 5px 0; }
@@ -2530,7 +2575,7 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
 }
 .timeline-item:hover .timeline-marker { border-color: var(--accent); background: var(--accent); }
 .timeline-body { flex: 1; min-width: 0; }
-/* The activity feed makes each entry selectable; the run inspector's is a
+/* The activity feed makes each entry selectable; the run-analysis view's is a
    plain read-only list, so the button treatment is opt-in. */
 .timeline-button {
   text-align: left; font: inherit; color: inherit; cursor: pointer;

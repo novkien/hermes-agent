@@ -200,7 +200,7 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
     const row = selected;
     const relations = [];
     if (navigate && row.entityType === 'task' && row.entityId) {
-      relations.push({ label: 'Inspect', text: row.entityId, onClick: () => navigate('run-inspector', { task: row.entityId }) });
+      relations.push({ label: 'Inspect run', text: row.entityId, onClick: () => navigate('kanban', { view: 'inspect', task: row.entityId }) });
       relations.push({ label: 'Board', text: 'Kanban', onClick: () => navigate('kanban', { task: row.entityId }) });
     }
     if (navigate && row.entityType === 'permit') {

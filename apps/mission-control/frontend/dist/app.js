@@ -9,7 +9,9 @@
 
 import { ROUTES, navGroups } from './pure/route-registry.js';
 import { registerS7Routes } from './pure/s7-registration.js';
-import { parseRouteWithProfile, buildHash, FALLBACK_PATH } from './pure/hash-router.js';
+import {
+  parseRouteWithProfile, buildHash, FALLBACK_PATH, redirectLegacyRunInspector,
+} from './pure/hash-router.js';
 import { createStateStore, restoreOrEmpty } from './pure/state-store.js';
 import { createRetainedRoutes } from './pure/retained-routes.js';
 import { createPrefetch } from './preload.js';
@@ -35,7 +37,6 @@ const PRIMARY_MODULES = {
   sessions: () => import('./tabs/sessions.js').then((m) => m.createSessions),
   fleet: () => import('./tabs/fleet.js').then((m) => m.createFleet),
   kanban: () => import('./tabs/kanban.js').then((m) => m.createKanban),
-  'run-inspector': () => import('./tabs/run-inspector.js').then((m) => m.createRunInspector),
   cron: () => import('./tabs/cron.js').then((m) => m.createCron),
   activity: () => import('./tabs/activity.js').then((m) => m.createActivity),
   alerts: () => import('./tabs/alerts.js').then((m) => m.createAlerts),
@@ -242,6 +243,15 @@ export async function boot({ root } = {}) {
 
   function routeKey(path) {
     return String(path || FALLBACK_PATH).replace(/^\/+/, '') || 'overview';
+  }
+
+  function canonicalizeRetiredRoute(route) {
+    const next = redirectLegacyRunInspector(route);
+    if (next.path === route.path) return route;
+    const url = new URL(window.location.href);
+    url.hash = buildHash(next.path, next.params);
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    return next;
   }
 
   // Shell preferences live in the BFF control store, not Web Storage, so an
@@ -755,13 +765,13 @@ export async function boot({ root } = {}) {
   prefetch.expose();
 
   async function onHashChange() {
-    const route = parseRouteWithProfile(window.location.hash, window.location.search);
+    const route = canonicalizeRetiredRoute(parseRouteWithProfile(window.location.hash, window.location.search));
     if (route.profile !== profile) await switchProfile(route.profile, { navigateAfter: false });
     navigate(routeKey(route.path), route.params, { historyMode: 'none' });
   }
   window.addEventListener('hashchange', () => onHashChange().catch(console.error));
 
-  const initial = parseRouteWithProfile(window.location.hash, window.location.search);
+  const initial = canonicalizeRetiredRoute(parseRouteWithProfile(window.location.hash, window.location.search));
   if (initial.profile !== profile) profile = initial.profile;
   navigate(routeKey(initial.path), initial.params, { historyMode: 'replace' });
 

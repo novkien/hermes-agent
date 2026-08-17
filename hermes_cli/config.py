@@ -765,6 +765,23 @@ def _load_profile_root_layer() -> Optional[Dict[str, Any]]:
     return _strip_inherited_root_keys(raw)
 
 
+def _merge_profile_root_layer(
+    root_layer: Dict[str, Any], profile_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Return root config overlaid with a profile's explicit field overrides.
+
+    Profile configuration is intentionally sparse.  A profile that sets only
+    ``model.context_length`` should retain the root ``model.default`` and
+    ``model.provider`` rather than accidentally creating a model section with
+    no selectable model.  Dictionaries are therefore merged recursively while
+    scalars and lists remain profile-owned as normal ``_deep_merge`` overrides.
+
+    Callers must pass the already-stripped root layer so channel-, prompt-, and
+    thread-scoped settings cannot reach a profile through this helper.
+    """
+    return _deep_merge(copy.deepcopy(root_layer), profile_config)
+
+
 def get_env_path() -> Path:
     """Get the .env file path (for API keys)."""
     return get_hermes_home() / ".env"
@@ -2553,34 +2570,42 @@ def _strip_inherited_values(
     root_layer: Dict[str, Any],
     explicit_paths: Set[Tuple[str, ...]],
 ) -> Dict[str, Any]:
-    """Remove root-inherited top-level keys from a profile config before saving.
+    """Remove inherited fields from a profile config before saving.
 
-    Inheritance is top-level: a profile either owns a key (present in its own
-    config.yaml, wins wholesale) or inherits the whole root value. So a save
-    (``hermes config set`` etc.) only risks materializing root keys the
-    profile never set — drop top-level keys that equal the inherited root
-    layer (once schema defaults are stripped from both sides, since
-    ``_strip_default_values`` runs first) and were not explicitly set by the
-    profile. Profile-owned sections are preserved in full, leaf by leaf, even
-    when some leaves equal root.
+    Profile inheritance is field-wise for dictionaries.  Saving an effective
+    profile config must therefore preserve only explicit profile fields, not
+    materialize root siblings that were present solely through inheritance.
+    Values that differ from the root are retained as a conservative fallback
+    for programmatic callers that did not supply a matching explicit path.
     """
 
-    owned_tops = {p[0] for p in explicit_paths}
+    _MISSING = object()
+
+    def _has_explicit_descendant(path: Tuple[str, ...]) -> bool:
+        return any(explicit[:len(path)] == path for explicit in explicit_paths)
+
+    def _strip(value: Any, inherited: Any, path: Tuple[str, ...]) -> Any:
+        if isinstance(value, dict) and isinstance(inherited, dict):
+            stripped: Dict[str, Any] = {}
+            for key, child in value.items():
+                child_value = _strip(
+                    child, inherited.get(key, _MISSING), path + (key,)
+                )
+                if child_value is not _MISSING:
+                    stripped[key] = child_value
+            if stripped:
+                return stripped
+            return {} if _has_explicit_descendant(path) else _MISSING
+
+        if path in explicit_paths or inherited is _MISSING or value != inherited:
+            return copy.deepcopy(value)
+        return _MISSING
+
     result: Dict[str, Any] = {}
-    for k, v in profile_cfg.items():
-        if k not in root_layer or k in owned_tops:
-            result[k] = v
-            continue
-        rv = root_layer[k]
-        if isinstance(rv, dict) and isinstance(v, dict):
-            # _strip_default_values compares against DEFAULT_CONFIG top-level
-            # keys, so the root section must be stripped in full-config shape.
-            stripped_root = _strip_default_values(copy.deepcopy({k: rv})).get(k)
-            if v == stripped_root:
-                continue
-        elif v == rv:
-            continue
-        result[k] = v
+    for key, value in profile_cfg.items():
+        stripped_value = _strip(value, root_layer.get(key, _MISSING), (key,))
+        if stripped_value is not _MISSING:
+            result[key] = stripped_value
     return result
 
 
@@ -3590,12 +3615,10 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                     user_config["agent"] = agent_user_config
                     user_config.pop("max_turns", None)
 
-                config = _deep_merge(config, user_config)
-
-                # Profile inheritance: a profile inherits a root config.yaml
-                # key ONLY when the profile's own config.yaml does not define
-                # it — top-level presence decides. A profile-owned key wins
-                # wholesale (no root sub-keys merged into it). Root
+                # Profile inheritance overlays the profile's explicit fields
+                # over the stripped root layer.  This keeps a sparse profile
+                # override such as ``model.context_length`` from dropping the
+                # root model's ``default`` and ``provider`` fields. Root
                 # channel/prompt overrides and per-thread model overrides are
                 # stripped before inheritance so they never leak into
                 # profiles. A profile opts out with
@@ -3603,14 +3626,11 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                 if _config_inherits_root(user_config):
                     root_layer = _load_profile_root_layer()
                     if root_layer:
-                        for _rk, _rv in root_layer.items():
-                            if _rk not in user_config:
-                                if isinstance(_rv, dict) and isinstance(
-                                    config.get(_rk), dict
-                                ):
-                                    config[_rk] = _deep_merge(config[_rk], _rv)
-                                else:
-                                    config[_rk] = copy.deepcopy(_rv)
+                        user_config = _merge_profile_root_layer(
+                            root_layer, user_config
+                        )
+
+                config = _deep_merge(config, user_config)
                 # The opt-out flag is a profile-file directive, not runtime
                 # config — never surface it in the effective config.
                 config.pop("inherit_root_config", None)

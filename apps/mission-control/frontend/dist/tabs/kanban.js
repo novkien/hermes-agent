@@ -11,16 +11,17 @@ import { buildHash } from '../pure/hash-router.js';
 import { createDetail } from '../components/detail.js';
 import { createTable } from '../components/table.js';
 import { createChatModal } from './chat.js';
+import { createKanbanRunAnalysis } from './kanban-analysis.js';
 import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 const SSE_EVENTS = Object.freeze(['task.changed', 'run.changed']);
 
-export function createKanban({ api, profile, sse, liveStore }) {
+export function createKanban({ api, profile, sse, toolbar: shellToolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-kanban' });
-  const toolbar = el('div', { class: 'tab-toolbar' });
+  const boardToolbar = el('div', { class: 'tab-toolbar' });
   const kpiRow = el('div', { class: 'kpi-row' });
   const tableWrap = el('div', { class: 'kanban-table-host' });
-  root.append(toolbar, kpiRow, tableWrap);
+  root.append(boardToolbar, kpiRow, tableWrap);
 
   let summary = null;
   let tasks = null;
@@ -28,6 +29,8 @@ export function createKanban({ api, profile, sse, liveStore }) {
   let inspectorHost = null;
   let selectedId = null;
   let unsubscribe = null;
+  let view = 'board';
+  let analysis = null;
   let chatModalInstance = null;
   let loadedFromSource = false;
   function chatModal() {
@@ -59,6 +62,36 @@ export function createKanban({ api, profile, sse, liveStore }) {
     ],
     onSelect: (task) => openDetail(task.id),
   });
+
+  function boardView() {
+    clear(root);
+    root.append(boardToolbar, kpiRow, tableWrap);
+  }
+
+  function runAnalysis() {
+    if (!analysis) {
+      analysis = createKanbanRunAnalysis({ api, profile, sse, toolbar: shellToolbar, onNavigate: navigate });
+    }
+    return analysis;
+  }
+
+  function analysisView() {
+    runAnalysis().mount(root);
+  }
+
+  function openRunAnalysis(id) {
+    const params = { view: 'inspect' };
+    if (id) params.task = id;
+    if (navigate) {
+      navigate('kanban', params);
+      return;
+    }
+    if (view === 'board' && unsubscribe) { unsubscribe(); unsubscribe = null; }
+    view = 'inspect';
+    analysisView();
+    if (inspectorHost) runAnalysis().renderInspector(inspectorHost);
+    runAnalysis().activate(params).catch(() => null);
+  }
 
   function filterBar() {
     const bar = el('div', { class: 'filter-bar' });
@@ -160,7 +193,7 @@ export function createKanban({ api, profile, sse, liveStore }) {
     renderSide();
     if (!tasks) {
       clear(tableWrap);
-      paint(toolbar, tabToolbar({ title: 'Kanban', onRefresh: () => load() }));
+      paint(boardToolbar, tabToolbar({ title: 'Kanban', onRefresh: () => load() }));
       tableWrap.append(unavailableState({ reason: 'Kanban source unavailable' }));
       return;
     }
@@ -176,12 +209,18 @@ export function createKanban({ api, profile, sse, liveStore }) {
     // The standard tab header, so this tab reports its freshness and offers a
     // refresh like every other one — it used to be the only board in the
     // dashboard you could not reload without switching tabs and back.
-    paint(toolbar, tabToolbar({
+    paint(boardToolbar, tabToolbar({
       title: 'Kanban',
       subtitle: filterSummary(rows.length, loaded.length, 'card')
         + (filters.board && filters.board !== 'all' ? ` on ${filters.board}` : ' across every board'),
       filters: [filterBar()],
-      actions: [provenanceBadge(tasks?.meta)],
+      actions: [
+        el('button', {
+          class: 'btn btn-sm', type: 'button', text: 'Run analysis',
+          onclick: () => openRunAnalysis(selectedId),
+        }),
+        provenanceBadge(tasks?.meta),
+      ],
       meta: tasks?.meta || null,
       onRefresh: () => load(),
     }));
@@ -329,13 +368,14 @@ export function createKanban({ api, profile, sse, liveStore }) {
         },
         { label: 'current_run_id', value: task.current_run_id, mono: true },
       ],
-      relations: chatSessionId ? [
-        {
+      relations: [
+        { label: 'Run', text: 'Open run analysis', onClick: () => openRunAnalysis(id) },
+        ...(chatSessionId ? [{
           label: 'Chat',
           text: workerSessionId ? 'Open worker chat' : 'Open chat (creator session)',
           onClick: () => chatModal().open(chatSessionId),
-        },
-      ] : [],
+        }] : []),
+      ],
       sections,
     });
   }
@@ -370,6 +410,10 @@ export function createKanban({ api, profile, sse, liveStore }) {
 
   function renderInspector(container) {
     inspectorHost = container;
+    if (view === 'inspect') {
+      runAnalysis().renderInspector(container);
+      return;
+    }
     renderSide();
   }
 
@@ -399,6 +443,20 @@ export function createKanban({ api, profile, sse, liveStore }) {
       container.append(root);
     },
     async activate(params = {}) {
+      const nextView = params.view === 'inspect' ? 'inspect' : 'board';
+      if (nextView !== view) {
+        if (view === 'inspect') runAnalysis().deactivate();
+        else if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        view = nextView;
+      }
+      if (view === 'inspect') {
+        analysisView();
+        if (inspectorHost) runAnalysis().renderInspector(inspectorHost);
+        return runAnalysis().activate(params);
+      }
+
+      boardView();
+      if (shellToolbar) clear(shellToolbar);
       bindEvents();
       try {
         applyLive();
@@ -410,15 +468,19 @@ export function createKanban({ api, profile, sse, liveStore }) {
       }
     },
     deactivate() {
+      if (view === 'inspect') return runAnalysis().deactivate();
       if (unsubscribe) unsubscribe();
       unsubscribe = null;
       return {};
     },
     renderInspector,
-    refresh: load,
+    renderToolbar(host) {
+      if (view === 'inspect') runAnalysis().renderToolbar(host);
+      else clear(host);
+    },
+    refresh: () => (view === 'inspect' ? runAnalysis().refresh() : load()),
     setFilter(next) {
       Object.assign(filters, next);
-      if (liveStore) { render(); return Promise.resolve(); }
       return load();
     },
   };

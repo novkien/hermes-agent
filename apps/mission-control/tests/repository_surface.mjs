@@ -48,6 +48,7 @@ assert.match(tab, /remain unpushed/);
 assert.doesNotMatch(tab, /Sync upstream/);
 assert.match(routesPy, /upstream_disabled/);
 assert.match(routesPy, /\["sync", "commit", "rebase_merge_pr"\]/);
+assert.match(routesPy, /service\.safe_sync\(/);
 assert.match(tab, /Cron-safe command/);
 assert.match(tab, /Future hook trigger/);
 assert.match(css, /\.repo-grid/);

@@ -25,13 +25,17 @@ import {
   buildHash,
   parseHash,
   parseRouteWithProfile,
+  redirectLegacyRunInspector,
 } from '../frontend/dist/pure/hash-router.js';
+import { ROUTES } from '../frontend/dist/pure/route-registry.js';
+import { ALL_LOCKED_KEYS } from '../frontend/dist/pure/route-inventory.js';
 import {
   configuredSkillModeTopics,
   profileSkillModePatch,
   profileSkillPromptMode,
   topicSkillModePatch,
 } from '../frontend/dist/pure/skill-prompt-mode.js';
+import { buildGraph, timelineEvents } from '../frontend/dist/tabs/kanban-analysis.js';
 import {
   buildTopology,
   buildOrgChart,
@@ -232,6 +236,7 @@ assert.equal(summarizeSourceHealth({
 
 assert.equal(buildHash('/overview', { profile: 'default' }), '#/overview');
 assert.equal(buildHash('/kanban', { profile: 'management', task: 't1' }), '#/kanban?task=t1');
+assert.equal(buildHash('/kanban', { view: 'inspect', task: 't1' }), '#/kanban?task=t1&view=inspect');
 assert.deepEqual(parseHash('#/overview?profile=default'), {
   path: '/overview',
   params: { profile: 'default' },
@@ -244,6 +249,25 @@ assert.deepEqual(
   parseRouteWithProfile('#/overview?profile=legacy', ''),
   { path: '/overview', params: {}, profile: 'legacy' },
 );
+assert.deepEqual(
+  redirectLegacyRunInspector({ path: '/run-inspector', params: { task: 't1', session: 's1' }, profile: 'ops' }),
+  { path: '/kanban', params: { view: 'inspect', task: 't1' }, profile: 'ops' },
+);
+assert.deepEqual(
+  redirectLegacyRunInspector({ path: '/run-inspector', params: { session: 's1' }, profile: 'ops' }),
+  { path: '/kanban', params: { view: 'inspect', session: 's1' }, profile: 'ops' },
+);
+assert.equal(redirectLegacyRunInspector({ path: '/kanban', params: { task: 't1' } }).path, '/kanban');
+assert.equal(ROUTES['run-inspector'], undefined);
+assert.equal(ALL_LOCKED_KEYS.includes('run-inspector'), false);
+
+const correlation = buildGraph({
+  nodes: [{ type: 'task', id: 't1' }, { type: 'run', id: 'r1' }],
+  edges: [{ source: 'task:t1', target: 'run:r1', kind: 'native' }],
+});
+assert.deepEqual(correlation.lanes.map((lane) => lane.type), ['task', 'run']);
+assert.equal(correlation.edgesByNode.get('task:t1').length, 1);
+assert.deepEqual(timelineEvents([{ occurred_at: 2, kind: 'completed' }, { occurred_at: 1, kind: 'started' }]).map((event) => event.kind), ['started', 'completed']);
 
 
 // --- fleet topology ---------------------------------------------------

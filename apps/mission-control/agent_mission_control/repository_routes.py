@@ -256,7 +256,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.sync",
             target=f"/api/repositories/{repo}/sync",
-            call=lambda: service.sync(
+            call=lambda: service.safe_sync(
                 repo,
                 auto_commit=auto_commit,
                 commit_message=message,

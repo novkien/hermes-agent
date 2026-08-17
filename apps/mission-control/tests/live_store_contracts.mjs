@@ -81,6 +81,7 @@ assert.equal(frames.length, 1, '100 events scheduled more than one DOM frame');
 frames[0]();
 assert.equal(notifications, 1);
 assert.equal(store.view().entities('issues')[0].title, 'beta-101');
+assert.equal(store.view().resource('issues').version > 1, true);
 
 // Replayed/stale revision for the same entity is idempotent.
 assert.equal(store.applyEvent({

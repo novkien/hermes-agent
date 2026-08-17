@@ -48,6 +48,24 @@ export function parseRouteWithProfile(hash, search = '') {
   return { ...route, profile };
 }
 
+/**
+ * Normalize the retired Run Inspector route into Kanban's analysis subview.
+ *
+ * The route is intentionally handled at the hash boundary rather than kept in
+ * the route registry: bookmarks continue to work, but the retired surface
+ * cannot reappear in navigation, the palette, or a cached tab instance.
+ */
+export function redirectLegacyRunInspector(route) {
+  if (!route || route.path !== '/run-inspector') return route;
+  const params = { view: 'inspect' };
+  // Match the old inspector's precedence: task wins if a malformed link has
+  // both entity types. Do not carry arbitrary legacy query state into the
+  // Kanban view.
+  if (route.params?.task) params.task = route.params.task;
+  else if (route.params?.session) params.session = route.params.session;
+  return { ...route, path: '/kanban', params };
+}
+
 export function buildDeepLink(path, params = {}, inspectorState = {}) {
   const merged = { ...(params || {}) };
   if (inspectorState && inspectorState.selected) merged.selected = inspectorState.selected;

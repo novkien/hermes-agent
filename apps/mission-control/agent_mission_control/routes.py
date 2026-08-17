@@ -670,6 +670,47 @@ READ_PATH_MUTATIONS = {
     "/api/config": ("save_section",),
 }
 
+ROOM_SLOT_SEAT_ROLES = ("ceo", "coder", "research", "system")
+SESSION_INJECTOR_FORCE_RESET_ACTION = "agent2agent_force_reset"
+SESSION_INJECTOR_FORCE_RESET_ROUTE = (
+    f"/v1/operator/actions/{SESSION_INJECTOR_FORCE_RESET_ACTION}"
+)
+
+
+def room_slot_force_reset_arguments(
+    payload: Any, slot: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve one configured Room slot to the plugin's exact reset contract.
+
+    The browser supplies only a slot number.  Re-reading the adapter-owned
+    topology here prevents a crafted request from resetting an arbitrary
+    Telegram topic, and keeps the slot's four-seat membership anchored to the
+    same configuration the Room Binding view displays.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    chat_id = str(data.get("room_chat_id") or "").strip()
+    slots = data.get("room_slots")
+    if not chat_id or not isinstance(slots, list):
+        return None, "Room topology is unavailable"
+
+    configured = next(
+        (
+            row for row in slots
+            if isinstance(row, dict) and str(row.get("slot") or "") == str(slot)
+        ),
+        None,
+    )
+    if configured is None:
+        return None, f"Room slot {slot} is not configured"
+
+    thread_ids = [
+        str(configured.get(f"{role}_thread_id") or "").strip()
+        for role in ROOM_SLOT_SEAT_ROLES
+    ]
+    if not all(thread_ids) or len(set(thread_ids)) != len(ROOM_SLOT_SEAT_ROLES):
+        return None, f"Room slot {slot} does not define four distinct seat threads"
+    return {"chat_id": chat_id, "thread_ids": thread_ids}, None
+
 # Writable branches of Hermes' config.yaml. A leaf (`True`) means "this whole
 # subtree may be written"; a dict means "recurse, and drop anything else".
 #
@@ -1936,6 +1977,123 @@ class Router:
             )
         )
 
+    async def room_slot_force_reset(self, request: Request, slot: str) -> Response:
+        """Reset exactly one configured Room slot through session-injector.
+
+        This BFF deliberately owns only authorization, audit-before-mutation,
+        and the slot-to-four-seat lookup.  The actual reset is dispatched to
+        the plugin's registered ``agent2agent_force_reset`` handler in the
+        live Gateway process, so all reset semantics remain plugin-owned.
+        """
+        try:
+            slot_number = int(slot)
+        except (TypeError, ValueError):
+            return _json_error(404, "not_found", "Room slot not found", request.state.request_id)
+        if slot_number < 1:
+            return _json_error(404, "not_found", "Room slot not found", request.state.request_id)
+
+        self._guard_mutation(request)
+        if request.query_params.get("confirm") != "true":
+            return _json_error(
+                428,
+                "confirm_required",
+                "Resetting all four sessions requires confirm=true",
+                request.state.request_id,
+            )
+
+        rid = request.state.request_id
+        profile_id = self._request_profile(request)
+        target = f"/api/room-slots/{slot_number}/reset"
+        try:
+            self.store.append_audit(
+                request_id=rid,
+                actor="owner",
+                action="room_slot.force_reset",
+                target=target,
+                profile_id=profile_id,
+                request_summary=build_request_summary(
+                    request.method, target, dict(request.query_params)
+                ),
+                upstream_status=None,
+                result="pending",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid
+            )
+
+        try:
+            topology = (await self.adapter.room_binding()).data
+        except DataBackendError as exc:
+            self._record_audit_result(rid, exc.status, f"topology_error:{exc.detail}")
+            return JSONResponse(
+                self._envelope(
+                    {"error": "Room topology is unavailable"},
+                    source_id="adapter",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
+                    mutations_supported=("force_reset",),
+                    degraded_reason=f"data_backend_error:{exc.status}",
+                ),
+                status_code=upstream_error_status(exc.status),
+            )
+
+        arguments, error = room_slot_force_reset_arguments(topology, slot_number)
+        if error or arguments is None:
+            self._record_audit_result(rid, 409, "rejected:room_topology")
+            return JSONResponse(
+                self._envelope(
+                    {"error": error or "Room topology is unavailable"},
+                    source_id="adapter",
+                    profile_id=profile_id,
+                    freshness="live",
+                    request_id=rid,
+                    read_only=False,
+                    mutations_supported=("force_reset",),
+                ),
+                status_code=409,
+            )
+
+        try:
+            status, body, _ = await self.gateway.request(
+                "POST",
+                SESSION_INJECTOR_FORCE_RESET_ROUTE,
+                json_body=arguments,
+                inbound_request_id=rid,
+            )
+        except UpstreamError as exc:
+            self._record_audit_result(rid, exc.status, f"plugin_error:{exc.detail}")
+            return JSONResponse(
+                self._envelope(
+                    {"error": "session-injector reset is unavailable"},
+                    source_id="hermes-gateway",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
+                    mutations_supported=("force_reset",),
+                    degraded_reason=f"upstream_error:{exc.status}",
+                ),
+                status_code=upstream_error_status(exc.status),
+            )
+
+        self._record_audit_result(rid, status, "ok" if status < 400 else f"plugin:{status}")
+        return JSONResponse(
+            self._envelope(
+                body,
+                source_id="session-injector",
+                profile_id=profile_id,
+                freshness="live" if status < 400 else "unavailable",
+                request_id=rid,
+                read_only=False,
+                mutations_supported=("force_reset",),
+                degraded_reason=None if status < 400 else f"upstream_status:{status}",
+            ),
+            status_code=status,
+        )
+
     async def proxy_gateway_read(self, request: Request, path: str) -> Response:
         """GET /api/gateway/<path> — the gateway's own capability surface.
 
@@ -3190,6 +3348,8 @@ class Router:
         r.add_api_route("/api/runs/{run_id}/stop",
                         self._mutation_run_stop, methods=["POST"])
         r.add_api_route("/api/cron/fire", self._mutation_cron_fire, methods=["POST"])
+        r.add_api_route("/api/room-slots/{slot}/reset", self.room_slot_force_reset,
+                        methods=["POST"])
 
         # ---- gateway (8642) reads — agent capability surface ----
         r.add_api_route("/api/gateway/{path:path}", self.proxy_gateway_read,

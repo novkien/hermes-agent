@@ -344,7 +344,6 @@ const TABS = [
   ['overview', 'createOverview'],
   ['chat', 'createChat'],
   ['fleet', 'createFleet'],
-  ['run-inspector', 'createRunInspector'],
   ['analytics', 'createAnalytics'],
   ['kanban', 'createKanban'],
   ['sessions', 'createSessions'],
@@ -372,15 +371,17 @@ const TABS = [
   ['command-center', 'createCommandCenter'],
 ];
 
-// A second activation per tab with an entity param, because the deep-link path
-// renders completely different markup from the list path — Run Inspector in
-// particular only draws its graph once an entity is chosen.
+// Entity deep links can render completely different markup from a tab's list
+// path. Kanban owns both its board card and task/session run-analysis views.
 const DEEP_LINKS = {
   // Chat's thread path renders nothing like its hero: header, paged history,
   // tool rows and the whole composer only exist once a session is selected.
   chat: { s: process.env.SMOKE_SESSION_ID || 'api_1786535961_f70efe27' },
-  'run-inspector': { task: process.env.SMOKE_TASK_ID || 't_c68f413a' },
-  kanban: { task: process.env.SMOKE_TASK_ID || 't_c68f413a' },
+  kanban: [
+    { task: process.env.SMOKE_TASK_ID || 't_c68f413a' },
+    { view: 'inspect', task: process.env.SMOKE_TASK_ID || 't_c68f413a' },
+    { view: 'inspect', session: process.env.SMOKE_SESSION_ID || 'api_1786535961_f70efe27' },
+  ],
   analytics: { days: '7', from: '2026-08-04', to: '2026-08-06' },
 };
 
@@ -435,11 +436,14 @@ async function run() {
       if (stat.nodes < 3) { status = 'EMPTY'; detail = `${stat.nodes} nodes`; }
       else detail = `${stat.nodes} nodes · ${stat.text.slice(0, 4).join(' | ').slice(0, 90)}`;
 
-      if (DEEP_LINKS[route]) {
-        await instance.activate(DEEP_LINKS[route]);
+      const deepLinks = DEEP_LINKS[route]
+        ? (Array.isArray(DEEP_LINKS[route]) ? DEEP_LINKS[route] : [DEEP_LINKS[route]])
+        : [];
+      for (const params of deepLinks) {
+        await instance.activate(params);
         await new Promise((resolve) => setTimeout(resolve, 250));
         const deep = outline(container);
-        detail += `  ⟶ deep-link ${deep.nodes} nodes · ${deep.text.slice(0, 3).join(' | ').slice(0, 60)}`;
+        detail += `  ⟶ deep-link ${JSON.stringify(params)}: ${deep.nodes} nodes · ${deep.text.slice(0, 3).join(' | ').slice(0, 60)}`;
         if (deep.nodes < 3) { status = 'EMPTY'; }
       }
 

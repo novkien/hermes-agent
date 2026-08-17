@@ -61,7 +61,9 @@ def main() -> None:
     # Same repair, same rule: pin the CALL, not the local variable that happens
     # to receive it. The Stage 7 filter work renamed it to `loaded` so the
     # filtered subset could keep the name `rows`.
-    require("frontend/dist/tabs/kanban.js", "taskRows(tasks.data)")
+    require("frontend/dist/tabs/kanban.js", "taskRows(tasks.data)", "createKanbanRunAnalysis")
+    require("frontend/dist/tabs/kanban-analysis.js", "export function createKanbanRunAnalysis")
+    forbid("frontend/dist/app.js", "createRunInspector")
     require("frontend/dist/tabs/sessions.js", "sessionRows(sessions.data)", "offset")
     require("frontend/dist/tabs/alerts.js", "alertRows(alerts.data)")
     require("frontend/dist/tabs/skills.js", "export function renderSkills", "Array.isArray(raw)")
@@ -69,6 +71,19 @@ def main() -> None:
     require("frontend/dist/tabs/logs.js", "export function createLogs", "logLines(envelope.data)")
     require("frontend/dist/tabs/command-center.js", "export function createCommandCenter", "/api/upstream/api/ops/doctor")
     require("frontend/dist/tabs/llama-proxy.js", "export function createLlamaProxy", "LLaMA_PROXY_URL")
+    # Room-slot reset has a persistent inline confirmation, not a browser-native
+    # modal or short timer that can disappear without making a request. The plugin
+    # result remains in the inspector with each old -> new session transition.
+    require(
+        "frontend/dist/tabs/room-binding.js",
+        "room-slot-reset-confirm",
+        "Confirm reset 4 sessions",
+        "room-slot-reset-outcome",
+        "old_session_id",
+        "new_session_id",
+    )
+    forbid("frontend/dist/tabs/room-binding.js", "window.confirm(")
+    require("frontend/dist/styles.css", ".room-slot-reset-outcome", ".room-slot-reset-results")
     require(
         "frontend/dist/tabs/system-manager.js",
         "columns: columnsFor(active)",
@@ -118,6 +133,7 @@ def main() -> None:
         "pure/chat-model.js",
         "tabs/sessions.js",
         "tabs/kanban.js",
+        "tabs/kanban-analysis.js",
         "tabs/alerts.js",
         "tabs/skills.js",
         "tabs/plugins.js",

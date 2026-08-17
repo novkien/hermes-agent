@@ -105,7 +105,17 @@ function operationNotice(action, operation) {
     };
   }
   if (action === 'sync' && operationPushedSha(operation)) {
-    return { tone: 'ok', message: 'Safe sync completed and local commits were pushed to origin.' };
+    const merged = Array.isArray(operation.merged_pulls) ? operation.merged_pulls : [];
+    const detail = merged.length
+      ? ` Rebase-merged PR${merged.length === 1 ? '' : 's'} ${merged.map((pull) => `#${pull.number}`).join(', ')} first.`
+      : '';
+    return { tone: 'ok', message: `Safe sync completed and local commits were pushed to origin.${detail}` };
+  }
+  if (action === 'sync' && Array.isArray(operation.merged_pulls) && operation.merged_pulls.length) {
+    return {
+      tone: 'ok',
+      message: `Safe sync rebase-merged PR${operation.merged_pulls.length === 1 ? '' : 's'} ${operation.merged_pulls.map((pull) => `#${pull.number}`).join(', ')} and updated the local checkout.`,
+    };
   }
   return { tone: 'ok', message: 'Repository operation completed successfully.' };
 }
@@ -323,7 +333,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   async function rebaseMerge(repo, pull) {
-    if (!repo || !pull || pull.draft || activeRepos.has(repo.name) || syncingAll) return;
+    if (!repo || !pull || activeRepos.has(repo.name) || syncingAll) return;
     const confirmed = window.confirm(
       `Rebase and merge PR #${pull.number} into ${repo.repo_full_name}:${repo.branch}?`,
     );
@@ -679,7 +689,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('span', { text: `${pull.draft ? 'Draft · ' : ''}${fmtWhen(pull.updated_at)}` }),
       ]),
       el('button', {
-        class: 'btn btn-sm btn-accent', type: 'button', disabled: pull.draft,
+        class: 'btn btn-sm btn-accent', type: 'button',
         onclick: () => rebaseMerge(repo, pull),
       }, 'Rebase & merge'),
     ])) : [el('div', { class: 'repo-side-empty', text: 'No open pull requests.' })];

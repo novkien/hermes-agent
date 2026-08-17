@@ -3,7 +3,7 @@
 
 export const ALL_LOCKED_KEYS = Object.freeze([
   // OPERATE
-  'overview', 'chat', 'sessions', 'fleet', 'kanban', 'run-inspector', 'cron',
+  'overview', 'chat', 'sessions', 'fleet', 'kanban', 'cron',
   'activity', 'alerts', 'analytics',
   // GOVERN
   'issues', 'permits', 'room-binding', 'threads', 'action-audit',
@@ -42,7 +42,7 @@ const S7_MODULES = Object.freeze({
 
 const GROUP_OF = Object.freeze({
   overview: 'OPERATE', chat: 'OPERATE', sessions: 'OPERATE', fleet: 'OPERATE',
-  kanban: 'OPERATE', 'run-inspector': 'OPERATE', cron: 'OPERATE',
+  kanban: 'OPERATE', cron: 'OPERATE',
   activity: 'OPERATE', alerts: 'OPERATE', analytics: 'OPERATE',
   issues: 'GOVERN', permits: 'GOVERN', 'room-binding': 'GOVERN', threads: 'GOVERN',
   'action-audit': 'GOVERN',

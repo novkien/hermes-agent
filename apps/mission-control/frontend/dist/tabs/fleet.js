@@ -696,14 +696,14 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate, 
       relations.push({
         label: binding.live ? 'Bound task (live)' : 'Last bound task',
         text: binding.task_id,
-        onClick: () => navigate('run-inspector', { task: binding.task_id }),
+        onClick: () => navigate('kanban', { view: 'inspect', task: binding.task_id }),
       });
     }
     for (const task of seat.tasks.slice(0, 6)) {
       relations.push({
         label: task.status || 'task',
         text: task.title || task.id,
-        onClick: () => navigate && navigate('run-inspector', { task: task.id }),
+        onClick: () => navigate && navigate('kanban', { view: 'inspect', task: task.id }),
       });
     }
 
@@ -803,7 +803,7 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate, 
           { label: 'Board', value: task.board || null },
           { label: 'Assignee', value: task.assignee || null },
         ],
-        relations: navigate ? [{ label: 'Run', text: 'Open run inspector', onClick: () => navigate('run-inspector', { task: task.id }) }] : [],
+        relations: navigate ? [{ label: 'Run', text: 'Open run analysis', onClick: () => navigate('kanban', { view: 'inspect', task: task.id }) }] : [],
         raw: task,
       }));
       return;

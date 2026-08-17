@@ -30,6 +30,9 @@ from agent_mission_control.routes import (  # noqa: E402
     GATEWAY_READ_PATHS,
     MUTATION_ALLOWLIST,
     READ_PATH_MUTATIONS,
+    ROOM_SLOT_SEAT_ROLES,
+    SESSION_INJECTOR_FORCE_RESET_ACTION,
+    SESSION_INJECTOR_FORCE_RESET_ROUTE,
     UPSTREAM_MUTATION_METHODS,
     UPSTREAM_MUTATION_SPECS,
     Router,
@@ -40,6 +43,7 @@ from agent_mission_control.routes import (  # noqa: E402
     is_allowed_read_path,
     match_upstream_mutation,
     resolve_upstream_method,
+    room_slot_force_reset_arguments,
     split_upstream_envelope,
     upstream_error_status,
 )
@@ -180,6 +184,39 @@ def test_adapter_allowlist() -> None:
         assert is_allowed_adapter_path(path), f"expected adapter route to be accepted: {path}"
     for path in rejected:
         assert not is_allowed_adapter_path(path), f"expected adapter route to be rejected: {path}"
+
+
+def test_room_slot_reset_is_topology_scoped_and_plugin_owned() -> None:
+    """A browser slot number must never become arbitrary plugin arguments."""
+    topology = {
+        "room_chat_id": "-100123",
+        "room_slots": [{
+            "slot": 1,
+            "ceo_thread_id": "32857",
+            "coder_thread_id": "36319",
+            "research_thread_id": "41644",
+            "system_thread_id": "47243",
+        }],
+    }
+    arguments, error = room_slot_force_reset_arguments(topology, 1)
+    assert error is None
+    assert arguments == {
+        "chat_id": "-100123",
+        "thread_ids": ["32857", "36319", "41644", "47243"],
+    }
+    assert ROOM_SLOT_SEAT_ROLES == ("ceo", "coder", "research", "system")
+    assert SESSION_INJECTOR_FORCE_RESET_ACTION == "agent2agent_force_reset"
+    assert SESSION_INJECTOR_FORCE_RESET_ROUTE == "/v1/operator/actions/agent2agent_force_reset"
+    missing, missing_error = room_slot_force_reset_arguments(
+        {**topology, "room_slots": [{**topology["room_slots"][0], "system_thread_id": ""}]},
+        1,
+    )
+    assert missing is None
+    assert missing_error == "Room slot 1 does not define four distinct seat threads"
+
+    unknown, unknown_error = room_slot_force_reset_arguments(topology, 2)
+    assert unknown is None
+    assert unknown_error == "Room slot 2 is not configured"
 
 
 def test_envelope_split() -> None:
@@ -2029,6 +2066,7 @@ async def main() -> None:
     test_redaction_masks_nested_secrets_and_detects_the_sentinel()
     await test_config_read_is_redacted_server_side()
     test_adapter_allowlist()
+    test_room_slot_reset_is_topology_scoped_and_plugin_owned()
     test_envelope_split()
     test_error_status()
     test_read_allowlist_matches_full_dashboard_path()
