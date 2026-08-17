@@ -47,13 +47,14 @@ function deltaNode(delta, { unit = '%' } = {}) {
  * @param {Array}  [opts.spark]      real observed series only — never fabricated
  * @param {string} [opts.foot]       small caption under the value
  * @param {Function} [opts.onClick]  makes the tile a drill-down target
+ * @param {string} [opts.tone]      'ok' | 'warn' | 'danger' — colors the value
  */
 export function createStat({
   label = '', value = null, iconName = null, delta = null, deltaUnit = '%',
-  spark = null, seriesIndex = 1, foot = '', onClick = null,
+  spark = null, seriesIndex = 1, foot = '', onClick = null, tone = null,
 } = {}) {
   const node = el(onClick ? 'button' : 'div', {
-    class: `stat${onClick ? ' is-clickable' : ''}`,
+    class: `stat${onClick ? ' is-clickable' : ''}${tone ? ` stat-tone-${tone}` : ''}`,
     type: onClick ? 'button' : null,
     onclick: onClick || null,
   });
