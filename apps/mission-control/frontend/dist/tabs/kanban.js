@@ -3,6 +3,7 @@
 import {
   el, clear, skeleton, emptyState, unavailableState, errorPanel, fmtTime,
 } from '../ui.js';
+import { createStat } from '../components/stat.js';
 import { provenanceBadge } from '../provenance.js';
 import { listFrom, recordFrom, taskRows } from '../pure/data-shape.js';
 import { filterInput, sideHint, paint, tabToolbar } from './_kit.js';
@@ -16,7 +17,7 @@ const SSE_EVENTS = Object.freeze(['task.changed', 'run.changed']);
 export function createKanban({ api, profile, sse }) {
   const root = el('div', { class: 'tab tab-kanban' });
   const toolbar = el('div', { class: 'tab-toolbar' });
-  const kpiRow = el('div', { class: 'kpi-row' });
+  const kpiRow = el('div', { class: 'stat-row' });
   const tableWrap = el('div', { class: 'table-wrap' });
   root.append(toolbar, kpiRow, tableWrap);
 
@@ -184,10 +185,7 @@ export function createKanban({ api, profile, sse }) {
       blocked: data.blocked_count ?? counts.get('blocked') ?? 0,
     };
     for (const [key, value] of Object.entries(metrics)) {
-      kpiRow.append(el('div', { class: 'kpi' }, [
-        el('div', { class: 'kpi-value mono', text: String(value) }),
-        el('div', { class: 'kpi-label', text: key }),
-      ]));
+      kpiRow.append(createStat({ label: key, value }));
     }
   }
 
