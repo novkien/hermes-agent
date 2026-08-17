@@ -5110,6 +5110,17 @@ def _load_mcp_config() -> Dict[str, dict]:
         if _env_enabled("HERMES_SAFE_MODE"):
             return {}
         config = load_config()
+        mcp_options = config.get("mcp")
+        has_global_parallel_default = (
+            isinstance(mcp_options, dict)
+            and "supports_parallel_tool_calls" in mcp_options
+        )
+        global_parallel_default = _parse_boolish(
+            mcp_options.get("supports_parallel_tool_calls", False)
+            if isinstance(mcp_options, dict)
+            else False,
+            default=False,
+        )
         servers = config.get("mcp_servers")
         if not isinstance(servers, dict):
             servers = {}
@@ -5123,6 +5134,11 @@ def _load_mcp_config() -> Dict[str, dict]:
         for name, cfg in _filter_suspicious_mcp_servers(servers).items():
             interpolated = _interpolate_env_vars(cfg)
             if isinstance(interpolated, dict):
+                if has_global_parallel_default:
+                    interpolated.setdefault(
+                        "supports_parallel_tool_calls",
+                        global_parallel_default,
+                    )
                 _warn_hidden_whitespace(name, interpolated)
                 safe_servers[name] = interpolated
         try:
@@ -5137,7 +5153,13 @@ def _load_mcp_config() -> Dict[str, dict]:
                         name,
                     )
                     continue
-                safe_servers[name] = dict(cfg)
+                portable_config = dict(cfg)
+                if has_global_parallel_default:
+                    portable_config.setdefault(
+                        "supports_parallel_tool_calls",
+                        global_parallel_default,
+                    )
+                safe_servers[name] = portable_config
         except Exception:
             logger.debug("Failed to load portable MCP servers", exc_info=True)
         return safe_servers

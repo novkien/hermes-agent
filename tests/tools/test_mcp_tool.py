@@ -118,6 +118,25 @@ class TestLoadMCPConfig:
             result = _load_mcp_config()
             assert result == {}
 
+    def test_global_parallel_default_applies_without_overriding_server_policy(self):
+        servers = {
+            "inherited": {"command": "echo"},
+            "explicit_serial": {
+                "command": "echo",
+                "supports_parallel_tool_calls": False,
+            },
+        }
+        config = {
+            "mcp": {"supports_parallel_tool_calls": True},
+            "mcp_servers": servers,
+        }
+        with patch("hermes_cli.config.load_config", return_value=config):
+            from tools.mcp_tool import _load_mcp_config
+            result = _load_mcp_config()
+
+        assert result["inherited"]["supports_parallel_tool_calls"] is True
+        assert result["explicit_serial"]["supports_parallel_tool_calls"] is False
+
     def test_portable_servers_merge_after_native_interpolation(self):
         native = {"native": {"command": "node", "args": ["${PORT}"]}}
         portable = {
