@@ -26,9 +26,9 @@ jobs:
           api = Path("gateway/platforms/api_server.py")
           source = api.read_text()
           gate = (
-              '        _, error = await self._get_existing_session_or_404(session_id)\n'
-              '        if error:\n'
-              '            return error\n'
+              '        _, err = await self._get_existing_session_or_404(session_id)\n'
+              '        if err:\n'
+              '            return err\n'
           )
           observation_comment = (
               '        # Session event transport is observation-only. CLI/Kanban turns may\n'
