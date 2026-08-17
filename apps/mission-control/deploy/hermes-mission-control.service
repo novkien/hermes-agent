@@ -26,7 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/jarvis/.hermes/mission-control /home/jarvis/.hermes/hermes-agent /home/jarvis/.hermes/plugins /home/jarvis/.hermes/skills /home/jarvis/.hermes/workspace/skills-pack /home/jarvis/agents /home/jarvis/.hermes/repos/hermes-skills.git /home/jarvis/.hermes/memories /home/jarvis/.hermes/workspace/state
+ReadWritePaths=/home/jarvis/.hermes/mission-control /home/jarvis/.hermes/hermes-agent /home/jarvis/.hermes/plugins /home/jarvis/.hermes/skills /home/jarvis/.hermes/workspace/skills-pack /home/jarvis/.hermes/repos/hermes-skills.git /home/jarvis/.hermes/memories /home/jarvis/.hermes/workspace/state /home/jarvis/.hermes/profiles
 StandardOutput=journal
 StandardError=journal
 

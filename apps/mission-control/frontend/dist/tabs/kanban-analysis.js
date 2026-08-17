@@ -1,4 +1,4 @@
-// Run Inspector — what actually happened on one task or session run.
+// Kanban run analysis — what actually happened on one task or session run.
 //
 // The correlation engine was constructed with an empty provider map until
 // recently, so this tab could only ever render "no data" and nobody noticed the
@@ -21,15 +21,6 @@ import { sideHint, paint, tabToolbar, loadEnvelope } from './_kit.js';
 import { fetchWorkerLinks, mergeTaskChanged } from '../pure/session-operational-context.js';
 import { workerContextNodes } from '../components/session-operational-context.js';
 
-export const ROUTE = 'run-inspector';
-export const LABEL = 'Run Inspector';
-export const GROUP = 'OPERATE';
-
-export const SOURCE_ENDPOINTS = Object.freeze([
-  '/api/run-inspector/task/{id}',
-  '/api/run-inspector/session/{id}',
-]);
-
 export const SSE_EVENTS = Object.freeze(['run.changed', 'task.changed']);
 
 /** Layout order for the graph: causes above effects. */
@@ -51,6 +42,7 @@ const EVENT_TONE = {
 export function nodeKey(node) {
   return `${node.type}:${node.id}`;
 }
+
 /**
  * Pure: group nodes into type lanes and index the edges by endpoint.
  *
@@ -119,8 +111,8 @@ export function timelineEvents(trajectory) {
     .sort((a, b) => a.sort - b.sort);
 }
 
-export function createRunInspector({ api, profile, sse, toolbar, onNavigate: navigate }) {
-  const root = el('div', { class: 'tab tab-run-inspector' });
+export function createKanbanRunAnalysis({ api, profile, sse, toolbar, onNavigate: navigate }) {
+  const root = el('div', { class: 'tab tab-kanban-analysis' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
   root.append(main);
@@ -136,6 +128,8 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
   let selectedNode = null;
   let candidates = { task: [], session: [] };
   let unsubscribe = null;
+  let active = false;
+  let requestSerial = 0;
   const workerLinks = new Map();
 
   // ------------------------------------------------------------------ picker
@@ -157,6 +151,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
         note: s.last_activity_at || s.last_active || s.created_at || '',
       })).filter((s) => s.id),
     };
+    if (!active) return;
     renderPicker();
   }
 
@@ -316,6 +311,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
 
   async function open(nextKind, id) {
     if (!id) return;
+    const request = ++requestSerial;
     kind = nextKind;
     currentId = id;
     selectedNode = null;
@@ -327,6 +323,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
     try {
       response = await api.get(`/api/run-inspector/${nextKind}/${encodeURIComponent(id)}`, { profile });
     } catch (err) {
+      if (!active || request !== requestSerial) return;
       payload = null;
       clear(graphPane);
       graphPane.append(errorPanel({
@@ -338,6 +335,8 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
       renderToolbar(toolbar);
       return;
     }
+
+    if (!active || request !== requestSerial) return;
 
     // These two routes answer without the standard envelope, so the tree is
     // either directly on the body or one `data` level down.
@@ -366,10 +365,14 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
     if (!host) return;
     const coverage = payload?.tree?.coverage;
     paint(host, tabToolbar({
-      title: 'Run Inspector',
-      subtitle: currentId ? `${kind} ${currentId}${coverage ? ` · coverage ${coverage}` : ''}` : 'pick a task or session',
+      title: 'Kanban',
+      subtitle: currentId ? `Run analysis · ${kind} ${currentId}${coverage ? ` · coverage ${coverage}` : ''}` : 'Run analysis · pick a task or session',
       onRefresh: currentId ? () => open(kind, currentId) : null,
       actions: [
+        el('button', {
+          class: 'btn btn-sm', type: 'button', text: 'Board',
+          onclick: () => navigate?.('kanban', {}),
+        }),
         currentId
           ? el('button', {
             class: 'btn btn-sm',
@@ -412,7 +415,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
       workerLinks.set(node.id, null);
       fetchWorkerLinks({ api, profile, sessionIds: [node.id] }).then((links) => {
         if (links.has(node.id)) workerLinks.set(node.id, links.get(node.id));
-        if (selectedNode?.id === node.id) renderSide();
+        if (active && selectedNode?.id === node.id) renderSide();
       }).catch(() => null);
     }
     const { edgesByNode } = buildGraph(payload.tree);
@@ -434,7 +437,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
       });
     }
     if (node.type === 'task' && navigate) {
-      relations.push({ label: 'Open in', text: 'Kanban', onClick: () => navigate('kanban', { task: node.id }) });
+      relations.push({ label: 'Open in', text: 'Board card', onClick: () => navigate('kanban', { task: node.id }) });
     }
     if (node.type === 'session' && navigate) {
       relations.push({ label: 'Open in', text: 'Sessions', onClick: () => navigate('sessions', { session: node.id }) });
@@ -503,9 +506,11 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
     mount(container) { clear(container); container.append(root); },
     renderInspector,
     activate(params = {}) {
+      active = true;
       bindEvents();
       renderPicker();
       renderToolbar(toolbar);
+      renderSide();
       const promise = loadCandidates().catch(() => null);
       const wantedTask = params.task || null;
       const wantedSession = params.session || null;
@@ -514,6 +519,7 @@ export function createRunInspector({ api, profile, sse, toolbar, onNavigate: nav
       return promise;
     },
     deactivate() {
+      active = false;
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { selection: currentId };
     },

@@ -163,9 +163,7 @@ def default_repository_registry() -> dict[str, RepoSpec]:
     agents_paths = _env_path(
         "REPO_SYNC_AGENTS_PATH",
         (
-            f"{home}/agents",
-            f"{home}/.hermes/agents",
-            f"{home}/.hermes/repos/agents",
+            f"{home}/.hermes/profiles",
         ),
     )
     proxy_paths = _env_path(
@@ -177,6 +175,15 @@ def default_repository_registry() -> dict[str, RepoSpec]:
         ("/home/jarvis/9router", "/opt/9router", "/home/pi/9router"),
     )
     skills_deployment_root = (os.getenv("REPO_SYNC_HERMES_SKILLS_DEPLOY_ROOT") or "").strip()
+    agents_git_dir = os.path.expanduser(
+        os.getenv("REPO_SYNC_AGENTS_GIT_DIR", f"{home}/.hermes/profiles/.git")
+    )
+    agents_work_tree = os.path.expanduser(
+        os.getenv("REPO_SYNC_AGENTS_WORK_TREE", f"{home}/.hermes/profiles")
+    )
+    agents_deployment_root = os.path.expanduser(
+        os.getenv("REPO_SYNC_AGENTS_DEPLOYMENT_ROOT", f"{home}/.hermes/profiles")
+    )
 
     return {
         "9router": RepoSpec(
@@ -228,6 +235,11 @@ def default_repository_registry() -> dict[str, RepoSpec]:
             name="agents",
             repo_full_name="novkien/agents",
             branch="master",
+            # Canonical split git-dir/work-tree layout for profile SOUL sources.
+            git_dir=agents_git_dir,
+            work_tree=agents_work_tree,
+            deployment_root=agents_deployment_root,
+            deployment_paths=("*/SOUL.md",),
             path_candidates=agents_paths,
             private=True,
         ),
