@@ -36,9 +36,9 @@ import {
   confirmButton,
   segmented,
   metaItem,
-  kpi,
   debounce,
 } from '../ui.js';
+import { createStatRow } from '../components/stat.js';
 import { icon } from '../icons.js';
 import { paint, tabToolbar } from './_kit.js';
 import { provenanceBadge } from '../provenance.js';
@@ -571,13 +571,13 @@ export function createSkills({ api, profile, refreshInspector, liveStore }) {
       ]),
     ]));
 
-    box.append(el('div', { class: 'kpi-row' }, [
-      kpi({ label: 'Total', value: stats.total, iconName: 'skills' }),
-      kpi({ label: 'Enabled', value: stats.enabled, iconName: 'power', tone: 'ok' }),
-      kpi({ label: 'Disabled', value: stats.disabled, iconName: 'ban', tone: stats.disabled ? 'warn' : undefined }),
-      kpi({ label: 'Archived', value: stats.archived, iconName: 'archive' }),
-      kpi({ label: 'Categories', value: stats.categories, iconName: 'tag' }),
-      kpi({ label: 'Total uses', value: stats.usage.toLocaleString(), iconName: 'activity' }),
+    box.append(createStatRow([
+      { label: 'Total', value: stats.total, iconName: 'skills' },
+      { label: 'Enabled', value: stats.enabled, iconName: 'power', tone: 'ok' },
+      { label: 'Disabled', value: stats.disabled, iconName: 'ban', tone: stats.disabled ? 'warn' : undefined },
+      { label: 'Archived', value: stats.archived, iconName: 'archive' },
+      { label: 'Categories', value: stats.categories, iconName: 'tag' },
+      { label: 'Total uses', value: stats.usage.toLocaleString(), iconName: 'activity' },
     ]));
 
     const top = [...rows].sort((a, b) => b.usage - a.usage).slice(0, 12).filter((skill) => skill.usage > 0);

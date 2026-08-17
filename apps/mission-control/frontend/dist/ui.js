@@ -205,47 +205,6 @@ export function panel(title, contentNode, { badge, toolbar, icon: iconName, tone
   return el('section', { class: classes }, [head, body]);
 }
 
-// Small inline sparkline — only ever called with real observed values, never
-// fabricated series (callers must skip this when the source has no history).
-export function sparkline(values = [], { width = 72, height = 22 } = {}) {
-  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v));
-  if (nums.length < 2) return null;
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
-  const span = max - min || 1;
-  const stepX = width / (nums.length - 1);
-  const points = nums.map((v, i) => `${(i * stepX).toFixed(1)},${(height - ((v - min) / span) * height).toFixed(1)}`);
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.setAttribute('class', 'kpi-spark');
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('aria-hidden', 'true');
-  const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-  line.setAttribute('points', points.join(' '));
-  svg.append(line);
-  return svg;
-}
-
-// Stat tile used across Overview/Kanban/etc. `sparkValues`/`trend` are
-// optional and only rendered when the caller has real data to show.
-export function kpi({ label, value, iconName, trend, sparkValues, tone } = {}) {
-  const classes = ['kpi', tone ? `kpi-tone-${tone}` : null].filter(Boolean).join(' ');
-  const box = el('div', { class: classes });
-  const topRow = el('div', { class: 'kpi-icon-row' });
-  if (iconName) topRow.append(icon(iconName, { size: 14, className: 'kpi-icon' }));
-  if (trend) {
-    const dir = trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat';
-    const sign = trend > 0 ? '+' : '';
-    topRow.append(el('span', { class: `kpi-trend kpi-trend-${dir}`, text: `${sign}${trend}%` }));
-  }
-  if (topRow.childNodes.length) box.append(topRow);
-  box.append(el('div', { class: 'kpi-value', text: value === undefined || value === null ? '—' : String(value) }));
-  box.append(el('div', { class: 'kpi-label', text: label || '' }));
-  const spark = sparkline(sparkValues || []);
-  if (spark) box.append(spark);
-  return box;
-}
-
 // Some upstream sources (the alert engine's first_seen_at/last_seen_at, for
 // instance) report Unix seconds rather than an ISO string or millisecond
 // epoch. `new Date()` treats a bare number as milliseconds, so a raw seconds

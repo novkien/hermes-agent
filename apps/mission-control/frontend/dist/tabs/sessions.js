@@ -1,6 +1,7 @@
 // Sessions — Hermes dashboard list contract plus adapter timeline detail.
 
 import { el, clear, skeleton, emptyState, errorPanel, unavailableState, fmtTime, fmtAge } from '../ui.js';
+import { createStat } from '../components/stat.js';
 import { provenanceBadge } from '../provenance.js';
 import { recordFrom, sessionRows } from '../pure/data-shape.js';
 import { sessionId as idOf, sessionTimestamp as chainActivity } from '../pure/chat-session.js';
@@ -32,7 +33,7 @@ const WINDOW_SIZE = 100; // dashboard /api/sessions caps `limit` at 100
 export function createSessions({ api, profile, sse, liveStore }) {
   const root = el('div', { class: 'tab tab-sessions' });
   const toolbarHost = el('div', { class: 'sessions-toolbar-host' });
-  const kpiRow = el('div', { class: 'kpi-row' });
+  const kpiRow = el('div', { class: 'stat-row' });
   const listPane = el('div', { class: 'pane pane-sessions' });
   const detailPane = el('div', { class: 'pane pane-detail' });
   root.append(toolbarHost, kpiRow, listPane, detailPane);
@@ -121,10 +122,7 @@ export function createSessions({ api, profile, sse, liveStore }) {
       ['archived', windowRows.filter((row) => row.archived === true).length, ''],
     ];
     for (const [label, value, tone] of metrics) {
-      kpiRow.append(el('div', { class: `kpi${tone ? ` kpi-tone-${tone}` : ''}` }, [
-        el('div', { class: 'kpi-value mono', text: String(value) }),
-        el('div', { class: 'kpi-label', text: label }),
-      ]));
+      kpiRow.append(createStat({ label, value, tone: tone || null }));
     }
   }
 
