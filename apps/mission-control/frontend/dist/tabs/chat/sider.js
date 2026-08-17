@@ -190,12 +190,11 @@ export function renderSider(container, ctx) {
   }
 
   function sessionRow(session) {
-    // The dashboard lists chain ROOTS, not what is actually running: a thread
-    // that resets on a schedule (a daily orchestrator is the case that exposed
-    // this — 36 resets over six weeks on one thread) shows a row frozen at
-    // whatever it was days or weeks ago while the live conversation is
-    // invisible to every listing that exists. `session.tip`, resolved in
-    // chat.js via the adapter's session-tips route, is that live conversation.
+    // The listing can include more than one member of a reset chain, while the
+    // chat tab collapses those into this single representative card. A thread
+    // that resets on a schedule otherwise shows a row frozen at whatever it
+    // was days or weeks ago while the live conversation is invisible. The
+    // resolved `session.tip` is that live conversation.
     // `openId` is what clicking (and every row action below) must target;
     // `id` stays the row's own identity for the active-row comparison and for
     // any caller that still needs to key against the listed row itself.

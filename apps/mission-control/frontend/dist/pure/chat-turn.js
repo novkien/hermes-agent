@@ -278,11 +278,27 @@ function textOf(data, ...fields) {
 export function reduceTurn(turn, event, now = Date.now()) {
   const name = String(event?.event || 'message');
   const data = event?.data;
+  // Gateway live-frame sequences are per run. A watcher reconnect can replay
+  // the ring while an EventSource still has the old DOM on screen; applying a
+  // repeated delta after its completion opens a fresh text block and paints the
+  // answer a second time. Ignore an already-folded frame for this same run.
+  // Frames without a sequence (notably BFF-local `bff.open`) deliberately keep
+  // their existing behaviour.
+  const incomingSeq = Number(data?.seq);
+  const incomingRunId = data?.run_id ? String(data.run_id) : null;
+  if (
+    Number.isFinite(incomingSeq)
+    && incomingSeq > 0
+    && incomingSeq <= turn.seq
+    && (!incomingRunId || !turn.runId || incomingRunId === turn.runId)
+  ) {
+    return { ...turn, changed: [] };
+  }
   const next = { ...turn, tools: turn.tools, lastEventAt: now, changed: [] };
   const touch = (key) => { if (!next.changed.includes(key)) next.changed.push(key); };
 
   if (data && typeof data === 'object') {
-    if (Number.isFinite(Number(data.seq))) next.seq = Number(data.seq);
+    if (Number.isFinite(incomingSeq)) next.seq = incomingSeq;
     if (data.session_id && !next.sessionId) next.sessionId = String(data.session_id);
     if (data.run_id && !next.runId) { next.runId = String(data.run_id); touch('runId'); }
   }

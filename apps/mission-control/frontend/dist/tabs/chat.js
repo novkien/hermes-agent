@@ -37,7 +37,7 @@ import {
   createdSession, openTargetId, relativeTime, sessionId as idOf, sessionTimestamp,
   sessionTitle, threadIdentity, withOptimisticSession,
 } from '../pure/chat-session.js';
-import { attachChainTips } from '../pure/session-chain.js';
+import { attachChainTips, collapseChainRows } from '../pure/session-chain.js';
 import {
   createMirrorBarrier, isAtBottom, messageKeys, mirrorAppend,
 } from '../pure/chat-mirror.js';
@@ -1482,7 +1482,10 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     inspectorHost = container;
     renderSider(container, {
       api, profile,
-      sessions: allSessions,
+      // Keep the full set in state so direct links to an older successor still
+      // open, but one reset chain is one sidebar conversation, not a stack of
+      // indistinguishable cards all pointing at the same live tip.
+      sessions: collapseChainRows(allSessions, idOf),
       selectedId: selectedSessionId,
       runningIds: runningSet(),
       workerLinks,

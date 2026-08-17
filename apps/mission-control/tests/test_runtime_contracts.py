@@ -561,6 +561,122 @@ async def test_chat_relay_closes_upstream_when_the_client_hangs_up() -> None:
     assert resp.closed is True, "upstream run would keep burning tokens"
 
 
+async def test_session_frame_relay_resumes_after_the_last_live_sequence() -> None:
+    """A transient watcher reconnect must not replay an already-painted turn."""
+    from agent_mission_control import chat_proxy
+    from agent_mission_control import routes as routes_mod
+
+    def sse(name: str, payload: dict) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    class FakeStreamResponse:
+        def __init__(self, frames: list[bytes]):
+            self.frames = frames
+            self.closed = False
+
+        async def aiter_bytes(self):
+            for item in self.frames:
+                yield item
+
+        async def aclose(self):
+            self.closed = True
+
+    responses = [
+        FakeStreamResponse([
+            sse("run.started", {"run_id": "run-1", "seq": 1}),
+            sse("assistant.delta", {"run_id": "run-1", "seq": 2, "delta": "Hi"}),
+        ]),
+        FakeStreamResponse([
+            sse("assistant.completed", {"run_id": "run-1", "seq": 3, "content": "Hi"}),
+        ]),
+    ]
+    calls: list[int] = []
+    parked = asyncio.Event()
+
+    async def fake_open(_gateway, _session_id, after_seq=0):
+        calls.append(after_seq)
+        if responses:
+            return responses.pop(0), "rid"
+        await parked.wait()
+        raise AssertionError("cancelled watcher unexpectedly resumed")
+
+    original_open = chat_proxy.open_session_events
+    original_sleep = routes_mod.asyncio.sleep
+
+    async def immediate_sleep(_delay):
+        await original_sleep(0)
+
+    chat_proxy.open_session_events = fake_open
+    routes_mod.asyncio.sleep = immediate_sleep
+    try:
+        router = bare_router()
+        router.gateway = object()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        task = asyncio.create_task(router._pump_session_frames("session-1", queue))
+        for _ in range(3):
+            await asyncio.wait_for(queue.get(), timeout=1)
+        assert calls[:2] == [0, 2]
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        chat_proxy.open_session_events = original_open
+        routes_mod.asyncio.sleep = original_sleep
+
+
+async def test_session_frame_relay_resets_cursor_after_a_terminal_frame() -> None:
+    """The next run restarts at sequence one, so its replay cursor is zero."""
+    from agent_mission_control import chat_proxy
+    from agent_mission_control import routes as routes_mod
+
+    class FakeStreamResponse:
+        async def aiter_bytes(self):
+            yield b'event: run.started\ndata: {"run_id":"run-1","seq":1}\n\n'
+            yield b'event: done\ndata: {"run_id":"run-1","seq":2}\n\n'
+
+        async def aclose(self):
+            return None
+
+    calls: list[int] = []
+    parked = asyncio.Event()
+
+    async def fake_open(_gateway, _session_id, after_seq=0):
+        calls.append(after_seq)
+        if len(calls) == 1:
+            return FakeStreamResponse(), "rid"
+        await parked.wait()
+        raise AssertionError("cancelled watcher unexpectedly resumed")
+
+    original_open = chat_proxy.open_session_events
+    original_sleep = routes_mod.asyncio.sleep
+
+    async def immediate_sleep(_delay):
+        await original_sleep(0)
+
+    chat_proxy.open_session_events = fake_open
+    routes_mod.asyncio.sleep = immediate_sleep
+    try:
+        router = bare_router()
+        router.gateway = object()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        task = asyncio.create_task(router._pump_session_frames("session-1", queue))
+        for _ in range(2):
+            await asyncio.wait_for(queue.get(), timeout=1)
+        while len(calls) < 2:
+            await original_sleep(0)
+        assert calls[:2] == [0, 0]
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        chat_proxy.open_session_events = original_open
+        routes_mod.asyncio.sleep = original_sleep
+
+
 def test_created_session_id_reads_the_nested_gateway_shape() -> None:
     """Live-verified: create answers {"object":..., "session":{"id":...}}.
 

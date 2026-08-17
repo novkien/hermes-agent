@@ -34,6 +34,63 @@ export function attachChainTips(rows, tips, idOfRow) {
 }
 
 /**
+ * Return one sidebar row for each resolved conversation chain.
+ *
+ * The session source normally returns roots, but it can temporarily return
+ * ancestors and successors together (for example while a Telegram thread is
+ * being reset).  Once all of those rows resolve to the same current tip,
+ * rendering each one produces several indistinguishable cards for one actual
+ * conversation.  Keep the original rows intact for navigation and paging;
+ * this helper is deliberately a presentation-only projection.
+ *
+ * Prefer the real chain root as the representative so the card's identity is
+ * stable across refreshes.  If that root is outside the loaded page, prefer
+ * the earliest/deepest available ancestor, with source order as the final
+ * deterministic tie-breaker.
+ */
+export function collapseChainRows(rows, idOfRow) {
+  if (!Array.isArray(rows)) return [];
+  const groups = new Map();
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const id = idOfRow(row);
+    const tipId = row?.tip?.tip_id || id;
+    // A malformed/anonymous record has no safe chain identity. Keep it as an
+    // independent row rather than accidentally merging unrelated sessions.
+    const key = tipId || `__unidentified_${index}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ row, index });
+  }
+
+  return [...groups.values()].map((members) => {
+    let best = members[0];
+    for (const candidate of members.slice(1)) {
+      if (preferChainRepresentative(candidate, best)) best = candidate;
+    }
+    return best.row;
+  });
+}
+
+function preferChainRepresentative(candidate, current) {
+  const candidateRoot = !candidate.row?.parent_session_id;
+  const currentRoot = !current.row?.parent_session_id;
+  if (candidateRoot !== currentRoot) return candidateRoot;
+
+  const candidateDepth = Number(candidate.row?.tip?.chain_depth);
+  const currentDepth = Number(current.row?.tip?.chain_depth);
+  const candidateKnownDepth = Number.isFinite(candidateDepth);
+  const currentKnownDepth = Number.isFinite(currentDepth);
+  if (candidateKnownDepth !== currentKnownDepth) return candidateKnownDepth;
+  if (candidateKnownDepth && candidateDepth !== currentDepth) return candidateDepth > currentDepth;
+
+  const candidateStarted = Number(candidate.row?.started_at || 0);
+  const currentStarted = Number(current.row?.started_at || 0);
+  if (candidateStarted !== currentStarted) return candidateStarted < currentStarted;
+  return candidate.index < current.index;
+}
+
+/**
  * Split a batch of ids into chunks `/adapter/session-tips` accepts.
  *
  * The adapter's `state_session_tips` hard-rejects more than 200 ids in one

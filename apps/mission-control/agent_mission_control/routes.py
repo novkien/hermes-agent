@@ -2805,10 +2805,18 @@ class Router:
         `chat.frame` carries the original name and payload inside, and the chat
         tab unwraps it into the same reducer a locally streamed turn uses.
         """
+        # ``seq`` is scoped to one gateway run.  The gateway's watcher keeps a
+        # replay ring precisely so a dropped observer can resume a live turn,
+        # but omitting this cursor here meant every BFF reconnect subscribed
+        # from zero and replayed the already-painted answer.  Keep the cursor
+        # only until a terminal frame: the next run starts its sequence at 1.
+        after_seq = 0
         while True:
             resp = None
             try:
-                resp, _rid = await chat_proxy.open_session_events(self.gateway, session_id)
+                resp, _rid = await chat_proxy.open_session_events(
+                    self.gateway, session_id, after_seq=after_seq,
+                )
                 buffer = ""
                 async for chunk in chat_proxy.iter_forwarded_frames(resp, _rid):
                     buffer += chunk.decode("utf-8", "replace")
@@ -2818,9 +2826,21 @@ class Router:
                         if frame is None:
                             continue
                         name, payload = frame
+                        if isinstance(payload, dict):
+                            try:
+                                seq = int(payload.get("seq") or 0)
+                            except (TypeError, ValueError):
+                                seq = 0
+                            if seq > after_seq:
+                                after_seq = seq
                         await queue.put({"_frame": sse_frame_named("chat.frame", {
                             "session_id": session_id, "event": name, "data": payload,
                         })})
+                        # A run's counter restarts at one, so retaining the
+                        # prior cursor after its final frame would make a
+                        # reconnect during the next run skip its replay.
+                        if name in {"run.completed", "error", "done"}:
+                            after_seq = 0
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -63,7 +63,7 @@ import {
   withOptimisticSession,
 } from '../frontend/dist/pure/chat-session.js';
 
-import { attachChainTips, chainIdBatches } from '../frontend/dist/pure/session-chain.js';
+import { attachChainTips, chainIdBatches, collapseChainRows } from '../frontend/dist/pure/session-chain.js';
 
 import { shapeOpenRouterCatalog, supportsTools } from '../frontend/dist/pure/openrouter-catalog.js';
 import { createDeltaPacer } from '../frontend/dist/pure/delta-pacer.js';
@@ -639,6 +639,24 @@ assert.deepEqual(turnTokens(turn.usage), {
   input: 120, output: 8, reasoning: 0, total: 128, cost: 0,
 });
 
+// A live-session observer may reconnect while the gateway is retaining its
+// replay ring. Replaying a frame that this turn already folded must be a no-op:
+// otherwise a completed answer opens a second assistant bubble with the same
+// content and a near-zero duration.
+let replayed = createTurn(0);
+replayed = reduceTurn(replayed, frame('run.started', { run_id: 'run_replay', seq: 1 }), 1);
+replayed = reduceTurn(replayed, frame('message.started', { run_id: 'run_replay', seq: 2, message_id: 'msg_replay' }), 2);
+replayed = reduceTurn(replayed, frame('assistant.completed', {
+  run_id: 'run_replay', seq: 3, message_id: 'msg_replay', content: 'Only once.',
+}), 3);
+const blocksBeforeReplay = replayed.blocks;
+replayed = reduceTurn(replayed, frame('assistant.completed', {
+  run_id: 'run_replay', seq: 3, message_id: 'msg_replay', content: 'Only once.',
+}), 4);
+assert.equal(replayed.blocks, blocksBeforeReplay);
+assert.equal(turnText(replayed), 'Only once.');
+assert.equal(replayed.blocks.filter((block) => block.kind === 'text').length, 1);
+
 // `done` always fires in the gateway's finally, including after an error — it
 // must not overwrite the failure with success.
 let failing = reduceTurn(createTurn(0), frame('error', { message: 'provider 401' }), 10);
@@ -897,6 +915,23 @@ const [withoutTip] = attachChainTips(
 assert.equal(withoutTip.tip, null);
 assert.deepEqual(attachChainTips([staleRoot], {}, sessionId)[0].tip, null);
 assert.deepEqual(attachChainTips(null, {}, sessionId), []);
+
+// Some list reads briefly include both an ancestor and its successors. They
+// are one conversation once all point at `tip_9`, so the sidebar must draw one
+// card and use the stable chain root even when it arrives after its children.
+const resetAncestor = {
+  id: 'reset_2', parent_session_id: 'root_1', started_at: 2000,
+  tip: { ...liveTip, chain_depth: 2 },
+};
+const currentTipRow = {
+  id: 'tip_9', parent_session_id: 'reset_2', started_at: 3000, tip: null,
+};
+const separateThread = { id: 'other_1', started_at: 4000, tip: null };
+const collapsedChains = collapseChainRows(
+  [resetAncestor, currentTipRow, withTip, separateThread], sessionId,
+);
+assert.deepEqual(collapsedChains.map(sessionId), ['root_1', 'other_1']);
+assert.deepEqual(collapseChainRows(null, sessionId), []);
 
 // Display prefers the tip once resolved — the whole point, since the root's
 // own title/timestamp is whatever it was the moment it was last reset.
