@@ -161,6 +161,12 @@ model:
 #     models:
 #       claude-opus-4.6:
 #         timeout_seconds: 600       # Longer timeout for extended-thinking Opus calls
+
+#   my-router:
+#     api: "http://127.0.0.1:8080/v1"
+#     models:
+#       qwen-agent:                  # Exact runtime model id/alias
+#         preserve_thinking: true   # Replay explicit reasoning_content; never synthesize a pad
 #   openai-codex:
 #     models:
 #       gpt-5.4:
