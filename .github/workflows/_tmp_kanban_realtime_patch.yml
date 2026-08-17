@@ -1,0 +1,115 @@
+name: Temporary Kanban realtime patch
+
+on:
+  push:
+    branches:
+      - fix/kanban-chat-live-mirror
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/kanban-chat-live-mirror
+
+      - name: Apply surgical patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          api = Path("gateway/platforms/api_server.py")
+          source = api.read_text()
+          gate = (
+              '        _, error = await self._get_existing_session_or_404(session_id)\n'
+              '        if error:\n'
+              '            return error\n'
+          )
+          observation_comment = (
+              '        # Session event transport is observation-only. CLI/Kanban turns may\n'
+              '        # persist in another profile state DB, so observation must not require\n'
+              "        # ownership in this gateway's session store. Authentication still applies.\n"
+          )
+
+          def patch_handler(text: str, marker: str) -> str:
+              start = text.index(marker)
+              end = text.find('\n    async def ', start + len(marker))
+              if end < 0:
+                  end = len(text)
+              block = text[start:end]
+              assert block.count(gate) == 1, f"unexpected session gate count in {marker}"
+              block = block.replace(gate, observation_comment, 1)
+              return text[:start] + block + text[end:]
+
+          source = patch_handler(source, '    async def _handle_session_events_stream(')
+          source = patch_handler(source, '    async def _handle_session_events_ingest(')
+          api.write_text(source)
+
+          chat = Path("apps/mission-control/frontend/dist/tabs/chat.js")
+          source = chat.read_text()
+          old = '''function startMirror() {
+            stopMirror();
+            if (!selectedSessionId || !isUnifiedThread(selectedSessionId)) return;
+            const mirrorSessionId = selectedSessionId;
+            const mirrorProfileId = profile.id;
+            mirrorVisibility = () => {
+              if (document.hidden) return;
+              mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
+            };
+            document.addEventListener("visibilitychange", mirrorVisibility);
+          }'''
+          new = '''function startMirror() {
+            stopMirror();
+            if (!selectedSessionId || !isUnifiedThread(selectedSessionId)) return;
+            const mirrorSessionId = selectedSessionId;
+            const mirrorProfileId = profile.id;
+
+            const scheduleMirror = () => {
+              if (mirrorTimer) clearInterval(mirrorTimer);
+              const intervalMs = document.hidden
+                ? MIRROR_HIDDEN_INTERVAL_MS
+                : MIRROR_INTERVAL_MS;
+              mirrorTimer = setInterval(() => {
+                mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
+              }, intervalMs);
+            };
+
+            mirrorVisibility = () => {
+              scheduleMirror();
+              if (!document.hidden) {
+                mirrorThread(mirrorSessionId, mirrorProfileId).catch(() => {});
+              }
+            };
+            document.addEventListener("visibilitychange", mirrorVisibility);
+            scheduleMirror();
+          }'''
+          assert source.count(old) == 1, "startMirror implementation changed upstream"
+          chat.write_text(source.replace(old, new, 1))
+
+          Path(".github/workflows/_tmp_kanban_realtime_patch.yml").unlink()
+          PY
+
+      - name: Validate surgical scope
+        shell: bash
+        run: |
+          python -m py_compile gateway/platforms/api_server.py
+          node --check apps/mission-control/frontend/dist/tabs/chat.js
+          if git diff --name-only | grep -qx 'hermes_cli/kanban_db.py'; then
+            echo 'Native Kanban implementation was modified unexpectedly' >&2
+            exit 1
+          fi
+          git diff --check
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(mission-control): stream detached CLI session events"
+          git push origin HEAD:fix/kanban-chat-live-mirror
