@@ -155,6 +155,9 @@ def build_system_manager_router(core: Any) -> APIRouter:
 
     router = APIRouter()
     client = SystemManagerClient()
+    # Reused by the backend live worker after routes are composed. The worker
+    # persists only the explicit metadata projector, never credential fields.
+    core.system_manager_client = client
 
     async def health(request: Request) -> Response:
         rid = request.state.request_id

@@ -1,6 +1,8 @@
 // AgentOS Repositories — production Git state, safe sync, fork and PR controls.
 
 import { el, clear, skeleton, unavailableState, statusChip } from '../ui.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
+import { createKeyedReconciler } from '../pure/keyed-dom.js';
 
 export const ROUTE = 'repositories';
 export const LABEL = 'Repositories';
@@ -108,7 +110,7 @@ function operationNotice(action, operation) {
   return { tone: 'ok', message: 'Repository operation completed successfully.' };
 }
 
-export function createRepositories({ api, profile, toolbar }) {
+export function createRepositories({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-repositories' });
   const page = el('div', { class: 'repo-page' });
   root.append(page);
@@ -120,16 +122,46 @@ export function createRepositories({ api, profile, toolbar }) {
   let filter = 'all';
   let search = '';
   let autoCommit = true;
-  let autoRefresh = true;
   let loading = false;
   let loadError = null;
   let actionError = null;
   let actionNotice = null;
   let inspectorHost = null;
-  let pollTimer = null;
+  let unsubscribe = null;
   let refreshing = false;
+  let loadedFromSource = false;
   let syncingAll = false;
   const activeRepos = new Set();
+  const heroHost = el('div');
+  const metricsHost = el('div');
+  const bannerHost = el('div');
+  const stateHost = el('div');
+  const grid = el('div', { class: 'repo-grid' });
+  page.append(heroHost, metricsHost, bannerHost, stateHost, grid);
+
+  const cards = createKeyedReconciler({
+    container: grid,
+    key: (repo) => repo.name,
+    create: (repo) => repoCard(repo),
+    update: (node, repo, previous) => {
+      const fingerprint = JSON.stringify([
+        repo, selectedName, activeRepos.has(repo.name), syncingAll,
+      ]);
+      if (previous === undefined) {
+        node.__repoFingerprint = fingerprint;
+        return;
+      }
+      if (node.__repoFingerprint === fingerprint) return;
+      const next = repoCard(repo);
+      node.className = next.className;
+      node.tabIndex = next.tabIndex;
+      node.onclick = next.onclick;
+      node.onkeydown = next.onkeydown;
+      clear(node);
+      while (next.firstChild) node.append(next.firstChild);
+      node.__repoFingerprint = fingerprint;
+    },
+  });
 
   function selectedRepo() {
     return repositories.find((repo) => repo.name === selectedName) || repositories[0] || null;
@@ -178,6 +210,7 @@ export function createRepositories({ api, profile, toolbar }) {
       repositories = Array.isArray(payload.repositories) ? payload.repositories : [];
       operations = Array.isArray(payload.recent_operations) ? payload.recent_operations : [];
       automation = payload.automation || {};
+      loadedFromSource = true;
       selectedName = selectedName || null;
       if (!selectedName || !repositories.some((repo) => repo.name === selectedName)) {
         selectedName = repositories[0]?.name || null;
@@ -198,6 +231,39 @@ export function createRepositories({ api, profile, toolbar }) {
       renderMain();
       renderSide();
     }
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'repositories', profile);
+    if (!live) return false;
+    repositories = mergeProjectedRows(repositories, live.rows, (repo) => repo.name);
+    if (!selectedName || !repositories.some((repo) => repo.name === selectedName)) {
+      selectedName = repositories[0]?.name || null;
+    }
+    loadError = live.meta.last_error
+      ? { message: live.meta.last_error }
+      : null;
+    renderToolbar(toolbar);
+    renderMain();
+    renderSide();
+    return true;
+  }
+
+  async function revalidate({ includeDetails = false } = {}) {
+    if (liveStore) {
+      await liveStore.resyncResource('repositories', profile, { force: true });
+      applyLive();
+    }
+    if (includeDetails || !loadedFromSource) {
+      await load({ refresh: true, background: repositories.length > 0 });
+    }
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['repositories'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function hydrateFromCache() {
@@ -239,7 +305,7 @@ export function createRepositories({ api, profile, toolbar }) {
       const failed = operationFailure(operation);
       if (failed) actionError = failed;
       const notice = operationNotice(action, operation);
-      await load({ refresh: true });
+      await revalidate({ includeDetails: true });
       if (failed) actionError = failed;
       else actionNotice = notice;
     } catch (err) {
@@ -277,7 +343,7 @@ export function createRepositories({ api, profile, toolbar }) {
       const operation = response.data || {};
       const failed = operationFailure(operation);
       if (failed) actionError = failed;
-      await load({ refresh: true });
+      await revalidate({ includeDetails: true });
       if (failed) actionError = failed;
     } catch (err) {
       actionError = {
@@ -312,7 +378,7 @@ export function createRepositories({ api, profile, toolbar }) {
         selectedName = failed.repo || selectedName;
         actionError = failed.error || { code: 'sync_all_failed', message: 'one or more repositories failed' };
       }
-      await load({ refresh: true });
+      await revalidate({ includeDetails: true });
       if (failed) actionError = failed.error || actionError;
       else actionNotice = { tone: 'ok', message: 'Sync all completed successfully.' };
     } catch (err) {
@@ -455,13 +521,20 @@ export function createRepositories({ api, profile, toolbar }) {
   }
 
   function renderMain() {
-    clear(page);
+    clear(heroHost);
+    clear(metricsHost);
+    clear(bannerHost);
+    clear(stateHost);
     if (loading && !repositories.length) {
-      page.append(el('div', { class: 'repo-loading' }, [skeleton({ lines: 8 })]));
+      grid.hidden = true;
+      cards.reconcile([]);
+      stateHost.append(el('div', { class: 'repo-loading' }, [skeleton({ lines: 8 })]));
       return;
     }
     if (loadError && !repositories.length) {
-      page.append(unavailableState({
+      grid.hidden = true;
+      cards.reconcile([]);
+      stateHost.append(unavailableState({
         reason: loadError.message || 'Repository monitor unavailable',
         requestId: loadError.request_id,
       }));
@@ -469,7 +542,7 @@ export function createRepositories({ api, profile, toolbar }) {
     }
 
     const stats = summary();
-    page.append(
+    heroHost.append(
       el('div', { class: 'repo-hero' }, [
         el('div', {}, [
           el('h1', { class: 'repo-title', text: 'Repositories' }),
@@ -483,6 +556,8 @@ export function createRepositories({ api, profile, toolbar }) {
           el('span', { text: stats.attention ? `${stats.attention} need attention` : 'All repositories healthy' }),
         ]),
       ]),
+    );
+    metricsHost.append(
       el('div', { class: 'repo-metrics' }, [
         metric('Repositories', repositories.length, 'owner allowlist'),
         metric('Attention', stats.attention, 'conflict / dirty / behind'),
@@ -492,13 +567,13 @@ export function createRepositories({ api, profile, toolbar }) {
     );
 
     if (loadError) {
-      page.append(el('div', { class: 'repo-banner repo-banner-danger' }, [
+      bannerHost.append(el('div', { class: 'repo-banner repo-banner-danger' }, [
         el('strong', { text: 'Refresh degraded' }),
         el('span', { text: loadError.message || 'The last refresh failed; showing retained state.' }),
       ]));
     }
     if (actionNotice) {
-      page.append(el('div', { class: `repo-banner repo-banner-${actionNotice.tone || 'info'}` }, [
+      bannerHost.append(el('div', { class: `repo-banner repo-banner-${actionNotice.tone || 'info'}` }, [
         el('strong', { text: actionNotice.tone === 'warn' ? 'Action needs attention' : 'Repository action' }),
         el('span', { text: actionNotice.message }),
       ]));
@@ -506,12 +581,13 @@ export function createRepositories({ api, profile, toolbar }) {
 
     const visible = visibleRepos();
     if (!visible.length) {
-      page.append(el('div', { class: 'repo-empty', text: 'No repositories match the current filter.' }));
+      grid.hidden = true;
+      cards.reconcile([]);
+      stateHost.append(el('div', { class: 'repo-empty', text: 'No repositories match the current filter.' }));
       return;
     }
-    const grid = el('div', { class: 'repo-grid' });
-    for (const repo of visible) grid.append(repoCard(repo));
-    page.append(grid);
+    grid.hidden = false;
+    cards.reconcile(visible);
   }
 
   function toolbarSelect(label, checked, onChange) {
@@ -546,10 +622,7 @@ export function createRepositories({ api, profile, toolbar }) {
       filterSelect,
       searchInput,
       toolbarSelect('Auto-commit', autoCommit, (value) => { autoCommit = value; renderSide(); }),
-      toolbarSelect('1m refresh', autoRefresh, (value) => {
-        autoRefresh = value;
-        schedulePoll();
-      }),
+      el('span', { class: 'repo-toolbar-toggle', text: 'Live · server managed' }),
       el('button', {
         class: 'btn btn-sm btn-primary', type: 'button',
         disabled: syncingAll || activeRepos.size ? '' : undefined,
@@ -715,18 +788,6 @@ export function createRepositories({ api, profile, toolbar }) {
     renderSide();
   }
 
-  function schedulePoll() {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-    if (autoRefresh) {
-      pollTimer = setInterval(() => {
-        load({ refresh: true, background: true }).catch(() => null);
-      }, 60_000);
-    }
-  }
-
   return {
     mount(container) {
       clear(container);
@@ -734,25 +795,19 @@ export function createRepositories({ api, profile, toolbar }) {
     },
     async activate() {
       renderToolbar(toolbar);
-      const hydrated = hydrateFromCache();
-      if (hydrated) {
-        load({ refresh: true, background: true }).catch(() => null);
-      } else {
-        await load({ refresh: true });
-      }
-      schedulePoll();
+      bindLive();
+      const live = applyLive();
+      const hydrated = live || hydrateFromCache();
+      if (!loadedFromSource) await load({ refresh: true, background: hydrated });
     },
     deactivate() {
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { selection: selectedName };
     },
-    refresh: () => load({ refresh: true }),
+    refresh: () => revalidate({ includeDetails: true }),
     renderToolbar,
     renderInspector,
     get data() { return repositories; },
-    get filters() { return { filter, search, autoCommit, autoRefresh }; },
+    get filters() { return { filter, search, autoCommit }; },
   };
 }

@@ -18,6 +18,7 @@ import { createStatRow } from '../components/stat.js';
 import {
   loadEnvelope, tabToolbar, sideHint, paint,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'room-binding';
 export const LABEL = 'Room Binding';
@@ -94,7 +95,7 @@ export function renderRoomBinding(envelope) {
   return { rows, meta, state: rows.length ? 'ready' : 'empty', payload: raw };
 }
 
-export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navigate }) {
+export function createRoomBinding({ api, profile, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-room-binding' });
   const stats = el('div', { class: 'stat-row-host' });
   const banner = el('div');
@@ -107,6 +108,7 @@ export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navi
   let meta = null;
   let selected = null;
   let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -198,6 +200,7 @@ export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navi
       return;
     }
     payload = result.data || {};
+    loadedFromSource = true;
     rows = slotRows(payload);
     const wanted = selected?.id ?? null;
     selected = (wanted && rows.find((r) => r.id === wanted)) || null;
@@ -207,6 +210,35 @@ export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navi
     renderBanner();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function normalizeLiveRoom(row) {
+    if (!row) return null;
+    return {
+      ...row,
+      id: String(row.slot ?? ''),
+      occupied: row.occupied === true,
+      seats: Array.isArray(row.thread_ids)
+        ? row.thread_ids.map((thread_id, index) => ({
+          role: SEAT_ROLES[index] || 'thread', thread_id,
+        })) : [],
+      raw: row,
+    };
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'rooms.binding', profile, normalizeLiveRoom);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    if (selected) selected = rows.find((row) => row.id === selected.id) || null;
+    table.setRows(rows);
+    table.setSelected(selected?.id ?? null);
+    renderStats();
+    renderBanner();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
   }
 
   function renderStats() {
@@ -328,10 +360,9 @@ export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navi
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
-    unsubscribe = sse.on('room_binding.changed', () => {
-      if (!root.isConnected) return;
-      load().catch(() => null);
+    if (!liveStore || unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, ['rooms.binding'], profile, () => {
+      if (root.isConnected) applyLive();
     });
   }
 
@@ -340,7 +371,7 @@ export function createRoomBinding({ api, profile, sse, toolbar, onNavigate: navi
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { bindEvents(); return load(); },
+    activate() { bindEvents(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
     deactivate() {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { selection: selected?.id ?? null };

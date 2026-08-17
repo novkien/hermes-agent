@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Optional
 from .cache import Cache
 from .clients import AdapterClient, DashboardClient, GatewayClient
 from .event_bus import EventBus
+from .live_resources import RESOURCE_SPECS
 from .read_model import READ_MODEL_PROJECTOR_VERSION, ReadModel, project_entity
 from .store import Store
 
@@ -164,7 +165,14 @@ class SourceWorkers:
         self._issue_entities: dict[str, dict] = {}
         self._cron_entities: dict[str, dict] = {}
         self._session_entities: dict[str, dict] = {}
+        self._repository_entities: dict[str, dict] = {}
+        self._system_manager_entities: dict[str, dict] = {}
+        self._inventory_entities: dict[str, dict[str, dict]] = {}
         self._initialized_sources: set[str] = set()
+        # Filled by app composition after the dedicated route modules create
+        # their bounded service/client instances and before startup runs.
+        self.repository_service: Any = None
+        self.system_manager_client: Any = None
 
     def _feed_alerts(self, key: str, data: Any) -> None:
         if self.alert_engine is None:
@@ -177,9 +185,15 @@ class SourceWorkers:
     def _ensure_delta_state(self) -> None:
         if not hasattr(self, "_initialized_sources"):
             self._initialized_sources = set()
-        for name in ("_permit_entities", "_issue_entities", "_cron_entities", "_session_entities"):
+        for name in (
+            "_permit_entities", "_issue_entities", "_cron_entities",
+            "_session_entities", "_repository_entities",
+            "_system_manager_entities",
+        ):
             if not hasattr(self, name):
                 setattr(self, name, {})
+        if not hasattr(self, "_inventory_entities"):
+            self._inventory_entities = {}
 
     def freshness_snapshot(self) -> dict[str, dict]:
         """{worker: {fetched_at, last_error}} for alert rule R3."""
@@ -531,6 +545,422 @@ class SourceWorkers:
             "token_threshold": getattr(self.cfg, "alert_token_threshold", 0),
         })
 
+    # ---- repository inventory --------------------------------------------
+    async def _fetch_repositories(self) -> list[dict]:
+        if self.repository_service is None:
+            raise RuntimeError("repository service is not composed")
+        rows = await asyncio.to_thread(
+            self.repository_service.status_all, fetch=True, include_github=True
+        )
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _fp_repositories(self, data: list[dict]) -> str:
+        return fingerprint_json([
+            (
+                row.get("name"), row.get("state"), row.get("local_sha"),
+                row.get("remote_sha"), row.get("ahead"), row.get("behind"),
+                bool((row.get("working_tree") or {}).get("dirty")),
+            )
+            for row in data
+        ])
+
+    async def _on_repositories(self, data: list[dict], fp: Optional[str]) -> None:
+        self._ensure_delta_state()
+        current = {
+            str(row.get("name")): row for row in data if row.get("name")
+        }
+        if "repositories" in self._initialized_sources:
+            for entity_id, row in current.items():
+                projected = project_entity("repositories", row)
+                previous = self._repository_entities.get(entity_id)
+                if previous is None or project_entity("repositories", previous) != projected:
+                    await self.bus.publish(
+                        "repository.changed", "repository-worker", "repository",
+                        entity_id, projected, coverage="polled", operation="upsert",
+                    )
+            for entity_id in set(self._repository_entities) - set(current):
+                await self.bus.publish(
+                    "repository.changed", "repository-worker", "repository",
+                    entity_id, {}, coverage="polled", operation="delete",
+                )
+        self._initialized_sources.add("repositories")
+        self._repository_entities = current
+
+    # ---- System Manager inventory ----------------------------------------
+    _SYSTEM_MANAGER_TABLES = ("services", "api", "accounts", "notes")
+
+    async def _fetch_system_manager(self) -> list[dict]:
+        if self.system_manager_client is None:
+            raise RuntimeError("system manager client is not composed")
+
+        async def one(table: str) -> list[dict]:
+            status, body = await self.system_manager_client.request(
+                "POST", "/v1/db/read", request_id=f"live-worker-{table}",
+                json_body={"table": table, "limit": 500},
+            )
+            if status >= 400:
+                raise RuntimeError(f"system manager {table} fetch failed: {status}")
+            rows = body.get("rows") if isinstance(body, dict) else None
+            out = []
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict) or row.get("id") in (None, ""):
+                    continue
+                out.append({
+                    **row, "table": table,
+                    "entity_key": f"{table}:{row['id']}",
+                })
+            return out
+
+        groups = await asyncio.gather(*(one(table) for table in self._SYSTEM_MANAGER_TABLES))
+        return [row for group in groups for row in group]
+
+    def _fp_system_manager(self, data: list[dict]) -> str:
+        return fingerprint_json([
+            (
+                row.get("entity_key"), row.get("observed_state"),
+                row.get("health"), row.get("enabled"), row.get("updated_at"),
+                row.get("revision"),
+            )
+            for row in data
+        ])
+
+    async def _on_system_manager(self, data: list[dict], fp: Optional[str]) -> None:
+        self._ensure_delta_state()
+        current = {
+            str(row.get("entity_key")): row
+            for row in data if row.get("entity_key")
+        }
+        if "system-manager" in self._initialized_sources:
+            for entity_id, row in current.items():
+                projected = project_entity("system-manager.inventory", row)
+                previous = self._system_manager_entities.get(entity_id)
+                if previous is None or project_entity("system-manager.inventory", previous) != projected:
+                    await self.bus.publish(
+                        "system-manager.changed", "system-manager", "inventory",
+                        entity_id, projected, coverage="polled", operation="upsert",
+                    )
+            for entity_id in set(self._system_manager_entities) - set(current):
+                await self.bus.publish(
+                    "system-manager.changed", "system-manager", "inventory",
+                    entity_id, {}, coverage="polled", operation="delete",
+                )
+        self._initialized_sources.add("system-manager")
+        self._system_manager_entities = current
+
+    # ---- catalog, inventory and metadata ---------------------------------
+    _INVENTORY_EVENTS = {
+        "catalog.profiles": "profiles.changed",
+        "catalog.models": "models.changed",
+        "catalog.tools": "toolsets.changed",
+        "catalog.mcp": "mcp.changed",
+        "catalog.plugins": "plugins.changed",
+        "catalog.skills": "skills.changed",
+        "memory.inventory": "memory.changed",
+        "config.webhooks": "webhooks.changed",
+        "config.channels": "channels.changed",
+        "artifacts.metadata": "artifacts.changed",
+        "files.metadata": "files.changed",
+        "rooms.binding": "rooms.changed",
+        "rooms.sessions": "room-sessions.changed",
+        "action.audit": "audit.changed",
+        "command.status": "command.changed",
+    }
+
+    @staticmethod
+    def _list_from(body: Any, *keys: str) -> list[dict]:
+        if isinstance(body, list):
+            return [row for row in body if isinstance(row, dict)]
+        if not isinstance(body, dict):
+            return []
+        for key in keys:
+            rows = body.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+        return []
+
+    async def _dashboard_body(self, path: str) -> dict:
+        status, body, _headers = await self.dashboard.get(path)
+        if status >= 400:
+            raise RuntimeError(f"dashboard inventory fetch failed: {path} ({status})")
+        return body if isinstance(body, dict) else {}
+
+    async def _fetch_artifact_metadata(self) -> list[dict]:
+        status, body, _headers = await self.adapter.tasks(limit=25)
+        if status >= 400:
+            return []
+        payload = body.get("data", body) if isinstance(body, dict) else {}
+        tasks = self._list_from(payload, "tasks", "items")[:25]
+        rows: list[dict] = []
+        for task in tasks:
+            task_id = task.get("id")
+            if not task_id:
+                continue
+            status, detail, _headers = await self.adapter.request(
+                "GET", f"/kanban/tasks/{task_id}/attachments", params={"limit": 20}
+            )
+            if status >= 400:
+                continue
+            data = detail.get("data", detail) if isinstance(detail, dict) else {}
+            for attachment in self._list_from(data, "attachments", "items"):
+                attachment_id = attachment.get("id") or attachment.get("name")
+                if attachment_id in (None, ""):
+                    continue
+                rows.append({
+                    **attachment,
+                    "id": f"{task_id}:{attachment_id}",
+                    "attachment_id": attachment.get("id"),
+                    "task_id": task_id,
+                    "task_title": task.get("title"),
+                })
+        return rows[:500]
+
+    async def _fetch_room_inventory(self) -> tuple[list[dict], list[dict]]:
+        status, envelope, _headers = await self.adapter.request("GET", "/room-binding")
+        if status >= 400:
+            return [], []
+        payload = envelope.get("data", envelope) if isinstance(envelope, dict) else {}
+        slots = self._list_from(payload, "room_slots")
+        occupancy = self._list_from(payload, "live_occupancy")
+        reservations = self._list_from(payload, "reservations")
+        occupied = {str(row.get("room_slot")): row for row in occupancy}
+        reserved = {str(row.get("room_slot")): row for row in reservations}
+        bindings: list[dict] = []
+        for slot in slots:
+            key = str(slot.get("slot") or "")
+            if not key:
+                continue
+            live = occupied.get(key, {})
+            reservation = reserved.get(key, {})
+            thread_ids = [
+                value for name, value in slot.items()
+                if name.endswith("_thread_id") and value not in (None, "")
+            ]
+            bindings.append({
+                "slot": key,
+                "state": live.get("status") or ("occupied" if live else "free"),
+                "status": live.get("status"),
+                "task_id": live.get("task_id"),
+                "chat_id": live.get("chat_id"),
+                "thread_ids": thread_ids,
+                "held_since": live.get("held_since"),
+                "bound_at": live.get("bound_at"),
+                "occupied": bool(live),
+                "reserved": bool(reservation),
+                "reserved_task": reservation.get("task_id"),
+                "seat_count": len(thread_ids),
+            })
+
+        sessions: list[dict] = []
+        for chat_id in sorted({str(row.get("chat_id")) for row in occupancy if row.get("chat_id")}):
+            status, body, _headers = await self.adapter.request(
+                "GET", "/room-sessions", params={"chat_id": chat_id, "limit": 200}
+            )
+            if status >= 400:
+                continue
+            data = body.get("data", body) if isinstance(body, dict) else {}
+            for row in self._list_from(data, "sessions", "items"):
+                session_id = row.get("session_id") or row.get("id")
+                if session_id in (None, ""):
+                    continue
+                sessions.append({**row, "session_id": session_id, "chat_id": chat_id})
+        return bindings, sessions[:1000]
+
+    def _memory_inventory(self) -> list[dict]:
+        backend = getattr(self.adapter, "backend", None)
+        memory_dir = getattr(getattr(backend, "settings", None), "memory_dir", None)
+        if memory_dir is None:
+            return []
+        rows = []
+        for file_key, name in (("memory", "MEMORY.md"), ("user", "USER.md")):
+            path = memory_dir / name
+            try:
+                stat = path.stat()
+                rows.append({
+                    "file_key": file_key, "name": name, "exists": True,
+                    "size": stat.st_size, "modified_at": stat.st_mtime,
+                })
+            except OSError:
+                rows.append({"file_key": file_key, "name": name, "exists": False, "size": 0})
+        return rows
+
+    async def _fetch_inventory(self) -> dict[str, list[dict]]:
+        profiles, info, options, tools, mcp, plugins, skills, webhooks, channels, files, health, status = await asyncio.gather(
+            self._dashboard_body("/api/profiles"),
+            self._dashboard_body("/api/model/info"),
+            self._dashboard_body("/api/model/options"),
+            self._dashboard_body("/api/tools/toolsets"),
+            self._dashboard_body("/api/mcp/servers"),
+            self._dashboard_body("/api/dashboard/plugins/hub"),
+            self._dashboard_body("/api/skills"),
+            self._dashboard_body("/api/webhooks"),
+            self._dashboard_body("/api/messaging/platforms"),
+            self._dashboard_body("/api/files"),
+            self._dashboard_body("/api/health"),
+            self._dashboard_body("/api/status"),
+        )
+        model_rows: list[dict] = []
+        current_model = info.get("model") or options.get("model")
+        current_provider = info.get("provider") or options.get("provider")
+        for provider in self._list_from(options, "providers"):
+            slug = provider.get("slug") or provider.get("id") or provider.get("name")
+            capabilities = provider.get("capabilities") if isinstance(provider.get("capabilities"), dict) else {}
+            for model in provider.get("models") if isinstance(provider.get("models"), list) else []:
+                model_id = str(model.get("id") or model.get("name")) if isinstance(model, dict) else str(model)
+                cap = capabilities.get(model_id, {}) if isinstance(capabilities, dict) else {}
+                model_rows.append({
+                    "id": f"{slug}::{model_id}", "model": model_id, "provider": slug,
+                    "provider_name": provider.get("name") or slug,
+                    "featured": model_id in (provider.get("featured_models") or []),
+                    "authenticated": provider.get("authenticated") is not False,
+                    "is_current": slug == current_provider and model_id == current_model,
+                    "fast": bool(cap.get("fast")) if isinstance(cap, dict) else False,
+                    "reasoning": bool(cap.get("reasoning")) if isinstance(cap, dict) else False,
+                    "context": cap.get("context") if isinstance(cap, dict) else None,
+                })
+        room_bindings, room_sessions = await self._fetch_room_inventory()
+        command = {
+            "id": "hermes", "gateway_state": status.get("gateway_state"),
+            "active_sessions": status.get("active_sessions"),
+            "active_agents": status.get("active_agents"),
+            "cpu_percent": health.get("cpu_percent") or status.get("cpu_percent"),
+            "memory_percent": health.get("memory_percent") or status.get("memory_percent"),
+            "version": status.get("version"), "checked_at": time.time(),
+        }
+        webhook_rows = self._list_from(webhooks, "subscriptions", "webhooks", "items")
+        for row in webhook_rows:
+            if not row.get("name") and row.get("id"):
+                row["name"] = row["id"]
+        channel_rows = self._list_from(channels, "platforms", "items")
+        for row in channel_rows:
+            if not row.get("id"):
+                row["id"] = row.get("platform_id") or row.get("platform")
+        return {
+            "catalog.profiles": self._list_from(profiles, "profiles", "items"),
+            "catalog.models": model_rows,
+            "catalog.tools": self._list_from(tools, "toolsets", "items"),
+            "catalog.mcp": self._list_from(mcp, "servers", "items"),
+            "catalog.plugins": self._list_from(plugins, "plugins", "items"),
+            "catalog.skills": self._list_from(skills, "skills", "items"),
+            "memory.inventory": self._memory_inventory(),
+            "config.webhooks": webhook_rows,
+            "config.channels": channel_rows,
+            "artifacts.metadata": await self._fetch_artifact_metadata(),
+            "files.metadata": self._list_from(files, "entries", "items"),
+            "rooms.binding": room_bindings,
+            "rooms.sessions": room_sessions,
+            "action.audit": self.store.list_audit(limit=200),
+            "command.status": [command],
+        }
+
+    def _fp_inventory(self, data: dict[str, list[dict]]) -> str:
+        projected = {
+            key: [project_entity(key, row) for row in rows]
+            for key, rows in data.items()
+        }
+        return fingerprint_json(projected)
+
+    async def _on_inventory(self, data: dict[str, list[dict]], fp: Optional[str]) -> None:
+        self._ensure_delta_state()
+        for resource_key, rows in data.items():
+            spec = RESOURCE_SPECS[resource_key]
+            current = {
+                str(projected[spec.entity_key]): projected
+                for row in rows
+                if (projected := project_entity(resource_key, row)).get(spec.entity_key) not in (None, "")
+            }
+            previous = self._inventory_entities.get(resource_key, {})
+            marker = f"inventory:{resource_key}"
+            if marker in self._initialized_sources:
+                event_type = self._INVENTORY_EVENTS[resource_key]
+                for entity_id, projected in current.items():
+                    if previous.get(entity_id) != projected:
+                        await self.bus.publish(
+                            event_type, spec.authority, resource_key, entity_id, projected,
+                            coverage="polled", resource_key=resource_key, operation="upsert",
+                        )
+                for entity_id in set(previous) - set(current):
+                    await self.bus.publish(
+                        event_type, spec.authority, resource_key, entity_id, {},
+                        coverage="polled", resource_key=resource_key, operation="delete",
+                    )
+            self._initialized_sources.add(marker)
+            self._inventory_entities[resource_key] = current
+
+    # Sensitive/on-demand resources publish only invalidation signals. Raw
+    # config and log bodies never enter the read model or replay payload.
+    async def _fetch_settings_signal(self) -> dict:
+        return await self._dashboard_body("/api/config")
+
+    async def _on_settings_signal(self, _data: dict, _fp: Optional[str]) -> None:
+        marker = "signal:settings"
+        if marker in self._initialized_sources:
+            await self.bus.publish(
+                "settings.changed", "dashboard", "settings", "", {},
+                coverage="polled", profile_id=getattr(self.cfg, "live_default_profile", "default"),
+                resource_key="system.settings", operation="invalidate",
+            )
+        self._initialized_sources.add(marker)
+
+    async def _fetch_logs_signal(self) -> dict:
+        return await self._dashboard_body("/api/logs?lines=500")
+
+    async def _on_logs_signal(self, _data: dict, _fp: Optional[str]) -> None:
+        marker = "signal:logs"
+        if marker in self._initialized_sources:
+            await self.bus.publish(
+                "logs.changed", "dashboard", "logs", "", {},
+                coverage="polled", profile_id=getattr(self.cfg, "live_default_profile", "default"),
+                resource_key="logs.tail", operation="invalidate",
+            )
+        self._initialized_sources.add(marker)
+
+    @staticmethod
+    async def _probe_port(service: str, port: int) -> dict:
+        started = time.monotonic()
+        healthy = False
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("192.168.1.140", port), timeout=2.0
+            )
+            del reader
+            healthy = True
+            writer.close()
+            await writer.wait_closed()
+        except (OSError, asyncio.TimeoutError):
+            healthy = False
+        return {
+            "service": service,
+            "healthy": healthy,
+            "status": "online" if healthy else "offline",
+            "checked_at": time.time(),
+            "latency_ms": round((time.monotonic() - started) * 1000, 1),
+        }
+
+    async def _fetch_iframe_health(self) -> list[dict]:
+        return list(await asyncio.gather(
+            self._probe_port("llama-proxy", 8082),
+            self._probe_port("9router", 20128),
+        ))
+
+    def _fp_iframe_health(self, data: list[dict]) -> str:
+        return fingerprint_json([
+            (row.get("service"), row.get("healthy"), row.get("status")) for row in data
+        ])
+
+    async def _on_iframe_health(self, data: list[dict], _fp: Optional[str]) -> None:
+        current = {str(row["service"]): project_entity("iframe.health", row) for row in data}
+        previous = self._inventory_entities.get("iframe.health", {})
+        marker = "inventory:iframe.health"
+        if marker in self._initialized_sources:
+            for entity_id, row in current.items():
+                if previous.get(entity_id) != row:
+                    await self.bus.publish(
+                        "iframe.changed", "mission-control", "iframe", entity_id, row,
+                        coverage="polled", resource_key="iframe.health", operation="upsert",
+                    )
+        self._initialized_sources.add(marker)
+        self._inventory_entities["iframe.health"] = current
+
     # ---- persistent read model -------------------------------------------
     _WORKER_RESOURCES = {
         "kanban": ("kanban.tasks",),
@@ -541,6 +971,10 @@ class SourceWorkers:
         "running": ("sessions.running",),
         "health": ("source.health",),
         "analytics": ("analytics.usage",),
+        "repositories": ("repositories",),
+        "system-manager": ("system-manager.inventory",),
+        "inventory": tuple(_INVENTORY_EVENTS),
+        "iframe-health": ("iframe.health",),
     }
 
     async def _persist_success(self, name: str, data: Any, fingerprint: str) -> None:
@@ -565,6 +999,25 @@ class SourceWorkers:
             if isinstance(summary.get("totals"), dict):
                 summary = {**summary, **summary["totals"]}
             model.replace_summary("analytics.usage", summary, profile_id=profile, fingerprint=fingerprint)
+        elif name in {"repositories", "system-manager"}:
+            key = self._WORKER_RESOURCES[name][0]
+            model.replace_entities(
+                key, data if isinstance(data, list) else [],
+                profile_id=profile, fingerprint=fingerprint,
+            )
+        elif name == "inventory" and isinstance(data, dict):
+            for key, rows in data.items():
+                if key not in self._INVENTORY_EVENTS:
+                    continue
+                model.replace_entities(
+                    key, rows if isinstance(rows, list) else [],
+                    profile_id=profile, fingerprint=f"{fingerprint}:{key}",
+                )
+        elif name == "iframe-health":
+            model.replace_entities(
+                "iframe.health", data if isinstance(data, list) else [],
+                profile_id=profile, fingerprint=fingerprint,
+            )
 
     async def _persist_failure(self, name: str, exc: Exception) -> None:
         if self.read_model is None:
@@ -601,6 +1054,36 @@ class SourceWorkers:
             self._on_capabilities, self._fp_capabilities, self.cfg.poll_backoff_max_seconds,
         )
         self.workers["analytics"] = self._worker("analytics", self.cfg.poll_analytics_seconds, self._fetch_analytics, self._on_analytics, self._fp_analytics)
+        if self.repository_service is not None:
+            self.workers["repositories"] = self._worker(
+                "repositories", max(30, self.cfg.poll_adapter_health_seconds),
+                self._fetch_repositories, self._on_repositories,
+                self._fp_repositories,
+            )
+        if self.system_manager_client is not None:
+            self.workers["system-manager"] = self._worker(
+                "system-manager", max(10, self.cfg.poll_health_seconds),
+                self._fetch_system_manager, self._on_system_manager,
+                self._fp_system_manager,
+            )
+        self.workers["inventory"] = self._worker(
+            "inventory", max(30, self.cfg.poll_adapter_health_seconds),
+            self._fetch_inventory, self._on_inventory, self._fp_inventory,
+        )
+        self.workers["settings-signal"] = PollWorker(
+            "settings-signal", max(30, self.cfg.poll_adapter_health_seconds),
+            self._fetch_settings_signal, self._on_settings_signal, fingerprint_json,
+            self.cfg.poll_backoff_max_seconds,
+        )
+        self.workers["logs-signal"] = PollWorker(
+            "logs-signal", max(2, self.cfg.poll_running_seconds),
+            self._fetch_logs_signal, self._on_logs_signal, fingerprint_json,
+            self.cfg.poll_backoff_max_seconds,
+        )
+        self.workers["iframe-health"] = self._worker(
+            "iframe-health", max(10, self.cfg.poll_health_seconds),
+            self._fetch_iframe_health, self._on_iframe_health, self._fp_iframe_health,
+        )
 
     async def start(self) -> None:
         self.build()

@@ -8,6 +8,7 @@ import { readOnlyBadge } from '../pure/capability-badge.js';
 import { logLines, recordFrom } from '../pure/data-shape.js';
 import { filterInput, sideHint, paint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources } from './_live.js';
 
 export const ROUTE = 'logs';
 export const LABEL = 'Logs';
@@ -48,7 +49,7 @@ export function renderLogs(envelope, { path = null } = {}) {
   return result;
 }
 
-export function createLogs({ api, profile }) {
+export function createLogs({ api, profile, liveStore }) {
   const root = el('div', { class: 'tab tab-logs' });
   const toolbar = el('div', { class: 'tab-toolbar' });
   const body = el('div', { class: 'logs-body' });
@@ -57,6 +58,8 @@ export function createLogs({ api, profile }) {
   let envelope = null;
   let lineLimit = 200;
   let inspectorHost = null;
+  let unsubscribe = null;
+  let refreshing = false;
   // `FILTERS.level` has been exported by this module since it was written and
   // nothing ever read it: the tab tailed the log and showed every line, so
   // finding one error in a 500-line dump meant reading a 500-line dump. Levels
@@ -128,19 +131,36 @@ export function createLogs({ api, profile }) {
     }));
   }
 
-  async function load() {
+  async function load(background = false) {
+    if (refreshing) return;
+    refreshing = true;
     renderToolbar();
-    clear(body);
-    body.append(skeleton({ lines: 8 }));
+    if (!background || !envelope) {
+      clear(body);
+      body.append(skeleton({ lines: 8 }));
+    }
     try {
       envelope = await api.get(`/api/logs?lines=${lineLimit}`, { profile });
     } catch (err) {
-      envelope = null;
-      clear(body);
-      body.append(errorPanel({ message: err.message, requestId: err.request_id, onRetry: load }));
+      if (!envelope) {
+        clear(body);
+        body.append(errorPanel({ message: err.message, requestId: err.request_id, onRetry: load }));
+      } else {
+        envelope.meta = { ...(envelope.meta || {}), freshness: 'stale', degraded_reason: err.message };
+        render();
+      }
       return;
+    } finally {
+      refreshing = false;
     }
     render();
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['logs.tail'], profile, () => {
+      if (root.isConnected) load(true).catch(() => null);
+    });
   }
 
   function render() {
@@ -208,9 +228,11 @@ export function createLogs({ api, profile }) {
       container.append(root);
     },
     activate() {
-      return load();
+      bindLive();
+      return envelope ? Promise.resolve() : load();
     },
     deactivate() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { scroll: root.scrollTop || 0 };
     },
     renderInspector,

@@ -50,6 +50,10 @@ def build_repository_router(core: Any) -> APIRouter:
 
     router = APIRouter()
     service = RepositorySyncService(runner=RepositoryGitRunner())
+    # The HTTP routes and the server-side live worker must observe the same
+    # registry/store instance. Attaching it to the composition root avoids a
+    # second repository scanner and keeps browser polling out of the SPA.
+    core.repository_service = service
 
     def envelope(data: Any, request: Request, *, read_only: bool) -> JSONResponse:
         return JSONResponse(

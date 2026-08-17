@@ -13,6 +13,7 @@ import { toast } from '../components/toast.js';
 import {
   loadEnvelope, applyStateToTable, tabToolbar, sideHint, paint,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'action-audit';
 export const LABEL = 'Action Audit';
@@ -71,7 +72,7 @@ const RESULT_FILTERS = [
   { value: 'pending', label: 'Pending' },
 ];
 
-export function createActionAudit({ api, profile, toolbar }) {
+export function createActionAudit({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-audit' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -82,6 +83,18 @@ export function createActionAudit({ api, profile, toolbar }) {
   let selected = null;
   let filter = 'all';
   let search = '';
+  let unsubscribe = null;
+  let loadedFromSource = false;
+
+  const normalizeAudit = (row) => ({
+    id: row?.id ?? null,
+    ...mapAuditRow({
+      ...row,
+      profile: row?.profile ?? row?.profile_id,
+      summary: row?.summary ?? row?.request_summary,
+    }),
+    summary_human: summarizeAction(row),
+  });
 
   const table = createTable({
     rowId: (row) => row.request_id,
@@ -167,10 +180,8 @@ export function createActionAudit({ api, profile, toolbar }) {
       },
     });
     meta = result.meta;
-    rows = (Array.isArray(result.data) ? result.data : []).map((r) => ({
-      ...mapAuditRow(r),
-      summary_human: summarizeAction(r),
-    }));
+    rows = (Array.isArray(result.data) ? result.data : []).map(normalizeAudit);
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     applyStateToTable(table, { ...result, data: visibleRows() });
     if (selected) {
       selected = rows.find((r) => r.request_id === selected.request_id) || null;
@@ -178,6 +189,26 @@ export function createActionAudit({ api, profile, toolbar }) {
     }
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'action.audit', profile, normalizeAudit);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id ?? row.request_id);
+    if (selected) selected = rows.find((row) => row.request_id === selected.request_id) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.request_id ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['action.audit'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function exportCsv() {
@@ -263,8 +294,8 @@ export function createActionAudit({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

@@ -14,6 +14,7 @@ import {
   loadEnvelope, applyStateToTable, tabToolbar, runMutation,
   sideHint, paint,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'models';
 export const LABEL = 'Models';
@@ -83,7 +84,7 @@ const FILTERS = [
   { value: 'fast', label: 'Fast' },
 ];
 
-export function createModels({ api, profile, toolbar }) {
+export function createModels({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-models' });
   const stats = el('div', { class: 'stat-row-host' });
   const main = el('div', { class: 'split-main' });
@@ -96,6 +97,8 @@ export function createModels({ api, profile, toolbar }) {
   let moa = null;
   let meta = null;
   let selected = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
   let filter = 'all';
   let search = '';
 
@@ -182,6 +185,7 @@ export function createModels({ api, profile, toolbar }) {
 
     const optionsResult = await loadEnvelope(api, OPTIONS_PATH, { profile, allowEmpty: false });
     catalog = optionsResult.state === 'ready' ? flattenModelCatalog(optionsResult.data) : [];
+    loadedFromSource = optionsResult.state === 'ready' || optionsResult.state === 'partial';
     applyStateToTable(table, {
       ...optionsResult,
       state: optionsResult.state === 'ready' && !catalog.length ? 'empty' : optionsResult.state,
@@ -197,6 +201,27 @@ export function createModels({ api, profile, toolbar }) {
     renderStats();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.models', profile);
+    if (!live) return false;
+    meta = live.meta;
+    catalog = mergeProjectedRows(catalog, live.rows, (row) => row.id);
+    if (selected) selected = catalog.find((row) => row.id === selected.id) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderStats();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.models'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderStats() {
@@ -347,8 +372,8 @@ export function createModels({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return catalog; },

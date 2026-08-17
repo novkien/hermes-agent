@@ -18,7 +18,7 @@ from typing import Any, Iterable
 from .live_resources import RESOURCE_SPECS, ROUTE_RESOURCES
 
 
-READ_MODEL_SCHEMA_VERSION = 1
+READ_MODEL_SCHEMA_VERSION = 2
 READ_MODEL_PROJECTOR_VERSION = 2
 MAX_ENTITIES_PER_RESOURCE = 5000
 MAX_PROJECTED_JSON_BYTES = 1_000_000
@@ -69,10 +69,82 @@ PROJECTOR_FIELDS: dict[str, frozenset[str]] = {
     "issues": frozenset({"id", "issue", "title", "summary", "status", "severity", "occurrence_count", "first_seen_at", "last_seen_at", "updated_at"}),
     "cron.jobs": frozenset({"id", "name", "state", "enabled", "schedule", "last_run_at", "next_run_at", "last_status", "profile"}),
     "alerts": frozenset({"id", "rule_id", "title", "state", "severity", "created_at", "updated_at", "snoozed_until"}),
-    "repositories": frozenset({"repo", "name", "branch", "head", "ahead", "behind", "dirty", "status", "updated_at"}),
-    "system-manager.inventory": frozenset({"id", "name", "type", "host_id", "state", "status", "enabled", "updated_at"}),
-    "rooms.binding": frozenset({"slot", "state", "task_id", "thread_ids", "held_since", "reserved"}),
-    "rooms.sessions": frozenset({"session_id", "chat_id", "thread_id", "profile", "title", "last_activity_at"}),
+    "repositories": frozenset({
+        "name", "repo_full_name", "branch", "transport", "host", "fork",
+        "upstream_repo", "private", "ok", "state", "current_branch",
+        "local_sha", "remote_sha", "ahead", "behind", "last_commit_at",
+        "last_fetch_at", "updated_at",
+    }),
+    "system-manager.inventory": frozenset({
+        "entity_key", "table", "id", "name", "display_name", "type",
+        "host_id", "manager", "unit", "management_mode", "desired_state",
+        "observed_state", "observed_substate", "health", "restart_count",
+        "last_seen_at", "service", "base_url", "description", "provider",
+        "username", "enabled", "title", "key", "category", "scope_type",
+        "created_at", "updated_at", "revision",
+    }),
+    "action.audit": frozenset({
+        "id", "request_id", "actor", "action", "target", "profile_id",
+        "timestamp", "request_summary", "upstream_status", "result",
+    }),
+    "catalog.profiles": frozenset({
+        "name", "is_active", "is_default", "gateway_state", "gateway_running",
+        "description", "model", "provider", "skill_count", "has_env",
+    }),
+    "catalog.models": frozenset({
+        "id", "model", "provider", "provider_name", "featured", "authenticated",
+        "is_current", "fast", "reasoning", "context", "context_window",
+    }),
+    "catalog.tools": frozenset({
+        "name", "label", "enabled", "available", "configured", "state",
+        "description", "tool_count", "tools", "provider", "selected_provider",
+    }),
+    "catalog.mcp": frozenset({
+        "name", "enabled", "state", "status", "transport", "type", "description",
+        "connected", "tool_count", "url", "command",
+    }),
+    "catalog.plugins": frozenset({
+        "name", "enabled", "active", "runtime_status", "state", "version",
+        "description", "summary", "source", "has_dashboard_manifest", "kind",
+    }),
+    "catalog.skills": frozenset({
+        "name", "status", "state", "enabled", "category", "group", "description",
+        "summary", "version", "usage", "provenance", "path", "author",
+    }),
+    "memory.inventory": frozenset({
+        "file_key", "name", "exists", "size", "modified_at",
+    }),
+    "config.webhooks": frozenset({
+        "name", "enabled", "state", "deliver", "target", "events", "description",
+        "last_delivery", "last_delivery_at", "last_status",
+    }),
+    "config.channels": frozenset({
+        "id", "platform_id", "platform", "name", "label", "enabled", "configured",
+        "connected", "state", "description", "error_code", "gateway_state",
+    }),
+    "artifacts.metadata": frozenset({
+        "id", "attachment_id", "name", "filename", "size", "byte_size", "mime",
+        "content_type", "kind", "task_id", "task_title", "created_at", "uploaded_at",
+    }),
+    "files.metadata": frozenset({
+        "path", "name", "size", "kind", "content_type", "mime", "is_directory",
+        "modified_at", "updated_at",
+    }),
+    "command.status": frozenset({
+        "id", "gateway_state", "active_sessions", "active_agents", "cpu_percent",
+        "memory_percent", "disk_percent", "version", "update_available", "checked_at",
+    }),
+    "iframe.health": frozenset({
+        "service", "healthy", "status", "checked_at", "latency_ms",
+    }),
+    "rooms.binding": frozenset({
+        "slot", "state", "status", "task_id", "chat_id", "thread_ids", "held_since",
+        "bound_at", "occupied", "reserved", "reserved_task", "seat_count",
+    }),
+    "rooms.sessions": frozenset({
+        "session_id", "id", "chat_id", "thread_id", "profile", "title",
+        "last_activity_at", "updated_at", "is_active", "status",
+    }),
 }
 
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
@@ -191,7 +263,30 @@ class ReadModel:
             raise sqlite3.DatabaseError("read-model schema is newer than this binary")
         if version < 1:
             self._conn.executescript(SCHEMA_V1)
-            self._conn.execute(f"PRAGMA user_version={READ_MODEL_SCHEMA_VERSION}")
+            self._conn.execute("PRAGMA user_version=1")
+            self._conn.commit()
+            version = 1
+        if version < 2:
+            # Resource scope is a data invariant, not merely a lookup hint.
+            # Phase 9 promoted action.audit to global; old read models can
+            # therefore contain unreachable profile-scoped copies.  Normalize
+            # every currently-global resource so health/replay state cannot
+            # expose a second authority after restart.
+            global_keys = tuple(
+                key for key, spec in RESOURCE_SPECS.items()
+                if spec.profile_scope == "global"
+            )
+            if global_keys:
+                marks = ",".join("?" for _ in global_keys)
+                for table in (
+                    "resource_entities", "resource_snapshots", "source_state"
+                ):
+                    self._conn.execute(
+                        f"DELETE FROM {table} WHERE profile_id<>? "
+                        f"AND resource_key IN ({marks})",
+                        ("__global__", *global_keys),
+                    )
+            self._conn.execute("PRAGMA user_version=2")
             self._conn.commit()
 
     def _connection(self) -> sqlite3.Connection:
@@ -230,7 +325,7 @@ class ReadModel:
         if spec.persistence not in {"entities", "metadata"} or not spec.entity_key:
             raise ValueError(f"resource is not entity-persistable: {resource_key}")
         profile = self._scope(resource_key, profile_id)
-        projected: list[tuple[str, dict[str, Any]]] = []
+        projected_by_id: dict[str, dict[str, Any]] = {}
         for raw in list(rows)[:MAX_ENTITIES_PER_RESOURCE]:
             if not isinstance(raw, dict):
                 continue
@@ -238,7 +333,12 @@ class ReadModel:
             entity_id = value.get(spec.entity_key)
             if entity_id in (None, ""):
                 continue
-            projected.append((str(entity_id), value))
+            # Upstream catalogs can transiently repeat the same logical row
+            # (for example aliases emitted by two discovery sources). A
+            # snapshot is keyed state, so the final projected occurrence wins
+            # before the single atomic replacement transaction begins.
+            projected_by_id[str(entity_id)] = value
+        projected = list(projected_by_id.items())
         now = time.time()
         try:
             with self._lock:

@@ -1,6 +1,7 @@
 // 9router tab — routed through AgentOS so browser only loads via Mission Control.
 
 import { el, clear } from '../ui.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const ROUTE = '9router';
 export const LABEL = '9router';
@@ -14,7 +15,7 @@ export function diagnosticsStrip() {
   return { mode: MODE, endpoints: ROUTE_ENDPOINTS };
 }
 
-export function create9router() {
+export function create9router({ liveStore, profile } = {}) {
   const root = el('div', { class: 'tab tab-llama-proxy' });
   const toolbar = el('div', { class: 'tab-toolbar' });
   const diagnostics = el('div', {
@@ -34,6 +35,8 @@ export function create9router() {
   let srcAssigned = false;
   let loadState = 'not-loaded';
   let lastChangedAt = null;
+  let backendHealth = null;
+  let unsubscribe = null;
 
   function updateDiagnostics() {
     clear(diagnostics);
@@ -44,12 +47,29 @@ export function create9router() {
         : 'chip chip-warning';
     diagnostics.append(
       el('span', { class: stateClass, text: loadState }),
+      backendHealth ? el('span', {
+        class: `chip ${backendHealth.healthy ? 'chip-ready' : 'chip-error'}`,
+        text: `server ${backendHealth.status || (backendHealth.healthy ? 'online' : 'offline')}`,
+      }) : null,
       el('span', { class: 'mono', text: ROUTE_ENDPOINTS[0] }),
       el('span', { text: `mode: ${MODE}` }),
       lastChangedAt
         ? el('span', { class: 'mono', text: `updated: ${lastChangedAt}` })
         : null,
     );
+  }
+
+  function applyLiveHealth() {
+    const live = liveRows(liveStore, 'iframe.health', profile);
+    backendHealth = live?.rows?.find((row) => row.service === '9router') || backendHealth;
+    updateDiagnostics();
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['iframe.health'], profile, () => {
+      if (root.isConnected) applyLiveHealth();
+    });
   }
 
   function assignSourceOnce() {
@@ -103,10 +123,13 @@ export function create9router() {
     },
     activate() {
       root.hidden = false;
+      bindLive();
+      applyLiveHealth();
       assignSourceOnce();
       return Promise.resolve();
     },
     deactivate() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       root.hidden = true;
       return { scroll: 0, loadState };
     },

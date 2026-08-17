@@ -12,6 +12,7 @@ import { createTable } from '../components/table.js';
 import { createDetail } from '../components/detail.js';
 import { applyStateToTable, filterInput, loadEnvelope, paint, runMutation, sideHint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'plugins';
 export const LABEL = 'Plugins';
@@ -63,7 +64,7 @@ function matchesFilter(row, filter) {
   return true;
 }
 
-export function createPlugins({ api, profile, toolbar }) {
+export function createPlugins({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-plugins' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -73,6 +74,8 @@ export function createPlugins({ api, profile, toolbar }) {
   let orphans = [];
   let meta = null;
   let selected = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
   let filter = 'all';
 
   function toggle(row) {
@@ -149,6 +152,7 @@ export function createPlugins({ api, profile, toolbar }) {
     meta = payload.meta;
     const body = payload.data && typeof payload.data === 'object' ? payload.data : {};
     rows = Array.isArray(body.plugins) ? body.plugins : [];
+    loadedFromSource = payload.state === 'ready' || payload.state === 'partial';
     // Dashboard plugins with no agent plugin behind them. They still render a
     // tab in the Hermes UI, so listing them separately explains the difference
     // rather than leaving them mysteriously absent.
@@ -161,6 +165,26 @@ export function createPlugins({ api, profile, toolbar }) {
     }
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.plugins', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.name);
+    if (selected) selected = rows.find((row) => row.name === selected.name) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.name ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.plugins'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -292,8 +316,8 @@ export function createPlugins({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

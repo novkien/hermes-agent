@@ -15,6 +15,7 @@ import { createStatRow } from '../components/stat.js';
 import { createTable } from '../components/table.js';
 import { createForm } from '../components/form.js';
 import { loadEnvelope, tabToolbar, runMutation, paint, primaryButton, confirmAction, sideHint } from './_kit.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const ROUTE = 'command-center';
 export const LABEL = 'Command Center';
@@ -113,7 +114,7 @@ function gib(bytes) {
   return Number.isFinite(n) ? `${(n / 1024 ** 3).toFixed(1)} GB` : '—';
 }
 
-export function createCommandCenter({ api, profile, toolbar }) {
+export function createCommandCenter({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-command-center' });
   const stats = el('div', { class: 'stat-row-host' });
   const cards = el('div', { class: 'grid-cards' });
@@ -128,6 +129,8 @@ export function createCommandCenter({ api, profile, toolbar }) {
   let update = null;
   let runningAction = null;
   let inspectorHost = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   async function load() {
     clear(cards);
@@ -148,6 +151,7 @@ export function createCommandCenter({ api, profile, toolbar }) {
     checkpoints = checkpointRes.state === 'ready' ? checkpointRes.data : null;
     hooks = hooksRes.state === 'ready' ? hooksRes.data : null;
     update = updateRes.state === 'ready' ? updateRes.data : null;
+    loadedFromSource = true;
 
     renderStats();
     renderCards();
@@ -155,6 +159,24 @@ export function createCommandCenter({ api, profile, toolbar }) {
     if (health.state !== 'ready' && status.state !== 'ready') {
       paint(output, unavailableState({ reason: 'Hermes operational endpoints unavailable' }));
     }
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'command.status', profile);
+    const row = live?.rows?.[0];
+    if (!row) return false;
+    status = { data: row, meta: live.meta, state: 'ready' };
+    renderStats();
+    renderToolbar(toolbar);
+    if (inspectorHost) renderInspector(inspectorHost);
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['command.status'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderStats() {
@@ -454,9 +476,12 @@ export function createCommandCenter({ api, profile, toolbar }) {
       container.append(root);
     },
     activate() {
-      return load();
+      bindLive();
+      applyLive();
+      return loadedFromSource ? Promise.resolve() : load();
     },
     deactivate() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { scroll: root.scrollTop || 0 };
     },
     renderInspector,

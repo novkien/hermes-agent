@@ -204,10 +204,29 @@ class Store:
             self._path, timeout=10.0, check_same_thread=False
         )
         self._conn.row_factory = sqlite3.Row
+        self._audit_listener = None
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA foreign_keys=ON")
+
+    def set_audit_listener(self, listener) -> None:
+        """Attach a best-effort live-state listener after app composition.
+
+        Audit durability never depends on this callback: notification happens
+        only after the pending/completed transaction is committed.
+        """
+        self._audit_listener = listener
+
+    def _notify_audit(self, row: sqlite3.Row | dict[str, Any] | None) -> None:
+        listener = self._audit_listener
+        if listener is None or row is None:
+            return
+        try:
+            listener(dict(row))
+        except Exception:
+            # Live convergence is ancillary to the fail-closed audit write.
+            pass
 
     def close(self) -> None:
         with self._lock:
@@ -271,7 +290,7 @@ class Store:
     ) -> None:
         """Append one audit row. Raises sqlite3.Error on failure so callers
         can abort the mutation BEFORE any upstream call."""
-        self._execute(
+        cursor = self._execute(
             "INSERT INTO action_audit (request_id, actor, action, target, "
             "profile_id, timestamp, request_summary, upstream_status, result) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -288,6 +307,12 @@ class Store:
             ),
         )
         self._commit()
+        row = self._execute(
+            "SELECT id, request_id, actor, action, target, profile_id, timestamp, "
+            "request_summary, upstream_status, result FROM action_audit WHERE id=?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        self._notify_audit(row)
 
     def list_audit(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         rows = self._execute(
@@ -311,6 +336,14 @@ class Store:
             (upstream_status, result, request_id),
         )
         self._commit()
+        rows = self._execute(
+            "SELECT id, request_id, actor, action, target, profile_id, timestamp, "
+            "request_summary, upstream_status, result FROM action_audit "
+            "WHERE request_id=? ORDER BY id DESC",
+            (request_id,),
+        ).fetchall()
+        for row in rows:
+            self._notify_audit(row)
 
     def audit_failures_since(self, window_seconds: int, min_count: int) -> bool:
         """R11: >=min_count mutation failures with upstream_status 4xx/5xx in window."""

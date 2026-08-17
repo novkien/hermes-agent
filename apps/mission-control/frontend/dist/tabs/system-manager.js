@@ -7,6 +7,7 @@ import {
 } from '../ui.js';
 import { createTable } from '../components/table.js';
 import { createForm } from '../components/form.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'system-manager';
 export const LABEL = 'System Manager';
@@ -49,7 +50,7 @@ function detailsFor(row, table) {
   return row.category || row.key || '';
 }
 
-export function createSystemManager({ api, profile, toolbar }) {
+export function createSystemManager({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-system-manager' });
   const main = el('div', { class: 'split-main' });
   root.append(main);
@@ -62,7 +63,8 @@ export function createSystemManager({ api, profile, toolbar }) {
   let loading = false;
   let error = null;
   let inspectorHost = null;
-  let pollTimer = null;
+  let unsubscribe = null;
+  const loadedTables = new Set();
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -157,18 +159,18 @@ export function createSystemManager({ api, profile, toolbar }) {
   async function load(keepSelection = true) {
     loading = true;
     error = null;
-    table.setLoading();
+    if (!rows.length) table.setLoading();
     const wanted = keepSelection ? selected?.id : null;
     try {
       const q = search.trim() ? `?q=${encodeURIComponent(search.trim())}&limit=500` : '?limit=500';
       const result = await api.get(`/api/system-manager/${active}${q}`, { profile });
       rows = rowsFrom(result.data);
+      loadedTables.add(active);
       selected = wanted ? rows.find((row) => String(row.id) === String(wanted)) || null : null;
       table.setRows(visibleRows());
       table.setSelected(selected?.id ?? null);
     } catch (err) {
       error = err;
-      rows = [];
       table.setUnavailable({ reason: err.message || 'System Manager unavailable', requestId: err.request_id });
     } finally {
       loading = false;
@@ -177,10 +179,42 @@ export function createSystemManager({ api, profile, toolbar }) {
     }
   }
 
+  function applyLive(keepSelection = true) {
+    const live = liveRows(liveStore, 'system-manager.inventory', profile);
+    if (!live) return false;
+    const projected = live.rows.filter((row) => row.table === active);
+    const wanted = keepSelection ? selected?.id : null;
+    rows = mergeProjectedRows(rows, projected, (row) => row.id);
+    selected = wanted == null
+      ? null
+      : rows.find((row) => String(row.id) === String(wanted)) || null;
+    error = live.meta.last_error ? { message: live.meta.last_error } : null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  async function revalidate({ includeDetails = false, keepSelection = true } = {}) {
+    if (liveStore) {
+      await liveStore.resyncResource('system-manager.inventory', profile, { force: true });
+      applyLive(keepSelection);
+    }
+    if (includeDetails || !loadedTables.has(active)) await load(keepSelection);
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['system-manager.inventory'], profile, () => {
+      if (root.isConnected) applyLive(true);
+    });
+  }
+
   async function syncNow() {
     try {
       await api.post('/api/system-manager/sync', {}, { profile });
-      await load(true);
+      await revalidate({ includeDetails: true, keepSelection: true });
     } catch (err) {
       error = err;
       renderSide();
@@ -191,7 +225,7 @@ export function createSystemManager({ api, profile, toolbar }) {
     const result = await api.put(`/api/system-manager/${active}`, { where, values }, { profile });
     creating = false;
     const row = result.data?.row || result.data?.data?.row || null;
-    await load(false);
+    await revalidate({ includeDetails: true, keepSelection: false });
     if (row?.id) {
       selected = rows.find((item) => item.id === row.id) || row;
       table.setSelected(selected.id);
@@ -204,12 +238,12 @@ export function createSystemManager({ api, profile, toolbar }) {
     await api.put(`/api/system-manager/${active}`, { where: { id: row.id }, values: { _delete: true } }, { profile });
     selected = null;
     creating = false;
-    await load(false);
+    await revalidate({ includeDetails: true, keepSelection: false });
   }
 
   async function serviceAction(row, action) {
     await api.post(`/api/system-manager/services/${encodeURIComponent(row.id)}/action`, { action }, { profile });
-    await load(true);
+    await revalidate({ includeDetails: true, keepSelection: true });
   }
 
   function renderToolbar(host) {
@@ -236,7 +270,9 @@ export function createSystemManager({ api, profile, toolbar }) {
         selected = null;
         creating = false;
         rebuildTable();
-        load(false).catch(() => null);
+        const live = applyLive(false);
+        if (!loadedTables.has(active)) load(false).catch(() => null);
+        else if (!live) table.setRows(visibleRows());
       },
     });
 
@@ -434,19 +470,16 @@ export function createSystemManager({ api, profile, toolbar }) {
     },
     async activate() {
       renderToolbar(toolbar);
-      await load(false);
-      if (!pollTimer) {
-        pollTimer = setInterval(() => load(true).catch(() => null), 30000);
-      }
+      bindLive();
+      const live = applyLive(false);
+      if (!loadedTables.has(active)) await load(false);
+      else if (!live) table.setRows(visibleRows());
     },
     deactivate() {
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { selection: selected?.id || null };
     },
-    refresh: () => load(true),
+    refresh: () => revalidate({ includeDetails: true, keepSelection: true }),
     renderToolbar,
     renderInspector,
     get data() { return rows; },

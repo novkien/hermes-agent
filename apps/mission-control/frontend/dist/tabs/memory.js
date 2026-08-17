@@ -17,6 +17,7 @@ import { toast } from '../components/toast.js';
 import {
   confirmAction, loadEnvelope, paint, runMutation, tabToolbar,
 } from './_kit.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const ROUTE = 'memory';
 export const LABEL = 'Memory';
@@ -110,7 +111,7 @@ function makeFileState(file) {
   };
 }
 
-export function createMemory({ api, profile, refreshInspector }) {
+export function createMemory({ api, profile, refreshInspector, liveStore }) {
   const root = el('div', { class: 'tab tab-memory' });
   // The standard tab header: Memory was the last editing surface with no
   // "updated" stamp and no refresh control, so the only way to see whether the
@@ -166,6 +167,7 @@ export function createMemory({ api, profile, refreshInspector }) {
   let activeEditor = null;
   let activeEditorFile = null;
   let inspectorHost = null;
+  let unsubscribe = null;
 
   const controls = {
     title: el('h2', { class: 'memory-file-title' }),
@@ -318,6 +320,31 @@ export function createMemory({ api, profile, refreshInspector }) {
     // it changes with every load, save and file switch.
     renderToolbar();
     if (state) updateSideCard(state.file.id);
+  }
+
+  function applyLiveInventory() {
+    const live = liveRows(liveStore, 'memory.inventory', profile);
+    if (!live) return false;
+    for (const row of live.rows) {
+      const state = fileStates.get(row.file_key);
+      if (!state) continue;
+      state.inventory = row;
+      if (state.loaded && Number(row.modified_at || 0) > Number(state.meta?.fetched_at || 0)) {
+        state.meta = { ...(state.meta || {}), ...live.meta, freshness: 'stale' };
+      } else if (!state.meta) {
+        state.meta = live.meta;
+      }
+    }
+    renderSidebar();
+    updateActionBars();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['memory.inventory'], profile, () => {
+      if (root.isConnected) applyLiveInventory();
+    });
   }
 
   async function loadFile(fileId, { force = false } = {}) {
@@ -774,6 +801,8 @@ export function createMemory({ api, profile, refreshInspector }) {
   }
 
   async function activate() {
+    bindLive();
+    applyLiveInventory();
     if (!inspectorHost && typeof refreshInspector === 'function') refreshInspector();
     renderViewSwitch();
     renderSidebar();
@@ -787,6 +816,7 @@ export function createMemory({ api, profile, refreshInspector }) {
   }
 
   function deactivate() {
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
     if (activeEditor) {
       activeEditor.destroy();
       activeEditor = null;

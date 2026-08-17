@@ -79,6 +79,14 @@ def main() -> None:
         assert [row["entity_id"] for row in beta["entities"]] == ["b"]
         assert "token" not in alpha["entities"][0]["payload"]
         assert "content" not in alpha["entities"][0]["payload"]
+        duplicate_revision = model.replace_entities(
+            "catalog.profiles",
+            [{"name": "default", "model": "old"}, {"name": "default", "model": "new"}],
+            profile_id="alpha", fingerprint="duplicate-profile",
+        )
+        duplicate_rows = model.resource("catalog.profiles", profile_id="alpha")["entities"]
+        assert duplicate_revision == 1 and len(duplicate_rows) == 1
+        assert duplicate_rows[0]["payload"]["model"] == "new"
         next_revision, projected = model.upsert_entity(
             "kanban.tasks", task("a", "Alpha updated", password="drop"), profile_id="alpha"
         )
@@ -169,6 +177,47 @@ def main() -> None:
         }
         assert {"resource_snapshots", "resource_entities", "source_state"} <= tables
         migrated.close()
+
+        # v2 removes only legacy profile-scoped copies of resources whose
+        # contract is global.  Profile-scoped operational state survives.
+        scope_path = Path(tmp) / "scope-migration.db"
+        scoped = ReadModel(scope_path)
+        scoped.close()
+        conn = sqlite3.connect(scope_path)
+        now = 1.0
+        conn.execute(
+            "INSERT INTO resource_snapshots VALUES (?,?,?,?,?,?)",
+            ("default", "action.audit", 1, "legacy", now, '{"count":1}'),
+        )
+        conn.execute(
+            "INSERT INTO resource_entities VALUES (?,?,?,?,?,?)",
+            ("default", "action.audit", "1", 1, now, '{"id":1}'),
+        )
+        conn.execute(
+            "INSERT INTO source_state "
+            "(profile_id,resource_key,revision,last_success_at,health) VALUES (?,?,?,?,?)",
+            ("default", "action.audit", 1, now, "healthy"),
+        )
+        conn.execute(
+            "INSERT INTO resource_snapshots VALUES (?,?,?,?,?,?)",
+            ("default", "kanban.tasks", 1, "keep", now, '{"count":0}'),
+        )
+        conn.execute("PRAGMA user_version=1")
+        conn.commit()
+        conn.close()
+        scoped = ReadModel(scope_path)
+        assert scoped.available
+        for table in ("resource_snapshots", "resource_entities", "source_state"):
+            count = scoped._conn.execute(  # noqa: SLF001
+                f"SELECT COUNT(*) FROM {table} WHERE profile_id='default' "
+                "AND resource_key='action.audit'"
+            ).fetchone()[0]
+            assert count == 0
+        assert scoped._conn.execute(  # noqa: SLF001
+            "SELECT COUNT(*) FROM resource_snapshots WHERE profile_id='default' "
+            "AND resource_key='kanban.tasks'"
+        ).fetchone()[0] == 1
+        scoped.close()
 
     asyncio.run(test_poll_hooks())
     print("READ_MODEL_TESTS=PASS")

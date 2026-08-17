@@ -14,6 +14,7 @@ import {
   applyStateToTable, boolChip, filterInput, loadEnvelope, paint, primaryButton, runMutation, sideHint, tabToolbar,
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'mcp';
 export const LABEL = 'MCP';
@@ -43,7 +44,7 @@ const VIEWS = [
   { value: 'catalog', label: 'Catalog' },
 ];
 
-export function createMcp({ api, profile, toolbar }) {
+export function createMcp({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-mcp' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -55,6 +56,8 @@ export function createMcp({ api, profile, toolbar }) {
   let meta = null;
   let selected = null;
   let creating = false;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const serverTable = createTable({
     rowId: (row) => row.name,
@@ -151,6 +154,7 @@ export function createMcp({ api, profile, toolbar }) {
     });
     meta = serverResult.meta;
     servers = Array.isArray(serverResult.data) ? serverResult.data : [];
+    loadedFromSource = serverResult.state === 'ready' || serverResult.state === 'partial';
     applyStateToTable(serverTable, { ...serverResult, data: visibleServers() });
 
     const catalogResult = await loadEnvelope(api, CATALOG_PATH, {
@@ -168,6 +172,30 @@ export function createMcp({ api, profile, toolbar }) {
     paintView();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.mcp', profile);
+    if (!live) return false;
+    meta = live.meta;
+    servers = mergeProjectedRows(servers, live.rows, (row) => row.name);
+    if (selected?.kind === 'server') {
+      const row = servers.find((item) => item.name === selected.row.name);
+      selected = row ? { kind: 'server', row } : null;
+    }
+    serverTable.setRows(visibleServers());
+    serverTable.setSelected(selected?.kind === 'server' ? selected.row.name : null);
+    paintView();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.mcp'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -341,8 +369,8 @@ export function createMcp({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return servers; },

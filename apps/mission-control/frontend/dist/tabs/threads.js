@@ -21,6 +21,7 @@ import { recordFrom } from '../pure/data-shape.js';
 import {
   loadEnvelope, tabToolbar, runMutation, sideHint, paint,
 } from './_kit.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const ROUTE = 'threads';
 export const LABEL = 'Threads';
@@ -130,7 +131,7 @@ const VIEWS = [
   { value: 'restricted', label: 'Restricted' },
 ];
 
-export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
+export function createThreads({ api, profile, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-threads' });
   const stats = el('div', { class: 'stat-row-host' });
   const main = el('div', { class: 'split-main' });
@@ -145,6 +146,8 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
   // running on it right now, so the two only make sense read together.
   let liveByThread = new Map();
   let selected = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
   let view = 'all';
   let search = '';
 
@@ -251,6 +254,7 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
       return;
     }
     config = result.data || {};
+    loadedFromSource = true;
     rows = threadRows(config);
     for (const row of rows) row.live = liveByThread.get(row.thread_id) || [];
     const wanted = selected?.id ?? null;
@@ -262,6 +266,35 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
     renderSide();
 
     await loadLiveSessions();
+  }
+
+  function applyLiveSessions() {
+    const live = liveRows(liveStore, 'rooms.sessions', profile);
+    if (!live) return false;
+    const next = new Map();
+    for (const session of live.rows) {
+      const threadId = session.thread_id;
+      if (threadId == null) continue;
+      const key = String(threadId);
+      if (!next.has(key)) next.set(key, []);
+      next.get(key).push(session);
+    }
+    liveByThread = next;
+    for (const row of rows) row.live = liveByThread.get(String(row.thread_id)) || [];
+    if (selected) selected = rows.find((row) => row.id === selected.id) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderStats();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['rooms.sessions'], profile, () => {
+      if (root.isConnected) applyLiveSessions();
+    });
   }
 
   /** Best-effort: a thread's live-session column is an overlay, not the source
@@ -570,13 +603,16 @@ export function createThreads({ api, profile, toolbar, onNavigate: navigate }) {
     renderInspector,
     activate(params = {}) {
       const wanted = params.thread || params.id || null;
-      return load().then(() => {
+      bindLive();
+      applyLiveSessions();
+      const ready = loadedFromSource ? Promise.resolve() : load();
+      return ready.then(() => {
         if (!wanted) return;
         const match = rows.find((r) => r.id === String(wanted));
         if (match) { selected = match; table.setSelected(match.id); renderSide(); }
       });
     },
-    deactivate() { return { selection: selected?.id ?? null }; },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return { selection: selected?.id ?? null }; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

@@ -13,6 +13,7 @@ import { createForm } from '../components/form.js';
 import { createDetail } from '../components/detail.js';
 import { applyStateToTable, boolChip, filterInput, loadEnvelope, paint, runMutation, sideHint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'tools';
 export const LABEL = 'Tools / Toolsets';
@@ -50,7 +51,7 @@ function matchesFilter(row, filter) {
   return true;
 }
 
-export function createTools({ api, profile, toolbar }) {
+export function createTools({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-tools' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -61,6 +62,8 @@ export function createTools({ api, profile, toolbar }) {
   let selected = null;
   let filter = 'all';
   let backends = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.name,
@@ -143,6 +146,7 @@ export function createTools({ api, profile, toolbar }) {
     });
     meta = result.meta;
     rows = Array.isArray(result.data) ? result.data : [];
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     applyStateToTable(table, { ...result, data: visibleRows() });
     if (selected) {
       selected = rows.find((r) => r.name === selected.name) || null;
@@ -153,6 +157,26 @@ export function createTools({ api, profile, toolbar }) {
     backends = await loadEnvelope(api, BACKENDS_PATH, { profile, allowEmpty: false });
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.tools', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.name);
+    if (selected) selected = rows.find((row) => row.name === selected.name) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.name ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.tools'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -395,8 +419,8 @@ export function createTools({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

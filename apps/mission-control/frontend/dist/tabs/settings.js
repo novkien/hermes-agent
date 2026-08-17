@@ -14,6 +14,7 @@ import { unsupportedState } from '../ui.js';
 import {
   loadEnvelope, tabToolbar, runMutation, sideHint, paint,
 } from './_kit.js';
+import { bindLiveResources } from './_live.js';
 
 export const ROUTE = 'settings';
 export const LABEL = 'Settings / System';
@@ -91,7 +92,7 @@ function summarize(value) {
   return String(value);
 }
 
-export function createSettings({ api, profile, toolbar }) {
+export function createSettings({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-settings' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -101,26 +102,44 @@ export function createSettings({ api, profile, toolbar }) {
   let meta = null;
   let selectedKey = null;
   let search = '';
+  let unsubscribe = null;
+  let refreshing = false;
 
   const sectionList = el('div', { class: 'section-list' });
   main.append(sectionList);
 
-  async function load() {
-    clear(sectionList);
-    sectionList.append(el('div', { class: 'field-hint', text: 'loading configuration…' }));
-    const result = await loadEnvelope(api, '/api/config', { profile, allowEmpty: false });
-    meta = result.meta;
-    if (result.state !== 'ready') {
-      paint(sectionList, result.state === 'unsupported'
-        ? unsupportedState({ title: 'Config not exposed', reason: result.reason })
-        : el('div', { class: 'notice notice-warn' }, [el('div', { text: result.reason || 'Config unavailable' })]));
-      renderToolbar(toolbar);
-      return;
+  async function load(background = false) {
+    if (refreshing) return;
+    refreshing = true;
+    if (!background || !config) {
+      clear(sectionList);
+      sectionList.append(el('div', { class: 'field-hint', text: 'loading configuration…' }));
     }
-    config = result.data && typeof result.data === 'object' ? result.data : {};
-    renderSections();
-    renderToolbar(toolbar);
-    renderSide();
+    try {
+      const result = await loadEnvelope(api, '/api/config', { profile, allowEmpty: false });
+      meta = result.meta;
+      if (result.state !== 'ready') {
+        if (!config) paint(sectionList, result.state === 'unsupported'
+          ? unsupportedState({ title: 'Config not exposed', reason: result.reason })
+          : el('div', { class: 'notice notice-warn' }, [el('div', { text: result.reason || 'Config unavailable' })]));
+        else meta = { ...(meta || {}), freshness: 'stale', degraded_reason: result.reason };
+        renderToolbar(toolbar);
+        return;
+      }
+      config = result.data && typeof result.data === 'object' ? result.data : {};
+      renderSections();
+      renderToolbar(toolbar);
+      renderSide();
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['system.settings'], profile, () => {
+      if (root.isConnected) load(true).catch(() => null);
+    });
   }
 
   function sectionKeys() {
@@ -254,8 +273,8 @@ export function createSettings({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); return config ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return config; },

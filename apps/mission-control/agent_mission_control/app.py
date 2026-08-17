@@ -246,6 +246,51 @@ class AppDeps:
         self.read_model = read_model or getattr(router, "read_model", None)
 
 
+def _wire_audit_live_updates(deps: AppDeps) -> None:
+    """Publish committed audit transitions without coupling audit durability.
+
+    The listener is deliberately best-effort.  The control store commits
+    first, then this callback updates the read model and event fabric.  The
+    bounded inventory worker remains the convergence path if either live
+    operation is unavailable.
+    """
+    if (
+        not hasattr(deps.store, "set_audit_listener")
+        or deps.event_bus is None
+    ):
+        return
+
+    async def publish_audit_delta(row: dict[str, Any]) -> None:
+        payload = dict(row)
+        revision = 0
+        if deps.read_model is not None:
+            revision, payload = deps.read_model.upsert_entity(
+                "action.audit", row
+            )
+        await deps.event_bus.safe_publish(
+            "audit.changed",
+            "control-store",
+            "audit",
+            str(row.get("id") or ""),
+            payload,
+            coverage="native",
+            profile_id="",
+            resource_key="action.audit",
+            operation="upsert",
+            revision=revision,
+        )
+
+    def schedule_audit_delta(row: dict[str, Any]) -> None:
+        try:
+            asyncio.get_running_loop().create_task(publish_audit_delta(row))
+        except RuntimeError:
+            # Store is also used from synchronous maintenance/tests.  The
+            # worker will reconcile those rows without inventing a loop.
+            pass
+
+    deps.store.set_audit_listener(schedule_audit_delta)
+
+
 def create_app(deps: AppDeps | None = None, settings: Settings | None = None) -> FastAPI:
     """Build the FastAPI app. Pass ``deps`` (fully built) or ``settings``
     (builds real collaborators against env defaults)."""
@@ -313,6 +358,11 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             read_model=read_model,
         )
 
+    # Audit persistence remains the fail-closed source of truth.  Both the
+    # pending and completed forms become immediate live-state deltas only
+    # after their respective commits.
+    _wire_audit_live_updates(deps)
+
     app = FastAPI(title="agent-mission-control", version="0.1.0", docs_url=None,
                   redoc_url=None, openapi_url=None)
     app.state.settings = s
@@ -332,6 +382,13 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
     # end of its route table.
     app.include_router(build_system_manager_router(deps.router))
     app.include_router(build_repository_router(deps.router))
+    if deps.workers is not None:
+        deps.workers.system_manager_client = getattr(
+            deps.router, "system_manager_client", None
+        )
+        deps.workers.repository_service = getattr(
+            deps.router, "repository_service", None
+        )
     app.include_router(deps.router.build())
 
     # Lifespan: start source workers + alert tick + registry probe; stop

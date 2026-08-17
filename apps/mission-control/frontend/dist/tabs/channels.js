@@ -12,6 +12,7 @@ import { createForm } from '../components/form.js';
 import { createDetail } from '../components/detail.js';
 import { applyStateToTable, boolChip, filterInput, loadEnvelope, paint, runMutation, sideHint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'channels';
 export const LABEL = 'Channels / Messaging';
@@ -80,7 +81,7 @@ function matchesFilter(row, filter) {
   return true;
 }
 
-export function createChannels({ api, profile, toolbar }) {
+export function createChannels({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-channels' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -90,6 +91,8 @@ export function createChannels({ api, profile, toolbar }) {
   let meta = null;
   let selected = null;
   let filter = 'active';
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -163,6 +166,7 @@ export function createChannels({ api, profile, toolbar }) {
     });
     meta = result.meta;
     rows = Array.isArray(result.data) ? result.data : [];
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     applyStateToTable(table, { ...result, data: visibleRows() });
     if (selected) {
       selected = rows.find((r) => r.id === selected.id) || null;
@@ -170,6 +174,26 @@ export function createChannels({ api, profile, toolbar }) {
     }
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'config.channels', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    if (selected) selected = rows.find((row) => row.id === selected.id) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['config.channels'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -331,8 +355,8 @@ export function createChannels({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

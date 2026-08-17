@@ -2,6 +2,7 @@
 
 import { el, clear } from '../ui.js';
 import { LLaMA_PROXY_URL, LLaMA_PROXY_MODE } from '../pure/llama-proxy-iframe.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const ROUTE = 'llama-proxy';
 export const LABEL = 'llama-proxy';
@@ -28,7 +29,7 @@ export function diagnosticsStrip() {
   return { mode: LLaMA_PROXY_MODE, probe: HEADER_PROBE };
 }
 
-export function createLlamaProxy() {
+export function createLlamaProxy({ liveStore, profile } = {}) {
   const root = el('div', { class: 'tab tab-llama-proxy' });
   const toolbar = el('div', { class: 'tab-toolbar' });
   const diagnostics = el('div', {
@@ -48,6 +49,8 @@ export function createLlamaProxy() {
   let srcAssigned = false;
   let loadState = 'not-loaded';
   let lastChangedAt = null;
+  let backendHealth = null;
+  let unsubscribe = null;
 
   function updateDiagnostics() {
     clear(diagnostics);
@@ -58,12 +61,29 @@ export function createLlamaProxy() {
         : 'chip-warning';
     diagnostics.append(
       el('span', { class: `chip ${stateClass}`, text: loadState }),
+      backendHealth ? el('span', {
+        class: `chip ${backendHealth.healthy ? 'chip-ready' : 'chip-error'}`,
+        text: `server ${backendHealth.status || (backendHealth.healthy ? 'online' : 'offline')}`,
+      }) : null,
       el('span', { class: 'mono', text: LLaMA_PROXY_URL }),
       el('span', { text: `mode: ${LLaMA_PROXY_MODE}` }),
       lastChangedAt
         ? el('span', { class: 'mono', text: `updated: ${lastChangedAt}` })
         : null,
     );
+  }
+
+  function applyLiveHealth() {
+    const live = liveRows(liveStore, 'iframe.health', profile);
+    backendHealth = live?.rows?.find((row) => row.service === 'llama-proxy') || backendHealth;
+    updateDiagnostics();
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['iframe.health'], profile, () => {
+      if (root.isConnected) applyLiveHealth();
+    });
   }
 
   function assignSourceOnce() {
@@ -117,10 +137,13 @@ export function createLlamaProxy() {
     },
     activate() {
       root.hidden = false;
+      bindLive();
+      applyLiveHealth();
       assignSourceOnce();
       return Promise.resolve();
     },
     deactivate() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       root.hidden = true;
       return { scroll: 0, loadState };
     },

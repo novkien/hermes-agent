@@ -14,6 +14,7 @@ import {
   applyStateToTable, boolChip, filterInput, loadEnvelope, paint, primaryButton, runMutation, sideHint, tabToolbar,
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'webhooks';
 export const LABEL = 'Webhooks';
@@ -39,7 +40,7 @@ export function renderWebhooks(envelope) {
 
 const DELIVERY_MODES = ['log', 'telegram', 'discord', 'slack'];
 
-export function createWebhooks({ api, profile, toolbar }) {
+export function createWebhooks({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-webhooks' });
   const banner = el('div', { class: 'tab-banner' });
   const main = el('div', { class: 'split-main' });
@@ -51,6 +52,8 @@ export function createWebhooks({ api, profile, toolbar }) {
   let meta = null;
   let selected = null;
   let creating = false;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.name,
@@ -117,6 +120,7 @@ export function createWebhooks({ api, profile, toolbar }) {
     const body = result.data && typeof result.data === 'object' ? result.data : {};
     subsystem = { enabled: body.enabled === true, base_url: body.base_url || '' };
     rows = Array.isArray(body.subscriptions) ? body.subscriptions : [];
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     applyStateToTable(table, {
       ...result,
       state: result.state === 'ready' && !visibleRows().length ? 'empty' : result.state,
@@ -129,6 +133,27 @@ export function createWebhooks({ api, profile, toolbar }) {
     renderBanner();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'config.webhooks', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.name);
+    if (selected) selected = rows.find((row) => row.name === selected.name) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.name ?? null);
+    renderToolbar(toolbar);
+    renderBanner();
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['config.webhooks'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderBanner() {
@@ -294,8 +319,8 @@ export function createWebhooks({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

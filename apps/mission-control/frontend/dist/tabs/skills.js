@@ -43,6 +43,7 @@ import { icon } from '../icons.js';
 import { paint, tabToolbar } from './_kit.js';
 import { provenanceBadge } from '../provenance.js';
 import { renderMarkdown } from '../markdown-render.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 import { createCodeEditor } from '../components/code-editor.js';
 import { rackShell, rackCard, rackMore } from '../components/rack.js';
 import { toast } from '../components/toast.js';
@@ -109,7 +110,7 @@ export function renderSkills(envelope) {
 }
 
 // _kit provides the shared tab header.
-export function createSkills({ api, profile, refreshInspector }) {
+export function createSkills({ api, profile, refreshInspector, liveStore }) {
   const root = el('div', { class: 'tab tab-skills' });
   const toolbar = el('div', { class: 'skills-toolbar-host' });
   const stage = el('div', { class: 'skills-stage' });
@@ -138,6 +139,8 @@ export function createSkills({ api, profile, refreshInspector }) {
   let busyAction = null;
   let pendingRefresh = null;
   let policyBusy = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
   // The action bar is rebuilt on every render, so the editor's dirty callback
   // has to reach the *current* one rather than the node it was created with.
   let docActionsRow = null;
@@ -185,6 +188,7 @@ export function createSkills({ api, profile, refreshInspector }) {
     }
 
     rows = normalizeSkills(listEnvelope?.data);
+    loadedFromSource = skillsResult.status === 'fulfilled';
     capabilities = supportedActions(listEnvelope?.meta);
     policyBusy = null;
     // A selection that no longer exists upstream is dropped rather than left
@@ -194,6 +198,29 @@ export function createSkills({ api, profile, refreshInspector }) {
     render();
     notifyInspector();
     if (selected) await loadDoc(selected);
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.skills', profile);
+    if (!live) return false;
+    rows = mergeProjectedRows(rows, normalizeSkills(live.rows), (skill) => skill.name);
+    listEnvelope = {
+      ...(listEnvelope || {}),
+      data: { skills: rows },
+      meta: { ...(listEnvelope?.meta || {}), ...live.meta },
+    };
+    if (selected && !rows.some((skill) => skill.name === selected)) selected = null;
+    renderToolbar();
+    if (!selected) render();
+    notifyInspector();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.skills'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   async function loadDoc(name, { force = false } = {}) {
@@ -957,7 +984,10 @@ export function createSkills({ api, profile, refreshInspector }) {
     },
     activate(params = {}) {
       if (params?.skill && params.skill !== selected) selected = params.skill;
-      return load().catch((err) => {
+      bindLive();
+      applyLive();
+      const ready = loadedFromSource ? Promise.resolve() : load();
+      return ready.catch((err) => {
         clear(stage);
         stage.append(errorPanel({
           message: `Skills failed: ${err.message}`,
@@ -967,6 +997,7 @@ export function createSkills({ api, profile, refreshInspector }) {
       });
     },
     deactivate() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       editor?.destroy?.();
       if (pendingRefresh) {
         window.clearTimeout(pendingRefresh);

@@ -468,11 +468,16 @@ export async function boot({ root } = {}) {
         const loader = PRIMARY_MODULES[key] || S7_LOADERS[key];
         if (!loader) throw new Error(`no module for route ${key}`);
         const create = await loader();
+        // Every retained route owns detached chrome hosts. A late async load
+        // from an inactive tab can update only its own host, never repaint the
+        // active route's toolbar or inspector.
+        const instanceToolbarHost = el('div', { class: 'route-toolbar-host', style: 'display:contents' });
+        const instanceInspectorHost = el('div', { class: 'route-inspector-host', style: 'display:contents' });
         const factoryArgs = {
           api, profile, events: null, sse, onNavigate: navigate,
           liveStore,
           refreshInspector: renderInspectorPlaceholder,
-          toolbar: topbarSlot,
+          toolbar: instanceToolbarHost,
         };
         let next = create(factoryArgs);
         while (next && typeof next.then === 'function') next = await next;
@@ -484,6 +489,8 @@ export async function boot({ root } = {}) {
         if (!instance || typeof instance.mount !== 'function') {
           throw new Error(`route factory for ${key} returned non-mountable instance (${typeof instance})`);
         }
+        instance.__toolbarHost = instanceToolbarHost;
+        instance.__inspectorHost = instanceInspectorHost;
       }
       tabInstances.set(id, instance);
       instance.mount(routeRoot);
@@ -494,9 +501,10 @@ export async function boot({ root } = {}) {
     retainedRoutes.activate(id);
     // Re-painted per activation so a cached instance still owns the topbar slot
     // after the breadcrumb render cleared it.
+    clear(topbarSlot);
+    if (instance.__toolbarHost) topbarSlot.append(instance.__toolbarHost);
     if (typeof instance.renderToolbar === 'function') {
-      clear(topbarSlot);
-      instance.renderToolbar(topbarSlot);
+      instance.renderToolbar(instance.__toolbarHost || topbarSlot);
     }
     if (typeof instance.setSourceHealth === 'function') instance.setSourceHealth(capabilitiesEnvelope);
     // currentInstanceKey is only known now, so a tab-owned inspector renders here.
@@ -515,7 +523,9 @@ export async function boot({ root } = {}) {
     const owner = expectedId ? tabInstances.get(expectedId) : null;
     if (owner && typeof owner.renderInspector === 'function') {
       clear(inspector);
-      owner.renderInspector(inspector);
+      const host = owner.__inspectorHost || inspector;
+      if (host !== inspector) inspector.append(host);
+      owner.renderInspector(host);
       return;
     }
     clear(inspector);

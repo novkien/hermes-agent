@@ -14,6 +14,7 @@ import {
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
 import { humanSize } from './files.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'artifacts';
 export const LABEL = 'Artifacts';
@@ -61,7 +62,7 @@ export function renderTaskAttachments(rows, task = null) {
   }));
 }
 
-export function createArtifacts({ api, profile, toolbar, onNavigate: navigate }) {
+export function createArtifacts({ api, profile, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-artifacts' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -71,6 +72,8 @@ export function createArtifacts({ api, profile, toolbar, onNavigate: navigate })
   let meta = null;
   let scanned = 0;
   let selected = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -165,6 +168,7 @@ export function createArtifacts({ api, profile, toolbar, onNavigate: navigate })
       }
     }
     rows = collected;
+    loadedFromSource = true;
     applyStateToTable(table, {
       ...taskResult,
       state: visibleRows().length ? 'ready' : 'empty',
@@ -176,6 +180,26 @@ export function createArtifacts({ api, profile, toolbar, onNavigate: navigate })
     }
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'artifacts.metadata', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    if (selected) selected = rows.find((row) => row.id === selected.id) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['artifacts.metadata'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -241,8 +265,8 @@ export function createArtifacts({ api, profile, toolbar, onNavigate: navigate })
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },

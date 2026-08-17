@@ -16,6 +16,7 @@ import {
   applyStateToTable, filterInput, loadEnvelope, paint, sideHint, tabToolbar,
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'files';
 export const LABEL = 'Files';
@@ -82,7 +83,7 @@ export function breadcrumbSegments(path) {
 
 const PREVIEWABLE = /^(text\/|application\/(json|xml|yaml|x-yaml|javascript|x-sh))/;
 
-export function createFiles({ api, profile, toolbar }) {
+export function createFiles({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-files' });
   const crumbs = el('nav', { class: 'crumbs', 'aria-label': 'Path' });
   const main = el('div', { class: 'split-main' });
@@ -104,6 +105,9 @@ export function createFiles({ api, profile, toolbar }) {
   }
   let meta = null;
   let selected = null;
+  let unsubscribe = null;
+  let loadedRootFromSource = false;
+  let atRoot = true;
 
   const table = createTable({
     rowId: (row) => row.path,
@@ -161,6 +165,7 @@ export function createFiles({ api, profile, toolbar }) {
   }
 
   async function load(path = null) {
+    atRoot = path == null;
     table.setLoading();
     const query = path ? `?path=${encodeURIComponent(path)}` : '';
     const result = await loadEnvelope(api, `/api/upstream/api/files${query}`, { profile, allowEmpty: false });
@@ -176,6 +181,7 @@ export function createFiles({ api, profile, toolbar }) {
     cwd = body.path || path || null;
     parent = body.parent || null;
     rows = Array.isArray(body.entries) ? body.entries : [];
+    if (path == null) loadedRootFromSource = true;
     applyStateToTable(table, {
       ...result,
       state: visibleRows().length ? 'ready' : 'empty',
@@ -184,6 +190,27 @@ export function createFiles({ api, profile, toolbar }) {
     renderCrumbs();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    if (!atRoot) return false;
+    const live = liveRows(liveStore, 'files.metadata', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.path);
+    if (selected) selected = rows.find((row) => row.path === selected.path) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.path ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['files.metadata'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderCrumbs() {
@@ -313,8 +340,8 @@ export function createFiles({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(cwd); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return (cwd || !loadedRootFromSource) ? load(cwd) : Promise.resolve(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: () => load(cwd),
     renderToolbar,
     get data() { return rows; },

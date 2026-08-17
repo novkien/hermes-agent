@@ -795,7 +795,8 @@ async def test_source_worker_contracts() -> None:
     workers.build()
     assert set(workers.workers) == {
         "kanban", "permits", "issues", "cron", "sessions", "running", "health",
-        "capabilities", "analytics",
+        "capabilities", "analytics", "inventory", "settings-signal",
+        "logs-signal", "iframe-health",
     }
 
     kanban = await workers._fetch_kanban()

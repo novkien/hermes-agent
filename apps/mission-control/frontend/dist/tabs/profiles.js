@@ -15,6 +15,7 @@ import {
   applyStateToTable, filterInput, loadEnvelope, paint, primaryButton, runMutation, sideHint, tabToolbar,
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'profiles';
 export const LABEL = 'Profiles';
@@ -41,7 +42,7 @@ export function renderProfiles(envelope, activeName = null) {
   });
 }
 
-export function createProfiles({ api, profile, toolbar }) {
+export function createProfiles({ api, profile, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-profiles' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -51,6 +52,8 @@ export function createProfiles({ api, profile, toolbar }) {
   let meta = null;
   let selected = null;
   let creating = false;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.name,
@@ -105,6 +108,7 @@ export function createProfiles({ api, profile, toolbar }) {
     });
     meta = result.meta;
     rows = Array.isArray(result.data) ? result.data : [];
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     applyStateToTable(table, { ...result, data: visibleRows() });
     if (selected) {
       const fresh = rows.find((r) => r.name === selected.name);
@@ -113,6 +117,26 @@ export function createProfiles({ api, profile, toolbar }) {
     }
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'catalog.profiles', profile);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.name);
+    if (selected) selected = rows.find((row) => row.name === selected.name) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.name ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe || !liveStore) return;
+    unsubscribe = bindLiveResources(liveStore, ['catalog.profiles'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   function renderToolbar(host) {
@@ -293,8 +317,8 @@ export function createProfiles({ api, profile, toolbar }) {
   return {
     mount(container) { clear(container); container.append(root); },
     renderInspector,
-    activate() { return load(); },
-    deactivate() { return {}; },
+    activate() { bindLive(); applyLive(); return loadedFromSource ? Promise.resolve() : load(); },
+    deactivate() { if (unsubscribe) { unsubscribe(); unsubscribe = null; } return {}; },
     refresh: load,
     renderToolbar,
     get data() { return rows; },
