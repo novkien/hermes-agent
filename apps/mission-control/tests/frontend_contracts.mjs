@@ -165,7 +165,10 @@ assert.deepEqual(logLines({ file: '/tmp/test.log', lines: ['first', 'second'] })
 // Skills prompt visibility uses narrow profile writes and a lossless
 // one-topic list rewrite (Hermes replaces lists rather than merging them).
 const skillModeConfig = {
-  skills: { mode: 'prune', disabled: ['keep'] },
+  skills: {
+    mode: { prune: ['research'], invisible: ['private'] },
+    disabled: ['keep'],
+  },
   platforms: {
     telegram: {
       extra: {
@@ -175,25 +178,37 @@ const skillModeConfig = {
           untouched_group: true,
           topics: [
             {
-              thread_id: '20', name: 'Coder', skills_mode: 'visible',
+              thread_id: '20', name: 'Coder',
+              skills_mode: { prune: ['coding'], invisible: [] },
               enabled_skills: ['coding'], enabled_toolsets: ['terminal'],
               prompt: 'keep me',
             },
-            { thread_id: '21', name: 'Research', skills_mode: 'invisible' },
+            {
+              thread_id: '21', name: 'Research',
+              skills_mode: { invisible: ['private'] },
+            },
           ],
         }],
       },
     },
   },
 };
-assert.equal(profileSkillPromptMode(skillModeConfig), 'prune');
-assert.equal(profileSkillPromptMode({}), 'visible');
-assert.equal(profileSkillPromptMode({ skills: { mode: 'compact' } }), null);
-assert.deepEqual(profileSkillModePatch('invisible'), { skills: { mode: 'invisible' } });
-assert.throws(() => profileSkillModePatch('compact'));
+assert.deepEqual(profileSkillPromptMode(skillModeConfig), {
+  prune: ['research'], invisible: ['private'],
+});
+assert.deepEqual(profileSkillPromptMode({}), { prune: [], invisible: [] });
+assert.equal(profileSkillPromptMode({ skills: { mode: 'prune' } }), null);
+assert.deepEqual(
+  profileSkillModePatch({ invisible: ['private'] }),
+  { skills: { mode: { prune: [], invisible: ['private'] } } },
+);
+assert.throws(() => profileSkillModePatch({ prune: ['same'], invisible: ['same'] }));
 assert.deepEqual(
   configuredSkillModeTopics(skillModeConfig).map((row) => [row.threadId, row.mode]),
-  [['20', 'visible'], ['21', 'invisible']],
+  [
+    ['20', { prune: ['coding'], invisible: [] }],
+    ['21', { prune: [], invisible: ['private'] }],
+  ],
 );
 const inheritedTopicPatch = topicSkillModePatch(
   skillModeConfig, '-100', '20', 'inherit',
@@ -203,9 +218,9 @@ assert.equal('skills_mode' in inheritedTopic, false);
 assert.deepEqual(inheritedTopic.enabled_skills, ['coding']);
 assert.deepEqual(inheritedTopic.enabled_toolsets, ['terminal']);
 assert.equal(inheritedTopic.prompt, 'keep me');
-assert.equal(
+assert.deepEqual(
   inheritedTopicPatch.platforms.telegram.extra.group_topics[0].topics[1].skills_mode,
-  'invisible',
+  { invisible: ['private'] },
 );
 assert.equal(
   inheritedTopicPatch.platforms.telegram.extra.group_topics[0].untouched_group,
@@ -758,8 +773,10 @@ assert.equal(turnElapsed(turn), 90);
 // silent. Escalation starts only at the first explicit `_thinking` frame.
 const quiet = reduceTurn(createTurn(0), frame('run.started', {}), 1000);
 assert.equal(quiet.phase, 'starting');
-assert.equal(activityLabel(quiet, 1000), 'Starting the run');
-assert.equal(activityLabel(quiet, 90000), 'Starting the run');
+assert.equal(activityLabel(quiet, 1000), 'Forming…');
+assert.equal(activityLabel(quiet, 2999), 'Forming…');
+assert.equal(activityLabel(quiet, 3000), 'Clouding…');
+assert.equal(activityLabel(quiet, 7000), 'Scampering…');
 
 let explicitThinking = reduceTurn(quiet, frame('tool.progress', {
   tool_name: NARRATION_TOOL, delta: 'Working through it.',
@@ -784,7 +801,7 @@ assert.equal(explicitThinking.thinkingStartedAt, null);
 explicitThinking = reduceTurn(explicitThinking, frame('message.started', {
   message_id: 'm2',
 }), 67000);
-assert.equal(activityLabel(explicitThinking, 120000), 'Starting the run');
+assert.equal(activityLabel(explicitThinking, 67000), 'Forming…');
 explicitThinking = reduceTurn(explicitThinking, frame('tool.progress', {
   tool_name: NARRATION_TOOL, delta: 'Thinking again.',
 }), 100000);

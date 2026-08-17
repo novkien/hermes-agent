@@ -1,13 +1,37 @@
-export const SKILL_PROMPT_MODES = Object.freeze(['visible', 'prune', 'invisible']);
+export const SKILL_PROMPT_MODES = Object.freeze(['prune', 'invisible']);
 export const INHERIT_SKILL_PROMPT_MODE = 'inherit';
 
+function normalizedSkillNames(value) {
+  if (!Array.isArray(value)) return null;
+  const names = [];
+  for (const name of value) {
+    if (typeof name !== 'string' || !name || name.trim() !== name) return null;
+    names.push(name);
+  }
+  return [...new Set(names)].sort();
+}
+
+export function normalizeSkillPromptMode(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (Object.keys(value).some((key) => !SKILL_PROMPT_MODES.includes(key))) return null;
+  const prune = normalizedSkillNames(value.prune ?? []);
+  const invisible = normalizedSkillNames(value.invisible ?? []);
+  if (!prune || !invisible) return null;
+  if (prune.some((name) => invisible.includes(name))) return null;
+  return { prune, invisible };
+}
+
 export function isSkillPromptMode(value) {
-  return SKILL_PROMPT_MODES.includes(value);
+  return normalizeSkillPromptMode(value) !== null;
+}
+
+export function emptySkillPromptMode() {
+  return { prune: [], invisible: [] };
 }
 
 export function profileSkillPromptMode(config) {
-  const value = config?.skills?.mode ?? 'visible';
-  return isSkillPromptMode(value) ? value : null;
+  const value = config?.skills?.mode ?? {};
+  return normalizeSkillPromptMode(value);
 }
 
 /** Match the gateway's typed-first group_topics precedence. */
@@ -50,7 +74,7 @@ export function configuredSkillModeTopics(config) {
         name: topic?.name || `thread ${topic?.thread_id ?? ''}`,
         mode: topic?.skills_mode === undefined
           ? INHERIT_SKILL_PROMPT_MODE
-          : (isSkillPromptMode(topic.skills_mode) ? topic.skills_mode : null),
+          : normalizeSkillPromptMode(topic.skills_mode),
       });
     }
   }
@@ -58,8 +82,9 @@ export function configuredSkillModeTopics(config) {
 }
 
 export function profileSkillModePatch(mode) {
-  if (!isSkillPromptMode(mode)) throw new Error(`Invalid skills mode: ${mode}`);
-  return { skills: { mode } };
+  const normalized = normalizeSkillPromptMode(mode);
+  if (!normalized) throw new Error('Invalid skills mode policy');
+  return { skills: { mode: normalized } };
 }
 
 /**
@@ -67,9 +92,10 @@ export function profileSkillModePatch(mode) {
  * sibling and every unrelated field byte-for-byte at the object level.
  */
 export function topicSkillModePatch(config, chatId, threadId, mode) {
-  if (mode !== INHERIT_SKILL_PROMPT_MODE && !isSkillPromptMode(mode)) {
-    throw new Error(`Invalid topic skills mode: ${mode}`);
-  }
+  const normalized = mode === INHERIT_SKILL_PROMPT_MODE
+    ? INHERIT_SKILL_PROMPT_MODE
+    : normalizeSkillPromptMode(mode);
+  if (!normalized) throw new Error('Invalid topic skills mode policy');
   const path = topicExtraPath(config);
   const groups = atPath(config, path)?.group_topics;
   let matched = false;
@@ -81,8 +107,8 @@ export function topicSkillModePatch(config, chatId, threadId, mode) {
         if (String(topic?.thread_id ?? '') !== String(threadId)) return topic;
         matched = true;
         const updated = { ...topic };
-        if (mode === INHERIT_SKILL_PROMPT_MODE) delete updated.skills_mode;
-        else updated.skills_mode = mode;
+        if (normalized === INHERIT_SKILL_PROMPT_MODE) delete updated.skills_mode;
+        else updated.skills_mode = normalized;
         return updated;
       }),
     };

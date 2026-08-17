@@ -1719,7 +1719,7 @@ def build_skills_system_prompt(
     available_toolsets: "set[str] | None" = None,
     compact_categories: "frozenset[str] | None" = None,
     enabled_skills: "tuple[str, ...] | list[str] | None" = None,
-    mode: str = "visible",
+    mode: "dict[str, list[str] | tuple[str, ...]] | None" = None,
 ) -> str:
     """Build a compact skill index for the system prompt.
 
@@ -1735,20 +1735,23 @@ def build_skills_system_prompt(
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
 
-    ``mode`` is the operator-owned visibility policy and takes precedence over
-    posture hints: ``visible`` renders every description, ``prune`` limits each
-    rendered skill description to 60 Unicode code points, and ``invisible``
-    renders category labels plus skill names only. Skill discovery and loading
-    are unchanged in every mode.
+    ``mode`` is the operator-owned per-skill visibility policy. Its ``prune``
+    list limits matching descriptions to 60 Unicode code points; its
+    ``invisible`` list renders matching names without descriptions. Skills in
+    neither list remain fully visible. Skill discovery and loading are never
+    changed by this policy.
     """
     from agent.skill_context import (
         SKILLS_MODE_INVISIBLE,
         SKILLS_MODE_PRUNE,
+        empty_skills_mode,
         prune_skill_description,
+        skill_mode_for_name,
+        skills_mode_cache_key,
         validate_skills_mode,
     )
 
-    mode = validate_skills_mode(mode)
+    mode = validate_skills_mode(mode if mode is not None else empty_skills_mode())
     skills_dir = get_skills_dir()
     external_dirs = get_all_skills_dirs()[1:]  # skip local (index 0)
 
@@ -1770,7 +1773,7 @@ def build_skills_system_prompt(
         tuple(sorted(disabled)),
         tuple(sorted(compact_categories or ())),
         tuple(sorted(enabled)) if enabled is not None else None,
-        mode,
+        skills_mode_cache_key(mode),
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -1938,57 +1941,67 @@ def build_skills_system_prompt(
             except Exception as e:
                 logger.debug("Could not read external skill description %s: %s", desc_file, e)
 
-    # The explicit visibility policy is authoritative over posture-driven
-    # category demotion. In particular, ``visible`` always means full and
-    # ``prune`` always means one independently clamped description per skill.
-    # ``compact_categories`` remains in the cache key for call-site
-    # compatibility, but cannot weaken or partially override these modes.
-    demoted = (
-        frozenset(skills_by_category)
-        if mode == SKILLS_MODE_INVISIBLE
-        else frozenset()
-    )
-
-    hidden_note = ""
-    if mode == SKILLS_MODE_INVISIBLE:
-        hidden_note = (
-            "\n(Skill descriptions are hidden by the active skills.mode policy; "
-            "every listed skill remains loadable with skill_view(name).)"
-        )
-    elif mode == SKILLS_MODE_PRUNE:
-        hidden_note = (
-            "\n(Skill descriptions are limited to 60 characters by the active "
-            "skills.mode policy; load a skill with skill_view(name) for its full instructions.)"
-        )
+    # The explicit per-skill policy is authoritative over posture-driven
+    # category demotion. ``compact_categories`` remains in the cache key for
+    # call-site compatibility but cannot silently weaken a skill description.
+    pruned_rendered = 0
+    invisible_rendered = 0
     if not skills_by_category:
         result = ""
     else:
         index_lines = []
         for category in sorted(skills_by_category.keys()):
-            # Deduplicate and sort skills within each category
+            # Deduplicate by rendered name and sort skills within each category.
+            entries = []
             seen = set()
-            if category in demoted:
-                names = sorted({name for name, _ in skills_by_category[category]})
-                index_lines.append(f"  {category} [names only]: {', '.join(names)}")
-                continue
-            cat_desc = category_descriptions.get(category, "") if mode == "visible" else ""
-            if cat_desc:
-                index_lines.append(f"  {category}: {cat_desc}")
-            else:
-                index_lines.append(f"  {category}:")
             for name, desc in sorted(skills_by_category[category], key=lambda x: x[0]):
                 if name in seen:
                     continue
                 seen.add(name)
-                rendered_desc = (
-                    prune_skill_description(desc)
-                    if mode == SKILLS_MODE_PRUNE
-                    else desc
-                )
+                entries.append((name, desc, skill_mode_for_name(mode, name)))
+
+            # Category descriptions remain visible only when this category has
+            # at least one fully visible skill. A category containing only
+            # pruned/invisible skills must not leak a broad substitute summary.
+            cat_desc = (
+                category_descriptions.get(category, "")
+                if any(entry_mode == "visible" for _, _, entry_mode in entries)
+                else ""
+            )
+            if cat_desc:
+                index_lines.append(f"  {category}: {cat_desc}")
+            else:
+                index_lines.append(f"  {category}:")
+            for name, desc, entry_mode in entries:
+                if entry_mode == SKILLS_MODE_INVISIBLE:
+                    invisible_rendered += 1
+                    rendered_desc = ""
+                elif entry_mode == SKILLS_MODE_PRUNE:
+                    pruned_rendered += 1
+                    rendered_desc = prune_skill_description(desc)
+                else:
+                    rendered_desc = desc
                 if rendered_desc:
                     index_lines.append(f"    - {name}: {rendered_desc}")
                 else:
                     index_lines.append(f"    - {name}")
+
+        policy_notes = []
+        if pruned_rendered:
+            policy_notes.append(
+                f"{pruned_rendered} skill description(s) are limited to 60 characters"
+            )
+        if invisible_rendered:
+            policy_notes.append(
+                f"{invisible_rendered} skill description(s) are hidden"
+            )
+        hidden_note = (
+            "\n(" + "; ".join(policy_notes)
+            + " by the active skills.mode policy; every listed skill remains "
+            "loadable with skill_view(name).)"
+            if policy_notes
+            else ""
+        )
 
         result = (
             "## Skills (mandatory)\n"

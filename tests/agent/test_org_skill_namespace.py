@@ -130,7 +130,7 @@ class TestListingCollisionsAndLabels:
         assert "[org-shared: by bens-macbook]" in out
         assert "personal-a" in out
 
-        pruned = pb.build_skills_system_prompt(mode="prune")
+        pruned = pb.build_skills_system_prompt(mode={"prune": ["shared-x"]})
         shared_line = next(
             line for line in pruned.splitlines() if "- shared-x:" in line
         )
@@ -138,7 +138,7 @@ class TestListingCollisionsAndLabels:
         assert rendered_description.startswith("[org-shared: by bens-macbook]")
         assert len(rendered_description) <= 60
 
-        invisible = pb.build_skills_system_prompt(mode="invisible")
+        invisible = pb.build_skills_system_prompt(mode={"invisible": ["shared-x"]})
         index = invisible.split("<available_skills>", 1)[1].split(
             "</available_skills>", 1
         )[0]

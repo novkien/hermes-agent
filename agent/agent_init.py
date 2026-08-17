@@ -570,7 +570,7 @@ def init_agent(
     requested_provider: str = None,
     auto_loaded_skill_prompt: str = "",
     enabled_skills: List[str] = None,
-    skills_mode: str = None,
+    skills_mode: dict = None,
 ):
     """
     Initialize the AI Agent.

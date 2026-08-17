@@ -310,7 +310,7 @@ class TestBuildSkillsSystemPrompt:
         assert "thread-writer" in visible
         assert "Write threads" in visible
 
-    def test_visibility_modes_are_exact_and_cache_isolated(
+    def test_per_skill_visibility_lists_are_exact_and_cache_isolated(
         self, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -333,11 +333,23 @@ class TestBuildSkillsSystemPrompt:
             "---\nname: short-skill\ndescription: Short detail.\n---\n",
             encoding="utf-8",
         )
+        visible_skill = category / "visible-skill"
+        visible_skill.mkdir()
+        (visible_skill / "SKILL.md").write_text(
+            "---\nname: visible-skill\ndescription: Full visible detail.\n---\n",
+            encoding="utf-8",
+        )
 
-        visible = build_skills_system_prompt(mode="visible")
-        pruned = build_skills_system_prompt(mode="prune")
-        invisible = build_skills_system_prompt(mode="invisible")
-        visible_again = build_skills_system_prompt(mode="visible")
+        visible = build_skills_system_prompt(mode={})
+        mixed = build_skills_system_prompt(mode={
+            "prune": ["long-skill"],
+            "invisible": ["short-skill"],
+        })
+        other_policy = build_skills_system_prompt(mode={
+            "prune": ["short-skill"],
+            "invisible": ["long-skill"],
+        })
+        visible_again = build_skills_system_prompt(mode={})
 
         def index(prompt):
             return prompt.split("<available_skills>\n", 1)[1].split(
@@ -345,22 +357,22 @@ class TestBuildSkillsSystemPrompt:
             )[0]
 
         visible_index = index(visible)
-        pruned_index = index(pruned)
-        invisible_index = index(invisible)
+        mixed_index = index(mixed)
+        other_index = index(other_policy)
 
         assert long_desc in visible_index
         assert "Category detail must only be visible in full mode." in visible_index
-        assert "技" * 59 + "…" in pruned_index
-        assert "TAIL-MUST-NOT-LEAK" not in pruned_index
-        assert "Short detail." in pruned_index
-        assert "Category detail must only be visible in full mode." not in pruned_index
-        assert "long-skill" in invisible_index
-        assert "short-skill" in invisible_index
-        assert long_desc not in invisible_index
-        assert "Short detail." not in invisible_index
-        assert "Category detail must only be visible in full mode." not in invisible_index
+        assert "技" * 59 + "…" in mixed_index
+        assert "TAIL-MUST-NOT-LEAK" not in mixed_index
+        assert "    - short-skill\n" in mixed_index
+        assert "Short detail." not in mixed_index
+        assert "Full visible detail." in mixed_index
+        assert "Category detail must only be visible in full mode." in mixed_index
+        assert "    - long-skill\n" in other_index
+        assert long_desc not in other_index
+        assert "Short detail." in other_index
         assert visible_again == visible
-        assert visible != pruned != invisible
+        assert visible != mixed != other_policy
 
     def test_invalid_visibility_mode_is_rejected(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -370,7 +382,7 @@ class TestBuildSkillsSystemPrompt:
             "---\nname: sample\ndescription: Sample detail.\n---\n"
         )
 
-        with pytest.raises(ValueError, match="skills.mode must be one of"):
+        with pytest.raises(ValueError, match="skills.mode must be a mapping"):
             build_skills_system_prompt(mode="compact")
 
     def test_invisible_preserves_enabled_external_names_and_disabled_policy(
@@ -404,7 +416,7 @@ class TestBuildSkillsSystemPrompt:
         monkeypatch.setitem(globals_, "_load_skills_snapshot", lambda *_a: None)
         monkeypatch.setitem(globals_, "_write_skills_snapshot", lambda *_a: None)
         result = build_skills_system_prompt(
-            mode="invisible",
+            mode={"invisible": ["local-skill", "external-skill"]},
             enabled_skills=["local-skill", "disabled-skill", "external-skill"],
         )
         index = result.split("<available_skills>", 1)[1].split(

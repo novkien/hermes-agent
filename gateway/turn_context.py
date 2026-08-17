@@ -100,7 +100,7 @@ class TurnContext:
     enabled_toolsets: Any = None
     disabled_toolsets: Any = None
     enabled_skills: Any = None
-    skills_mode: str = "visible"
+    skills_mode: Any = None
     enabled_toolsets_policy_fingerprint: str = "legacy"
     auto_loaded_skill_prompt: str = ""
     log_mode_enabled: bool = False

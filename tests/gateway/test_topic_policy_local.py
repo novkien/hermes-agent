@@ -98,8 +98,11 @@ def test_enabled_toolsets_empty_valid_unknown_fails_closed():
 
 def test_topic_skills_mode_override_and_validation():
     assert resolve_topic_skills_mode_override(
-        _source(), _config({"thread_id": "20", "skills_mode": "prune"})
-    ) == "prune"
+        _source(), _config({
+            "thread_id": "20",
+            "skills_mode": {"prune": ["research"], "invisible": ["private"]},
+        })
+    ) == {"prune": ("research",), "invisible": ("private",)}
     assert resolve_topic_skills_mode_override(
         _source(), _config({"thread_id": "20"})
     ) is None
@@ -108,7 +111,7 @@ def test_topic_skills_mode_override_and_validation():
 
     with pytest.raises(ValueError, match="Telegram group topic skills_mode"):
         resolve_topic_skills_mode_override(
-            _source(), _config({"thread_id": "20", "skills_mode": "compact"})
+            _source(), _config({"thread_id": "20", "skills_mode": "prune"})
         )
 
 
@@ -189,7 +192,7 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
             "thread_id": "20",
             "enabled_skills": ["audit"],
             "enabled_toolsets": ["terminal"],
-            "skills_mode": "prune",
+            "skills_mode": {"prune": ["audit"]},
         }
     )
     first = runner._frozen_topic_policy(_source(), "session-key", first_config)
@@ -199,7 +202,7 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
             "thread_id": "20",
             "enabled_skills": ["coding"],
             "enabled_toolsets": [],
-            "skills_mode": "invisible",
+            "skills_mode": {"invisible": ["coding"]},
         }
     )
     resumed = runner._frozen_topic_policy(
@@ -209,12 +212,18 @@ def test_topic_policy_is_frozen_for_existing_session(monkeypatch):
     assert resumed == first
     assert resumed["enabled_skills"] == ["audit"]
     assert resumed["enabled_toolsets"] == ["terminal"]
-    assert resumed["skills_mode"] == "prune"
+    assert resumed["skills_mode"] == {
+        "prune": ["audit"],
+        "invisible": [],
+    }
 
     # /new keeps the routing key but replaces SessionEntry with empty metadata.
     runner.session_store.values.clear()
     fresh = runner._frozen_topic_policy(_source(), "session-key", changed_config)
-    assert fresh["skills_mode"] == "invisible"
+    assert fresh["skills_mode"] == {
+        "prune": [],
+        "invisible": ["coding"],
+    }
 
 
 def test_telegram_session_freezes_profile_mode_when_topic_inherits(monkeypatch):
@@ -234,9 +243,9 @@ def test_telegram_session_freezes_profile_mode_when_topic_inherits(monkeypatch):
     runner.session_store = MetadataStore()
 
     visible = _config({"thread_id": "20"})
-    visible["skills"] = {"mode": "visible"}
+    visible["skills"] = {"mode": {}}
     invisible = _config({"thread_id": "20"})
-    invisible["skills"] = {"mode": "invisible"}
+    invisible["skills"] = {"mode": {"invisible": ["research"]}}
 
     first = runner._frozen_topic_policy(_source(), "same-session", visible)
     resumed = runner._frozen_topic_policy(_source(), "same-session", invisible)
@@ -244,6 +253,9 @@ def test_telegram_session_freezes_profile_mode_when_topic_inherits(monkeypatch):
     runner.session_store.values.clear()
     fresh = runner._frozen_topic_policy(_source(), "same-session", invisible)
 
-    assert first["skills_mode"] == "visible"
-    assert resumed["skills_mode"] == "visible"
-    assert fresh["skills_mode"] == "invisible"
+    assert first["skills_mode"] == {"prune": [], "invisible": []}
+    assert resumed["skills_mode"] == {"prune": [], "invisible": []}
+    assert fresh["skills_mode"] == {
+        "prune": [],
+        "invisible": ["research"],
+    }

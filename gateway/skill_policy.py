@@ -129,10 +129,14 @@ def resolve_enabled_skills_policy(
         )
 
 
-def resolve_topic_skills_mode_override(source, config: dict | None) -> str | None:
+def resolve_topic_skills_mode_override(
+    source, config: dict | None
+) -> dict[str, tuple[str, ...]] | None:
     """Resolve an optional Telegram group/topic ``skills_mode`` override.
 
     Absence means the live profile-level ``skills.mode`` remains authoritative.
+    Presence replaces the profile policy for this topic; skills omitted from
+    both topic lists remain visible.
     Invalid configured values raise so the gateway denies the turn rather than
     silently constructing a different system prompt than the operator asked for.
     """

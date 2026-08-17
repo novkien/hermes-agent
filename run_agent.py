@@ -513,7 +513,7 @@ class AIAgent:
         requested_provider: str = None,
         auto_loaded_skill_prompt: str = "",
         enabled_skills: List[str] = None,
-        skills_mode: str = None,
+        skills_mode: dict = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:

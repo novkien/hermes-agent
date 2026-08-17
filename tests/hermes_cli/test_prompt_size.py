@@ -91,30 +91,31 @@ def test_skills_breakdown_shape_sorted_and_attributed(isolated_home):
     assert sum(s["index_line_bytes"] for s in skills) <= data["skills_index"]["bytes"]
 
 
-def test_skills_breakdown_attributes_invisible_mode_shared_line(isolated_home):
-    """Names-only mode retains every skill in the cost breakdown."""
+def test_skills_breakdown_attributes_per_skill_invisible_lines(isolated_home):
+    """Names-only entries retain every selected skill in the cost breakdown."""
     from agent.prompt_builder import build_skills_system_prompt
 
     _seed_skill(isolated_home, "alpha-skill", "alpha description")
     _seed_skill(isolated_home, "beta-skill", "beta description")
-    prompt = build_skills_system_prompt(mode="invisible")
+    prompt = build_skills_system_prompt(
+        mode={"invisible": ["alpha-skill", "beta-skill"]}
+    )
     skills_match = _SKILLS_BLOCK_RE.search(prompt)
     assert skills_match is not None
     skills_block = skills_match.group(0)
-    shared_line = next(
-        line for line in skills_block.splitlines() if "demo [names only]" in line
-    )
-
     entries = _compute_skills_breakdown(skills_block)
     by_name = {entry["name"]: entry for entry in entries}
     assert set(by_name) == {"alpha-skill", "beta-skill"}
 
-    shared_line_bytes = len(shared_line.encode("utf-8"))
-    assert sum(entry["index_line_bytes"] for entry in entries) == shared_line_bytes
-    for entry in entries:
-        assert entry["index_line_total_bytes"] == shared_line_bytes
-        assert entry["index_line_shared_bytes"] > 0
-        assert entry["index_line_skill_count"] == 2
-
-
+    names_only_lines = {
+        line.removeprefix("    - "): len(line.encode("utf-8"))
+        for line in skills_block.splitlines()
+        if line.startswith("    - ") and ": " not in line
+    }
+    assert set(names_only_lines) == {"alpha-skill", "beta-skill"}
+    for name, entry in by_name.items():
+        assert entry["index_line_bytes"] == names_only_lines[name]
+        assert entry["index_line_total_bytes"] == names_only_lines[name]
+        assert entry["index_line_shared_bytes"] == 0
+        assert entry["index_line_skill_count"] == 1
 

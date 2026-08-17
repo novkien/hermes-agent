@@ -136,13 +136,13 @@ class TestAgentConfigSignature:
 
         runtime = {"api_key": "k", "base_url": "u", "provider": "p"}
         visible = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode="visible"
+            "m", runtime, ["terminal"], "", skills_mode={}
         )
         pruned = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode="prune"
+            "m", runtime, ["terminal"], "", skills_mode={"prune": ["research"]}
         )
         invisible = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode="invisible"
+            "m", runtime, ["terminal"], "", skills_mode={"invisible": ["research"]}
         )
 
         assert len({visible, pruned, invisible}) == 3

@@ -24942,7 +24942,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_id_alt: str | None = None,
         skip_context_files: bool = False,
         enabled_skills: Optional[Iterable[str]] = None,
-        skills_mode: str = "visible",
+        skills_mode: Any = None,
         topic_policy_fingerprint: str = "",
         auto_loaded_skill_prompt: str = "",
     ) -> str:
@@ -24974,6 +24974,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         warmth for correct memory attribution.
         """
         import hashlib, json as _j
+        from agent.skill_context import empty_skills_mode, skills_mode_cache_key
 
         # Fingerprint the FULL credential string instead of using a short
         # prefix. OAuth/JWT-style tokens frequently share a common prefix
@@ -25008,7 +25009,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # session switch can never reuse an agent built for a
                 # different allowlist or authoritative skill payload.
                 sorted(str(name) for name in (enabled_skills or ())),
-                str(skills_mode),
+                skills_mode_cache_key(
+                    skills_mode if skills_mode is not None else empty_skills_mode()
+                ),
                 str(topic_policy_fingerprint or ""),
                 str(auto_loaded_skill_prompt or ""),
             ],
@@ -26705,17 +26708,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         config: dict,
     ) -> dict:
         """Resolve topic policy once and persist its small session snapshot."""
-        metadata_key = "topic_policy_v2"
+        metadata_key = "topic_policy_v3"
         session_store = getattr(self, "session_store", None)
         get_session_metadata = getattr(session_store, "get_session_metadata", None)
         set_session_metadata = getattr(session_store, "set_session_metadata", None)
         if session_key and callable(get_session_metadata):
             snapshot = get_session_metadata(session_key, metadata_key, None)
-            if isinstance(snapshot, dict) and snapshot.get("version") == 2:
+            if isinstance(snapshot, dict) and snapshot.get("version") == 3:
                 return snapshot
 
         from agent.skill_commands import get_skill_commands
-        from agent.skill_context import resolve_profile_skills_mode
+        from agent.skill_context import (
+            resolve_profile_skills_mode,
+            serialize_skills_mode,
+        )
         from gateway.skill_policy import (
             SkillPolicyStatus,
             resolve_enabled_skills_policy,
@@ -26766,14 +26772,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
 
         snapshot = {
-            "version": 2,
+            "version": 3,
             "enabled_skills": (
                 list(skill_policy.identities)
                 if skill_policy.status is SkillPolicyStatus.CONFIGURED_VALID
                 else None
             ),
             "skills_fingerprint": skill_policy.fingerprint,
-            "skills_mode": frozen_skills_mode,
+            "skills_mode": (
+                serialize_skills_mode(frozen_skills_mode)
+                if frozen_skills_mode is not None
+                else None
+            ),
             "enabled_toolsets": (
                 list(toolset_policy.toolsets)
                 if toolset_policy.status is ToolsetPolicyStatus.CONFIGURED_VALID

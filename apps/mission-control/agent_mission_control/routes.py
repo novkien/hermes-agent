@@ -755,16 +755,45 @@ CONFIG_WRITE_ALLOW_TREE: dict[str, Any] = {
     },
 }
 
-_SKILLS_PROMPT_MODES = frozenset({"visible", "prune", "invisible"})
+_SKILLS_PROMPT_MODE_KEYS = frozenset({"prune", "invisible"})
+
+
+def _invalid_skills_mode_mapping(value: Any, field: str) -> str | None:
+    if not isinstance(value, dict):
+        return f"{field} must be a mapping with optional prune and invisible lists"
+    unknown = sorted(str(key) for key in value if key not in _SKILLS_PROMPT_MODE_KEYS)
+    if unknown:
+        return (
+            f"{field} contains unsupported keys: {', '.join(unknown)}; "
+            "allowed keys: invisible, prune"
+        )
+    normalized: dict[str, set[str]] = {}
+    for mode in _SKILLS_PROMPT_MODE_KEYS:
+        names = value.get(mode, [])
+        if not isinstance(names, list):
+            return f"{field}.{mode} must be a list of skill names"
+        if any(
+            not isinstance(name, str) or not name or name.strip() != name
+            for name in names
+        ):
+            return f"{field}.{mode} must contain non-empty, trimmed skill names"
+        normalized[mode] = set(names)
+    overlap = sorted(normalized["prune"] & normalized["invisible"])
+    if overlap:
+        return (
+            f"{field} assigns skill(s) to both prune and invisible: "
+            + ", ".join(overlap)
+        )
+    return None
 
 
 def _invalid_skills_mode_in_patch(body: dict[str, Any]) -> str | None:
     """Return the first invalid profile/topic skills mode in a config patch."""
     skills = body.get("skills")
     if isinstance(skills, dict) and "mode" in skills:
-        mode = skills.get("mode")
-        if not isinstance(mode, str) or mode not in _SKILLS_PROMPT_MODES:
-            return "skills.mode must be one of: invisible, prune, visible"
+        invalid = _invalid_skills_mode_mapping(skills.get("mode"), "skills.mode")
+        if invalid:
+            return invalid
 
     for root in (
         body.get("platforms", {}).get("telegram", {}).get("extra", {}),
@@ -782,12 +811,11 @@ def _invalid_skills_mode_in_patch(body: dict[str, Any]) -> str | None:
             for topic in topics:
                 if not isinstance(topic, dict) or "skills_mode" not in topic:
                     continue
-                mode = topic.get("skills_mode")
-                if not isinstance(mode, str) or mode not in _SKILLS_PROMPT_MODES:
-                    return (
-                        "Telegram group topic skills_mode must be one of: "
-                        "invisible, prune, visible, or be omitted to inherit"
-                    )
+                invalid = _invalid_skills_mode_mapping(
+                    topic.get("skills_mode"), "Telegram group topic skills_mode"
+                )
+                if invalid:
+                    return invalid
     return None
 
 

@@ -34,7 +34,6 @@ import {
   errorPanel,
   iconButton,
   confirmButton,
-  segmented,
   metaItem,
   debounce,
 } from '../ui.js';
@@ -49,6 +48,7 @@ import { rackShell, rackCard, rackMore } from '../components/rack.js';
 import { toast } from '../components/toast.js';
 import {
   configuredSkillModeTopics,
+  emptySkillPromptMode,
   profileSkillModePatch,
   profileSkillPromptMode,
   topicSkillModePatch,
@@ -354,7 +354,7 @@ export function createSkills({ api, profile, refreshInspector, liveStore }) {
     render();
     try {
       await api.put('/api/config', profileSkillModePatch(mode), { profile });
-      toast(`Prompt visibility set to ${mode}`, { tone: 'ok' });
+      toast('Profile prompt visibility lists saved', { tone: 'ok' });
       await load();
     } catch (err) {
       policyBusy = null;
@@ -467,40 +467,82 @@ export function createSkills({ api, profile, refreshInspector, liveStore }) {
       return section;
     }
 
+    const parseList = (value) => [...new Set(
+      String(value || '').split(/[\n,]+/).map((name) => name.trim()).filter(Boolean),
+    )].sort();
+    const policyEditor = (policy, { onSave, inherit = false, onInherit = null } = {}) => {
+      const editor = el('div', { class: 'stack-sm' });
+      const pruneInput = el('input', {
+        class: 'input mono',
+        value: policy.prune.join(', '),
+        placeholder: 'skill-a, skill-b',
+        'aria-label': 'Skills with descriptions pruned to 60 characters',
+      });
+      const invisibleInput = el('input', {
+        class: 'input mono',
+        value: policy.invisible.join(', '),
+        placeholder: 'skill-c, skill-d',
+        'aria-label': 'Skills rendered without descriptions',
+      });
+      editor.append(
+        el('label', { class: 'cell-stack' }, [
+          el('span', { class: 'cell-strong', text: 'Prune to 60 characters' }),
+          pruneInput,
+        ]),
+        el('label', { class: 'cell-stack' }, [
+          el('span', { class: 'cell-strong', text: 'Invisible descriptions (names remain)' }),
+          invisibleInput,
+        ]),
+      );
+      const buttons = el('div', { class: 'form-actions' });
+      buttons.append(el('button', {
+        type: 'button',
+        class: 'btn btn-primary',
+        text: inherit ? 'Save topic override' : 'Save lists',
+        disabled: policyBusy ? '' : undefined,
+        onclick: () => {
+          const next = {
+            prune: parseList(pruneInput.value),
+            invisible: parseList(invisibleInput.value),
+          };
+          const overlap = next.prune.filter((name) => next.invisible.includes(name));
+          if (overlap.length) {
+            toast('A skill cannot be both prune and invisible', {
+              tone: 'danger', detail: overlap.join(', '),
+            });
+            return;
+          }
+          onSave(next);
+        },
+      }));
+      if (onInherit) {
+        buttons.append(el('button', {
+          type: 'button',
+          class: 'btn',
+          text: 'Inherit profile',
+          disabled: policyBusy ? '' : undefined,
+          onclick: onInherit,
+        }));
+      }
+      editor.append(buttons);
+      return editor;
+    };
+
     const mode = profileSkillPromptMode(config);
     if (!mode) {
       section.append(el('div', {
         class: 'notice notice-danger',
-        text: 'Invalid skills.mode in config. Use visible, prune, or invisible.',
+        text: 'Invalid skills.mode. Expected prune and invisible skill-name lists.',
       }));
-    } else {
-      const control = segmented([
-        { value: 'visible', label: 'Visible', title: 'Full skill and category descriptions' },
-        { value: 'prune', label: 'Prune 60', title: 'At most 60 Unicode characters per skill description' },
-        { value: 'invisible', label: 'Invisible', title: 'Category labels and skill names only' },
-      ], {
-        value: mode,
-        ariaLabel: 'Profile skill prompt visibility',
-        onChange: (next) => saveProfileMode(next),
-      });
-      if (policyBusy) {
-        for (const button of control.querySelectorAll('button')) button.disabled = true;
-      }
-      section.append(el('div', { class: 'choice-row' }, [
-        el('div', { class: 'cell-stack' }, [
-          el('span', { class: 'cell-strong', text: `Effective profile mode: ${mode}` }),
-          el('span', {
-            class: 'cell-dim',
-            text: mode === 'prune'
-              ? 'Each rendered skill description is capped at 60 Unicode characters.'
-              : mode === 'invisible'
-                ? 'Descriptions are omitted; all enabled skill names remain visible.'
-                : 'Full category and skill descriptions are rendered.',
-          }),
-        ]),
-        control,
-      ]));
     }
+    section.append(el('div', { class: 'cell-stack' }, [
+      el('span', { class: 'cell-strong', text: 'Profile policy' }),
+      el('span', {
+        class: 'cell-dim',
+        text: 'Skills absent from both lists keep their full descriptions.',
+      }),
+      policyEditor(mode || emptySkillPromptMode(), { onSave: saveProfileMode }),
+    ]));
 
     const topics = configuredSkillModeTopics(config);
     section.append(el('div', { class: 'skill-section-title' }, [
@@ -518,37 +560,33 @@ export function createSkills({ api, profile, refreshInspector, liveStore }) {
     const topicList = el('div', { class: 'stack-sm' });
     for (const topic of topics) {
       const key = `${topic.chatId}:${topic.threadId}`;
-      const select = el('select', {
-        class: 'select',
-        'aria-label': `Prompt visibility for ${topic.name}`,
-        onchange: (event) => saveTopicMode(topic, event.target.value),
-      });
-      for (const [value, label] of [
-        ['inherit', 'Inherit profile'],
-        ['visible', 'Visible'],
-        ['prune', 'Prune 60'],
-        ['invisible', 'Invisible'],
-      ]) {
-        const option = el('option', { value, text: label });
-        option.selected = topic.mode === value;
-        select.append(option);
-      }
-      if (topic.mode === null) {
-        select.prepend(el('option', { value: '', text: 'Invalid configured value', selected: true }));
-      }
-      select.disabled = Boolean(policyBusy);
-      topicList.append(el('div', { class: 'choice-row' }, [
+      const inherits = topic.mode === 'inherit';
+      const invalid = topic.mode === null;
+      topicList.append(el('div', { class: 'cell-stack' }, [
         el('div', { class: 'cell-stack' }, [
           el('span', { class: 'cell-strong', text: topic.name }),
           el('span', {
             class: 'cell-dim mono',
             text: `${topic.chatName ? `${topic.chatName} · ` : ''}${topic.chatId} / ${topic.threadId}`,
           }),
+          el('span', {
+            class: 'cell-dim',
+            text: invalid
+              ? 'Invalid topic skills_mode mapping.'
+              : inherits
+                ? 'Currently inherits the profile policy.'
+                : `${topic.mode.prune.length} pruned · ${topic.mode.invisible.length} invisible`,
+          }),
         ]),
-        el('div', { class: 'cell-stack' }, [
-          select,
-          policyBusy === key ? el('span', { class: 'cell-dim', text: 'Saving…' }) : null,
-        ].filter(Boolean)),
+        policyEditor(
+          inherits || invalid ? emptySkillPromptMode() : topic.mode,
+          {
+            inherit: inherits,
+            onSave: (next) => saveTopicMode(topic, next),
+            onInherit: inherits ? null : () => saveTopicMode(topic, 'inherit'),
+          },
+        ),
+        policyBusy === key ? el('span', { class: 'cell-dim', text: 'Saving…' }) : null,
       ]));
     }
     section.append(topicList);
