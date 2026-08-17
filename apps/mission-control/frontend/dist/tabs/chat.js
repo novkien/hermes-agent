@@ -917,7 +917,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   }
 
   function stopMirror() {
-    if (mirrorTimer) clearTimeout(mirrorTimer);
+    if (mirrorTimer) clearInterval(mirrorTimer);
     mirrorTimer = null;
     mirrorGeneration += 1;
     if (mirrorVisibility) document.removeEventListener('visibilitychange', mirrorVisibility);
@@ -927,31 +927,23 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   function startMirror(sessionId, sessionProfile, list) {
     stopMirror();
     // Avoid racing the initial history read, then keep a single bounded
-    // catch-up timer for this open thread.  `setTimeout` instead of a fixed
-    // interval lets a hidden tab back off without leaving a stale cadence
-    // behind when it becomes visible again.
+    // catch-up timer for this open thread.
     lastChatFrameAt = Date.now();
-    const generation = mirrorGeneration;
-    const schedule = () => {
-      if (generation !== mirrorGeneration) return;
-      if (mirrorTimer) clearTimeout(mirrorTimer);
-      mirrorTimer = setTimeout(() => {
-        mirrorTimer = null;
-        mirrorThread(sessionId, sessionProfile, list)
-          .catch(() => null)
-          .finally(schedule);
-      }, document.hidden
-        ? MIRROR_HIDDEN_INTERVAL_MS
-        : (composerHandle?.isWatching() ? WATCH_SILENT_CATCHUP_MS : MIRROR_INTERVAL_MS));
+    const scheduleMirror = () => {
+      if (mirrorTimer) clearInterval(mirrorTimer);
+      const intervalMs = document.hidden ? MIRROR_HIDDEN_INTERVAL_MS : MIRROR_INTERVAL_MS;
+      mirrorTimer = setInterval(() => {
+        mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+      }, intervalMs);
     };
     mirrorVisibility = () => {
+      scheduleMirror();
       if (!document.hidden) {
         mirrorThread(sessionId, sessionProfile, list).catch(() => null);
-        schedule();
       }
     };
     document.addEventListener('visibilitychange', mirrorVisibility);
-    schedule();
+    scheduleMirror();
   }
 
   function onTurnSettled(turn, session, sessionId, sessionProfile) {
