@@ -791,10 +791,16 @@ assert.equal(turnElapsed(turn), 90);
 // silent. Escalation starts only at the first explicit `_thinking` frame.
 const quiet = reduceTurn(createTurn(0), frame('run.started', {}), 1000);
 assert.equal(quiet.phase, 'starting');
-assert.equal(activityLabel(quiet, 1000), 'Forming…');
-assert.equal(activityLabel(quiet, 2999), 'Forming…');
-assert.equal(activityLabel(quiet, 3000), 'Clouding…');
-assert.equal(activityLabel(quiet, 7000), 'Scampering…');
+const quietLabel = activityLabel(quiet, 1000);
+assert.equal(activityLabel(quiet, 2999), quietLabel);
+assert.equal(activityLabel(quiet, 3000), quietLabel);
+assert.equal(activityLabel(quiet, 7000), quietLabel);
+
+// Startup wording is chosen for the agent turn, never from the wall clock.
+// The next turn gets the next label, while an existing one stays fixed.
+const nextQuiet = reduceTurn(createTurn(0), frame('run.started', {}), 1000);
+assert.notEqual(activityLabel(nextQuiet, 1000), quietLabel);
+assert.equal(activityLabel(nextQuiet, 90000), activityLabel(nextQuiet, 1000));
 
 let explicitThinking = reduceTurn(quiet, frame('tool.progress', {
   tool_name: NARRATION_TOOL, delta: 'Working through it.',
@@ -819,7 +825,7 @@ assert.equal(explicitThinking.thinkingStartedAt, null);
 explicitThinking = reduceTurn(explicitThinking, frame('message.started', {
   message_id: 'm2',
 }), 67000);
-assert.equal(activityLabel(explicitThinking, 67000), 'Forming…');
+assert.equal(activityLabel(explicitThinking, 67000), quietLabel);
 explicitThinking = reduceTurn(explicitThinking, frame('tool.progress', {
   tool_name: NARRATION_TOOL, delta: 'Thinking again.',
 }), 100000);

@@ -15,6 +15,7 @@ Import chain (circular-import safe):
 """
 
 import ast
+import contextvars
 import functools
 import importlib
 import json
@@ -23,7 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, FrozenSet, List, Optional, Set
 
 from hermes_constants import hermes_home_key
 
@@ -278,6 +279,37 @@ _check_fn_last_good: Dict[tuple[Callable, Optional[str]], float] = {}
 _check_fn_cache_lock = threading.Lock()
 CHECK_FN_CACHE_BYPASS = ""
 
+# Availability checks are normally process/profile scoped.  A gateway turn can
+# additionally grant a toolset at session scope; keep that fact in a ContextVar
+# so zero-argument check_fn callables can honor the exact schema being built
+# without leaking one concurrent session's grant into another.
+_ACTIVE_SCHEMA_TOOLSETS: contextvars.ContextVar[Optional[FrozenSet[str]]] = (
+    contextvars.ContextVar("hermes_active_schema_toolsets", default=None)
+)
+
+
+def set_active_schema_toolsets(toolsets: Optional[Set[str]]):
+    """Bind the explicitly granted toolsets while one schema is assembled.
+
+    ``None`` means the caller is using the historical unrestricted/default
+    selection, so availability checks must retain their own config-based gate.
+    An empty set is an explicit restricted session with no matching toolsets.
+    """
+    return _ACTIVE_SCHEMA_TOOLSETS.set(
+        frozenset(toolsets) if toolsets is not None else None
+    )
+
+
+def reset_active_schema_toolsets(token) -> None:
+    """Restore the previous schema-build grant after registry filtering."""
+    _ACTIVE_SCHEMA_TOOLSETS.reset(token)
+
+
+def active_schema_toolset_enabled(name: str) -> Optional[bool]:
+    """Return a session-scoped grant verdict, or ``None`` when unbound."""
+    toolsets = _ACTIVE_SCHEMA_TOOLSETS.get()
+    return None if toolsets is None else name in toolsets
+
 
 def _prune_check_fn_caches(now: float) -> None:
     """Expire stale entries and cap profile-dimensional cache growth.
@@ -308,13 +340,23 @@ def check_fn_cache_scope() -> Optional[str]:
         from agent.secret_scope import is_multiplex_active
 
         if not is_multiplex_active():
-            return None
-        from hermes_constants import get_hermes_home_override
+            profile_scope = None
+        else:
+            from hermes_constants import get_hermes_home_override
 
-        override = get_hermes_home_override()
-        if not override:
-            return CHECK_FN_CACHE_BYPASS
-        return str(Path(override).expanduser().resolve())
+            override = get_hermes_home_override()
+            if not override:
+                return CHECK_FN_CACHE_BYPASS
+            profile_scope = str(Path(override).expanduser().resolve())
+
+        # A session-scoped grant changes the result of Kanban's check_fn. It
+        # must therefore participate in the TTL cache key: otherwise a recent
+        # Kanban-enabled topic can lend its True verdict to another topic using
+        # the same profile for up to 30 seconds.
+        toolsets = _ACTIVE_SCHEMA_TOOLSETS.get()
+        if toolsets is None:
+            return profile_scope
+        return f"{profile_scope or '<global>'}|toolsets:{','.join(sorted(toolsets))}"
     except Exception:
         # Fail closed: bypass both cache layers rather than aliasing requests
         # whose multiplex profile identity could not be resolved.

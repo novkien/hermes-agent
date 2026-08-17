@@ -21,6 +21,11 @@ export class SseClient {
     // allows six HTTP/1.1 connections per host, and a permanent extra stream
     // per open tab starved every ordinary request behind it.
     this.watchId = null;
+    // A worker session lives in its profile's isolated gateway, which is often
+    // not the profile currently selected by the surrounding dashboard tab.
+    // Keep that execution profile with the watched id; it is deliberately
+    // separate from `profile`, which only filters ordinary fleet events.
+    this.watchProfile = null;
     this.es = null;
     this.state = SSE_STATE.CLOSED;
     this.listeners = new Map(); // eventType -> Set<fn>
@@ -33,6 +38,7 @@ export class SseClient {
     const params = new URLSearchParams();
     if (this.token) params.set('token', this.token);
     if (this.watchId) params.set('watch', this.watchId);
+    if (this.watchProfile) params.set('watch_profile', this.watchProfile);
     if (this.profile) params.set('profile', this.profile);
     const query = params.toString();
     return query ? `${this.baseUrl}?${query}` : this.baseUrl;
@@ -46,10 +52,12 @@ export class SseClient {
    * `Last-Event-ID` replay covers — a far better trade than a second permanent
    * connection per tab.
    */
-  watch(sessionId) {
+  watch(sessionId, profile = null) {
     const next = sessionId || null;
-    if (next === this.watchId) return;
+    const nextProfile = next ? (profile || null) : null;
+    if (next === this.watchId && nextProfile === this.watchProfile) return;
     this.watchId = next;
+    this.watchProfile = nextProfile;
     if (!this.es) return;
     this.es.close();
     this.es = null;

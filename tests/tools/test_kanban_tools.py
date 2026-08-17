@@ -40,6 +40,36 @@ def test_kanban_tools_hidden_without_env_var(monkeypatch, tmp_path):
     )
 
 
+def test_kanban_tools_follow_explicit_session_toolset_grant(monkeypatch, tmp_path):
+    """A topic-level `enabled_toolsets` grant must override raw default config.
+
+    The immediate second build verifies the registry's TTL cache cannot carry
+    the enabled topic's verdict into a same-profile topic without Kanban.
+    """
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    import model_tools
+    import tools.kanban_tools  # noqa: F401 - ensure registered
+    from tools.registry import invalidate_check_fn_cache
+
+    invalidate_check_fn_cache()
+    model_tools._clear_tool_defs_cache()
+    enabled = model_tools.get_tool_definitions(
+        enabled_toolsets=["hermes-cli", "kanban"], quiet_mode=True,
+    )
+    enabled_names = {tool["function"]["name"] for tool in enabled}
+    assert {"kanban_create", "kanban_show", "kanban_list"}.issubset(enabled_names)
+
+    disabled = model_tools.get_tool_definitions(
+        enabled_toolsets=["hermes-cli"], quiet_mode=True,
+    )
+    disabled_names = {tool["function"]["name"] for tool in disabled}
+    assert not {name for name in disabled_names if name.startswith("kanban_")}
+
+
 # ---------------------------------------------------------------------------
 # Handler happy paths
 # ---------------------------------------------------------------------------

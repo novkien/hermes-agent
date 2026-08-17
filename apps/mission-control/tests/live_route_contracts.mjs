@@ -25,6 +25,9 @@ for (const route of ['overview', 'sessions', 'fleet', 'kanban', 'permits', 'issu
 const chat = fs.readFileSync(new URL('tabs/chat.js', ROOT), 'utf8');
 assert.match(chat, /chat\.frame/, 'chat token frames are no longer handled incrementally');
 assert.match(chat, /visibilitychange/, 'chat has no event-driven background-tab catch-up');
+assert.match(chat, /setTimeout\(/, 'chat has no scheduled transcript catch-up');
+assert.match(chat, /lastChatFrameAt/, 'chat cannot recover when a watched stream goes silent');
+assert.match(chat, /WATCH_SILENT_CATCHUP_MS/, 'chat does not promptly catch up a silent remote watcher');
 
 const activity = fs.readFileSync(new URL('tabs/activity.js', ROOT), 'utf8');
 assert.match(activity, /createKeyedReconciler\(/, 'activity feed does not retain keyed event rows');

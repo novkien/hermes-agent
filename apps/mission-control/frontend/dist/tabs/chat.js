@@ -87,6 +87,11 @@ const RELOAD_BACKOFF_MS = [400, 1200, 2500];
 // visible and the local composer is idle.
 const MIRROR_INTERVAL_MS = 6000;
 const MIRROR_HIDDEN_INTERVAL_MS = 30000;
+// An attached remote watcher that goes quiet is a failure mode, not ordinary
+// idle polling.  Check persisted rows faster in that narrow state so a
+// detached worker's tool calls stay operationally live without imposing a
+// high-frequency read on every open, idle thread.
+const WATCH_SILENT_CATCHUP_MS = 1500;
 
 export function createChat({ api, profile, sse, refreshInspector, onNavigate, liveStore }) {
   const root = el('div', { class: 'tab tab-chat' });
@@ -148,7 +153,12 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   let renderedKeys = new Set();
   let mirrorTimer = null;
   let mirrorVisibility = null;
+  let mirrorGeneration = 0;
   let mirroring = false;
+  // A watcher is normally authoritative while it has fresh frames.  Keep the
+  // time separately from the composer state: an externally-driven turn can be
+  // marked "watching" even when its gateway bridge is unavailable.
+  let lastChatFrameAt = 0;
   const mirrorBaselineBarrier = createMirrorBarrier();
   // Paging state for the full session list. The aggregator's first page is only
   // the newest 500 of (here) 5,295; `pager` knows how to reach the rest.
@@ -648,7 +658,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     // Point the app's one SSE connection at this session so its live turn
     // frames ride the stream that is already open, instead of this tab opening
     // a second permanent connection of its own.
-    if (sse) sse.watch(sessionId);
+    if (sse) sse.watch(sessionId, sessionProfile);
     startMirror(sessionId, sessionProfile, list);
     refreshOpenContext();
     syncContextRefresh();
@@ -770,7 +780,15 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     // or cron. Either way the very rows this would re-fetch are already being
     // painted frame by frame, and appending the persisted copy on top would
     // duplicate the whole turn.
-    if (composerHandle && (composerHandle.isRunning() || composerHandle.isWatching())) return;
+    if (composerHandle?.isRunning()) return;
+    // Do not duplicate an actively painted remote turn.  But a remote watch
+    // that stopped producing frames must not freeze the persisted transcript
+    // forever: after a short silent-watch interval, append only the durable rows until
+    // the stream recovers.  This is especially important for detached Kanban
+    // CLI workers, whose relay can briefly be unavailable while the worker
+    // continues writing its profile state database.
+    if (composerHandle?.isWatching()
+        && Date.now() - lastChatFrameAt < WATCH_SILENT_CATCHUP_MS) return;
     // A completed streamed turn is visible already, but its persisted message
     // ids arrive slightly later. Until baseline sync records those ids, a
     // mirror read would append the same turn as ordinary history.
@@ -783,7 +801,9 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       // The read may have started while idle and returned after a local send
       // claimed the transcript or a baseline sync began. Re-check immediately
       // before touching the DOM to close that in-flight request race.
-      if (composerHandle && (composerHandle.isRunning() || composerHandle.isWatching())) return;
+      if (composerHandle?.isRunning()) return;
+      if (composerHandle?.isWatching()
+          && Date.now() - lastChatFrameAt < WATCH_SILENT_CATCHUP_MS) return;
       if (mirrorBaselineBarrier.active(sessionId)) return;
       const fresh = mirrorAppend(renderedKeys, messages);
       if (!fresh.length) return;
@@ -897,18 +917,41 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   }
 
   function stopMirror() {
-    if (mirrorTimer) clearInterval(mirrorTimer);
+    if (mirrorTimer) clearTimeout(mirrorTimer);
     mirrorTimer = null;
+    mirrorGeneration += 1;
     if (mirrorVisibility) document.removeEventListener('visibilitychange', mirrorVisibility);
     mirrorVisibility = null;
   }
 
   function startMirror(sessionId, sessionProfile, list) {
     stopMirror();
+    // Avoid racing the initial history read, then keep a single bounded
+    // catch-up timer for this open thread.  `setTimeout` instead of a fixed
+    // interval lets a hidden tab back off without leaving a stale cadence
+    // behind when it becomes visible again.
+    lastChatFrameAt = Date.now();
+    const generation = mirrorGeneration;
+    const schedule = () => {
+      if (generation !== mirrorGeneration) return;
+      if (mirrorTimer) clearTimeout(mirrorTimer);
+      mirrorTimer = setTimeout(() => {
+        mirrorTimer = null;
+        mirrorThread(sessionId, sessionProfile, list)
+          .catch(() => null)
+          .finally(schedule);
+      }, document.hidden
+        ? MIRROR_HIDDEN_INTERVAL_MS
+        : (composerHandle?.isWatching() ? WATCH_SILENT_CATCHUP_MS : MIRROR_INTERVAL_MS));
+    };
     mirrorVisibility = () => {
-      if (!document.hidden) mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+      if (!document.hidden) {
+        mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+        schedule();
+      }
     };
     document.addEventListener('visibilitychange', mirrorVisibility);
+    schedule();
   }
 
   function onTurnSettled(turn, session, sessionId, sessionProfile) {
@@ -1424,6 +1467,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     unsubscribeChatFrame = sse.on('chat.frame', (payload) => {
       if (!payload || payload.session_id !== selectedSessionId) return;
       if (!composerHandle) return;
+      lastChatFrameAt = Date.now();
       composerHandle.feedRemoteFrame({ event: payload.event, data: payload.data });
       syncContextRefresh();
     });
@@ -1659,15 +1703,28 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
  */
 export function createChatModal({ api, profile, sse } = {}) {
   let chat = null;
+  let chatProfile = null;
   const modal = createModal({
     title: 'Chat',
     size: 'wide',
     onClose: () => { if (chat) chat.deactivate(); },
   });
 
-  async function openSession(id) {
+  async function openSession(id, sessionProfile = null) {
     modal.show();
-    if (!chat) chat = createChat({ api, profile, sse, refreshInspector: () => {} });
+    // A Kanban card's worker can belong to a different profile than the tab
+    // that opened it. Reusing a popup created for the surrounding profile
+    // would make an existing worker session look missing in the default
+    // gateway, then leave the SSE watcher retrying that false 404 forever.
+    const resolvedProfile = sessionProfile || profile;
+    if (chat && chatProfile !== resolvedProfile) {
+      chat.deactivate();
+      chat = null;
+    }
+    if (!chat) {
+      chat = createChat({ api, profile: resolvedProfile, sse, refreshInspector: () => {} });
+      chatProfile = resolvedProfile;
+    }
     // `close()` clears `modal.body`, which detaches chat's own root from the
     // document (the `chat` instance itself is kept, not recreated, so its
     // session/composer state survives). Re-mounting on every open re-attaches

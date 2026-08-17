@@ -35,6 +35,7 @@ import {
   iconButton,
   confirmButton,
   metaItem,
+  segmented,
   debounce,
 } from '../ui.js';
 import { createStatRow } from '../components/stat.js';

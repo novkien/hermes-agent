@@ -1,9 +1,10 @@
 """Tests for profile config inheritance from the root config.yaml.
 
-Contract (field-wise inheritance semantics):
+Contract (top-level ownership with narrow field-wise exceptions):
 
-* A profile inherits root config fields it does not explicitly override.
-* Dictionary sections merge recursively; scalar and list profile values win.
+* A profile inherits root top-level sections it does not explicitly declare.
+* A declared profile section replaces its root counterpart. ``model`` is the
+  narrow exception: its fields merge so a sparse model override remains usable.
 * Root telegram-scoped keys (``telegram``, ``platforms``, ``session``,
   ``sessions.channel_overrides`` and numeric thread ids) never reach a
   profile's effective config.
@@ -39,6 +40,18 @@ auxiliary:
     interval_hours: 99
 mcp:
   model: normal
+mcp_servers:
+  godot:
+    url: http://godot.example.test/mcp
+  computer-use-linux:
+    command: /usr/bin/computer-use-linux-mcp
+display:
+  runtime_footer:
+    enabled: true
+    fields: [model, tokens]
+fallback_providers:
+  - provider: deepseek
+    model: inherited-fallback
 quick_commands:
   /demo: runs a demo command
 telegram:
@@ -72,6 +85,9 @@ auxiliary:
     api_key: ""
 model:
   context_length: 1000000
+mcp_servers:
+  comfyui:
+    url: http://comfyui.example.test/mcp
 """
 
 
@@ -88,8 +104,10 @@ def profile_env(tmp_path, monkeypatch):
     monkeypatch.setattr(cfgmod, "get_hermes_home", lambda: profile_home)
     monkeypatch.setattr(cfgmod, "get_config_path", lambda: worker)
     cfgmod._LOAD_CONFIG_CACHE.clear()
+    cfgmod._PROFILE_INHERITED_RAW_CACHE.clear()
     yield root, profile_home, worker
     cfgmod._LOAD_CONFIG_CACHE.clear()
+    cfgmod._PROFILE_INHERITED_RAW_CACHE.clear()
 
 
 def test_inherits_root_keys_absent_from_profile(profile_env):
@@ -102,18 +120,25 @@ def test_inherits_root_keys_absent_from_profile(profile_env):
     assert "inherit_root_config" not in cfg
 
 
-def test_profile_overrides_dict_fields_and_inherits_siblings(profile_env):
+def test_profile_model_fields_merge_but_other_declared_sections_are_owned(profile_env):
     cfg = load_config()
     assert cfg["model"]["default"] == "normal"
     assert cfg["model"]["provider"] == "9router"
     assert cfg["model"]["context_length"] == 1000000
     monitor = cfg["auxiliary"]["monitor"]
     assert monitor["api_key"] == ""
-    assert monitor["timeout"] == 999999
     assert "root-monitor-key" not in str(monitor)
-    background_review = cfg["auxiliary"]["background_review"]
-    assert background_review["enabled"] is True
-    assert background_review["interval_hours"] == 99
+
+    # Defaults may supply auxiliary keys, but root-owned siblings must not be
+    # present in the profile/root layer once the profile declares auxiliary.
+    raw = cfgmod.read_config_with_profile_inheritance(profile_env[2])
+    assert raw["auxiliary"] == {"monitor": {"api_key": ""}}
+
+    # mcp_servers is a profile-owned capability boundary.  Root MCPs must not
+    # become available merely because this profile declares its own server.
+    assert cfg["mcp_servers"] == {
+        "comfyui": {"url": "http://comfyui.example.test/mcp"}
+    }
 
 
 def test_telegram_and_channel_overrides_never_inherited(profile_env):
@@ -207,12 +232,12 @@ def test_empty_owned_section_survives_save_round_trip(profile_env, monkeypatch):
     monkeypatch.setattr(cfgmod, "get_config_path", lambda: worker)
     cfgmod._LOAD_CONFIG_CACHE.clear()
     cfg = load_config()
-    assert cfg["mcp"] == {"auto_reload_on_config_change": True, "model": "normal"}
+    assert cfg["mcp"] == {"auto_reload_on_config_change": True}
     cfgmod.save_config(cfg)
     raw = yaml.safe_load(worker.read_text(encoding="utf-8"))
     assert "mcp" in raw
     reloaded = load_config()
-    assert reloaded["mcp"]["model"] == "normal"
+    assert "model" not in reloaded["mcp"]
 
 
 def test_gateway_loader_applies_inheritance(profile_env, monkeypatch):
@@ -228,6 +253,82 @@ def test_gateway_loader_applies_inheritance(profile_env, monkeypatch):
     for bad in ("group_topics", "room_slots", "room_chat_id"):
         assert bad not in str(plat.extra)
     assert "root-channel-prompt" not in str(plat)
+
+
+def test_gateway_runtime_behavioral_loader_applies_inheritance(profile_env, monkeypatch):
+    from gateway import run as gateway_run
+    from gateway.runtime_footer import resolve_footer_config
+
+    _, profile_home, _ = profile_env
+    monkeypatch.setattr(gateway_run, "_hermes_home", profile_home)
+    cfg = gateway_run._load_gateway_config()
+
+    assert cfg["cron"]["allow_agent_scheduling"] is True
+    assert cfg["model"]["default"] == "normal"
+    assert cfg["model"]["provider"] == "9router"
+    assert cfg["model"]["context_length"] == 1000000
+    assert resolve_footer_config(cfg, "telegram") == {
+        "enabled": True,
+        "fields": ["model", "tokens"],
+    }
+    assert "inherit_root_config" not in cfg
+
+
+def test_gateway_runtime_behavioral_loader_honors_opt_out(profile_env, monkeypatch):
+    from gateway import run as gateway_run
+    from gateway.runtime_footer import resolve_footer_config
+
+    _, profile_home, worker = profile_env
+    worker.write_text(PROFILE_YAML + "inherit_root_config: false\n", encoding="utf-8")
+    cfgmod._LOAD_CONFIG_CACHE.clear()
+    cfgmod._PROFILE_INHERITED_RAW_CACHE.clear()
+    monkeypatch.setattr(gateway_run, "_hermes_home", profile_home)
+
+    cfg = gateway_run._load_gateway_config()
+    assert "cron" not in cfg
+    assert "fleet" not in cfg
+    assert resolve_footer_config(cfg, "telegram")["enabled"] is False
+    assert "inherit_root_config" not in cfg
+
+
+def test_presence_sensitive_profile_merge_has_no_defaults(profile_env):
+    _, _, worker = profile_env
+    cfg = cfgmod.read_config_with_profile_inheritance(worker)
+
+    assert cfg["cron"]["allow_agent_scheduling"] is True
+    assert cfg["model"] == {
+        "default": "normal",
+        "provider": "9router",
+        "context_length": 1000000,
+    }
+    assert "auto_reload_on_config_change" not in cfg["mcp"]
+    assert cfg["mcp_servers"] == {
+        "comfyui": {"url": "http://comfyui.example.test/mcp"}
+    }
+    assert "inherit_root_config" not in cfg
+
+
+def test_gateway_fallback_refresh_keeps_inherited_root_chain(profile_env, monkeypatch):
+    from types import SimpleNamespace
+
+    from gateway import run as gateway_run
+
+    _, profile_home, _ = profile_env
+    monkeypatch.setattr(gateway_run, "_hermes_home", profile_home)
+    runner = SimpleNamespace(_fallback_model=None)
+    bound = gateway_run.GatewayRunner._refresh_fallback_model.__get__(runner)
+
+    assert bound() == [
+        {"provider": "deepseek", "model": "inherited-fallback"}
+    ]
+
+
+def test_presence_sensitive_merge_keeps_last_good_on_torn_root(profile_env):
+    root, _, worker = profile_env
+    first = cfgmod.read_config_with_profile_inheritance(worker)
+    (root / "config.yaml").write_text("display: [\n", encoding="utf-8")
+
+    assert cfgmod.read_config_with_profile_inheritance(worker) == first
 
 
 def test_cli_loader_applies_inheritance(profile_env, monkeypatch):

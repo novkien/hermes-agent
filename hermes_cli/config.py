@@ -251,6 +251,11 @@ _LOAD_CONFIG_CACHE: Dict[str, Tuple[int, int, int, int, int, int, Dict[str, Any]
 # _LOAD_CONFIG_CACHE but for read_raw_config() — used when callers want
 # the user's on-disk values without defaults merged in.
 _RAW_CONFIG_CACHE: Dict[str, Tuple[int, int, Dict[str, Any]]] = {}
+# Explicit root+profile layer cache for gateway behavioral reads that must
+# honor profile inheritance without materializing DEFAULT_CONFIG.
+_PROFILE_INHERITED_RAW_CACHE: Dict[
+    str, Tuple[int, int, int, int, Dict[str, Any]]
+] = {}
 # Serializes all config read/write paths. libyaml's C extension is not
 # thread-safe for concurrent safe_load() on the same file, and multiple
 # tool threads (approval.py, browser_tool.py, setup flows) hit
@@ -765,21 +770,41 @@ def _load_profile_root_layer() -> Optional[Dict[str, Any]]:
     return _strip_inherited_root_keys(raw)
 
 
+_PROFILE_ROOT_FIELDWISE_MERGE_KEYS = frozenset({"model"})
+
+
 def _merge_profile_root_layer(
     root_layer: Dict[str, Any], profile_config: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Return root config overlaid with a profile's explicit field overrides.
+    """Overlay a profile on its root layer without widening its capabilities.
 
-    Profile configuration is intentionally sparse.  A profile that sets only
-    ``model.context_length`` should retain the root ``model.default`` and
-    ``model.provider`` rather than accidentally creating a model section with
-    no selectable model.  Dictionaries are therefore merged recursively while
-    scalars and lists remain profile-owned as normal ``_deep_merge`` overrides.
+    A profile inherits each *top-level* root section that it does not declare.
+    Once it declares a section, that section is profile-owned and replaces the
+    root value.  This is essential for capability-bearing mappings such as
+    ``mcp_servers`` and ``toolsets``: a profile must never gain root entries
+    merely because it defines one of its own.
+
+    ``model`` is the deliberately narrow exception.  Profiles commonly set a
+    sparse model override such as ``context_length`` and must retain the root
+    ``default`` and ``provider`` fields.  Add a section to
+    ``_PROFILE_ROOT_FIELDWISE_MERGE_KEYS`` only when its nested-field merge
+    contract is explicitly safe and tested.
 
     Callers must pass the already-stripped root layer so channel-, prompt-, and
     thread-scoped settings cannot reach a profile through this helper.
     """
-    return _deep_merge(copy.deepcopy(root_layer), profile_config)
+    merged = copy.deepcopy(root_layer)
+    for key, profile_value in profile_config.items():
+        root_value = merged.get(key)
+        if (
+            key in _PROFILE_ROOT_FIELDWISE_MERGE_KEYS
+            and isinstance(root_value, dict)
+            and isinstance(profile_value, dict)
+        ):
+            merged[key] = _deep_merge(root_value, profile_value)
+        else:
+            merged[key] = copy.deepcopy(profile_value)
+    return merged
 
 
 def get_env_path() -> Path:
@@ -3246,6 +3271,79 @@ def read_user_config_raw(config_path: Optional[Path] = None) -> Dict[str, Any]:
     except FileNotFoundError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def read_config_with_profile_inheritance(
+    config_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Read explicit config plus inheritable fields from the root profile.
+
+    Unlike :func:`load_config`, this helper does not merge ``DEFAULT_CONFIG``,
+    managed scope, or environment expansion. It exists for presence-sensitive
+    gateway bridges that must distinguish an explicit root/profile value from
+    a schema default while still honoring ``inherit_root_config``.
+
+    Profile dictionaries merge recursively with profile values winning;
+    scalars and lists replace the root value. Telegram/channel/session scopes
+    are stripped from the root layer by the same policy as ``load_config``.
+    """
+    path = Path(config_path) if config_path is not None else get_config_path()
+    profile_home = path.parent
+    profiles_dir = profile_home.parent
+    root_path = (
+        profiles_dir.parent / "config.yaml"
+        if profiles_dir.name == "profiles"
+        else None
+    )
+
+    with _CONFIG_LOCK:
+        try:
+            profile_stat = path.stat()
+            profile_sig = (profile_stat.st_mtime_ns, profile_stat.st_size)
+        except (FileNotFoundError, OSError):
+            return {}
+        try:
+            if root_path is not None:
+                root_stat = root_path.stat()
+                root_sig = (root_stat.st_mtime_ns, root_stat.st_size)
+            else:
+                root_sig = (0, 0)
+        except (FileNotFoundError, OSError):
+            root_sig = (0, 0)
+
+        cache_key = str(path)
+        cached = _PROFILE_INHERITED_RAW_CACHE.get(cache_key)
+        signature = (*profile_sig, *root_sig)
+        if cached is not None and cached[:4] == signature:
+            return copy.deepcopy(cached[4])
+
+        try:
+            user_config = read_user_config_raw(path)
+        except Exception:
+            if cached is not None:
+                return copy.deepcopy(cached[4])
+            raise
+        if (
+            _config_inherits_root(user_config)
+            and root_path is not None
+            and root_sig != (0, 0)
+        ):
+            try:
+                root_config = read_user_config_raw(root_path)
+            except Exception:
+                if cached is not None:
+                    return copy.deepcopy(cached[4])
+                raise
+            if isinstance(root_config, dict):
+                user_config = _merge_profile_root_layer(
+                    _strip_inherited_root_keys(root_config), user_config
+                )
+
+        result = dict(user_config)
+        result.pop("inherit_root_config", None)
+        cached_result = copy.deepcopy(result)
+        _PROFILE_INHERITED_RAW_CACHE[cache_key] = (*signature, cached_result)
+        return copy.deepcopy(cached_result)
 
 
 def read_raw_config_readonly() -> Dict[str, Any]:

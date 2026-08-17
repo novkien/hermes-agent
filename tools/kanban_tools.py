@@ -62,6 +62,22 @@ def _profile_has_kanban_toolset() -> bool:
         return False
 
 
+def _schema_grants_kanban_toolset() -> Optional[bool]:
+    """Read the explicit gateway/session grant for the schema under build.
+
+    ``None`` preserves the legacy CLI/config behavior for callers that build
+    an unrestricted/default surface.  A concrete boolean is authoritative for
+    a restricted gateway turn, where ``enabled_toolsets`` is the security
+    boundary rather than the raw profile's ``toolsets`` field.
+    """
+    try:
+        from tools.registry import active_schema_toolset_enabled
+
+        return active_schema_toolset_enabled("kanban")
+    except Exception:
+        return None
+
+
 def _is_delegated_child_context() -> bool:
     try:
         from agent.delegation_context import is_delegated_child_context
@@ -104,8 +120,9 @@ def _check_kanban_mode() -> bool:
     """Task-lifecycle tools are available when:
 
     1. ``HERMES_KANBAN_TASK`` is set (dispatcher-spawned worker), OR
-    2. The current profile has ``kanban`` in its toolsets config
-       (orchestrator profiles like techlead that route work via Kanban).
+    2. The schema's session grant includes ``kanban``, OR
+    3. An unrestricted/default caller's current profile has ``kanban`` in its
+       toolsets config (orchestrator profiles like techlead).
 
     Humans running ``hermes chat`` without the kanban toolset see zero
     kanban tools. Workers spawned by the kanban dispatcher (gateway-
@@ -116,6 +133,9 @@ def _check_kanban_mode() -> bool:
         return False
     if os.environ.get("HERMES_KANBAN_TASK") and _is_dispatcher_owned_worker():
         return True
+    session_grant = _schema_grants_kanban_toolset()
+    if session_grant is not None:
+        return session_grant
     return _profile_has_kanban_toolset()
 
 
@@ -132,6 +152,9 @@ def _check_kanban_orchestrator_mode() -> bool:
         return False
     if os.environ.get("HERMES_KANBAN_TASK") and _is_dispatcher_owned_worker():
         return False
+    session_grant = _schema_grants_kanban_toolset()
+    if session_grant is not None:
+        return session_grant
     return _profile_has_kanban_toolset()
 
 

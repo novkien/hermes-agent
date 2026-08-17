@@ -318,7 +318,7 @@ export function createKanban({ api, profile, sse, toolbar: shellToolbar, onNavig
       ? recordFrom(workerSessionResult.value?.data)
       : null;
     const workerSessionId = workerSession?.session_id || null;
-    const chatSessionId = workerSessionId || task?.session_id || null;
+    const workerSessionProfile = workerSession?.profile || null;
     if (!task) {
       return el('div', { class: 'stack-sm' }, [
         provenanceBadge(taskEnvelope?.meta),
@@ -368,10 +368,10 @@ export function createKanban({ api, profile, sse, toolbar: shellToolbar, onNavig
       ],
       relations: [
         { label: 'Run', text: 'Open run analysis', onClick: () => openRunAnalysis(id) },
-        ...(chatSessionId ? [{
+        ...(workerSessionId ? [{
           label: 'Chat',
-          text: workerSessionId ? 'Open worker chat' : 'Open chat (creator session)',
-          onClick: () => chatModal().open(chatSessionId),
+          text: 'Open worker chat',
+          onClick: () => chatModal().open(workerSessionId, workerSessionProfile),
         }] : []),
       ],
       sections,

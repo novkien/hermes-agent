@@ -34,6 +34,8 @@ from tools.registry import (
     check_fn_cache_scope,
     discover_builtin_tools,
     registry,
+    reset_active_schema_toolsets,
+    set_active_schema_toolsets,
     tool_error,
 )
 from toolsets import resolve_toolset, validate_toolset
@@ -490,8 +492,19 @@ def _compute_tool_definitions(
     # needed; plugins respect enabled_toolsets / disabled_toolsets like any
     # other toolset.
 
-    # Ask the registry for schemas (only returns tools whose check_fn passes)
-    filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
+    # Kanban's check_fn needs the session's explicit grant, not only the
+    # profile config it historically inspected.  Bind it only for restricted
+    # callers: unrestricted/default callers retain the legacy profile gate.
+    schema_toolsets = None
+    if enabled_toolsets is not None:
+        kanban_names = set(resolve_toolset("kanban"))
+        schema_toolsets = {"kanban"} if tools_to_include & kanban_names else set()
+    schema_toolsets_token = set_active_schema_toolsets(schema_toolsets)
+    try:
+        # Ask the registry for schemas (only returns tools whose check_fn passes)
+        filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
+    finally:
+        reset_active_schema_toolsets(schema_toolsets_token)
 
     # The set of tool names that actually passed check_fn filtering.
     # Use this (not tools_to_include) for any downstream schema that references

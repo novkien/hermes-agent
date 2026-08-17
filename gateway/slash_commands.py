@@ -3886,15 +3886,17 @@ class GatewaySlashCommandsMixin:
 
         # Save to display.platforms.<platform>.tool_progress
         try:
-            if "display" not in user_config or not isinstance(user_config.get("display"), dict):
-                user_config["display"] = {}
-            display = user_config["display"]
+            from hermes_cli.config import read_user_config_raw
+            persist_config = read_user_config_raw(config_path)
+            if "display" not in persist_config or not isinstance(persist_config.get("display"), dict):
+                persist_config["display"] = {}
+            display = persist_config["display"]
             if "platforms" not in display or not isinstance(display.get("platforms"), dict):
                 display["platforms"] = {}
             if platform_key not in display["platforms"] or not isinstance(display["platforms"].get(platform_key), dict):
                 display["platforms"][platform_key] = {}
             display["platforms"][platform_key]["tool_progress"] = new_mode
-            atomic_config_write(config_path, user_config)
+            atomic_config_write(config_path, persist_config)
             return (
                 f"{descriptions[new_mode]}\n"
                 + t("gateway.verbose.saved_suffix", platform=platform_key)
@@ -3963,13 +3965,15 @@ class GatewaySlashCommandsMixin:
 
         # --- write global flag ---------------------------------------------
         try:
-            if not isinstance(user_config.get("display"), dict):
-                user_config["display"] = {}
-            display = user_config["display"]
+            from hermes_cli.config import read_user_config_raw
+            persist_config = read_user_config_raw(config_path)
+            if not isinstance(persist_config.get("display"), dict):
+                persist_config["display"] = {}
+            display = persist_config["display"]
             if not isinstance(display.get("runtime_footer"), dict):
                 display["runtime_footer"] = {}
             display["runtime_footer"]["enabled"] = new_state
-            atomic_config_write(config_path, user_config)
+            atomic_config_write(config_path, persist_config)
         except Exception as e:
             logger.warning("Failed to save runtime_footer.enabled: %s", e)
             return t("gateway.config_save_failed", error=e)

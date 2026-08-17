@@ -70,6 +70,10 @@ const BLOCK_JOIN = '\n\n';
 export function createTurn(now = Date.now()) {
   return {
     phase: 'connecting',
+    phaseStartedAt: now,
+    // The startup wording belongs to this agent turn.  It is allocated once
+    // here, then stays fixed while the provider is starting up.
+    startingActivityLabel: allocateStartingActivityLabel(),
     startedAt: now,
     lastEventAt: now,
     endedAt: null,
@@ -304,7 +308,12 @@ export function reduceTurn(turn, event, now = Date.now()) {
   }
 
   const setPhase = (phase) => {
-    if (next.phase !== phase) { next.phase = phase; touch('phase'); }
+    if (next.phase !== phase) {
+      next.phase = phase;
+      next.phaseStartedAt = now;
+      touch('phase');
+      touch('phaseStartedAt');
+    }
     // Leaving an explicit `_thinking` interval closes its clock. If another
     // round starts thinking later, its first `_thinking` frame starts over.
     if (phase !== 'thinking' && next.thinkingStartedAt !== null) {
@@ -592,7 +601,7 @@ export function failTurn(turn, message, now = Date.now()) {
 const PHASE_LABELS = {
   connecting: 'Connecting',
   queued: 'Waiting for the agent',
-  starting: 'Starting the run',
+  starting: 'Forming…',
   thinking: 'Thinking',
   tool: 'Running',
   writing: 'Writing',
@@ -601,6 +610,24 @@ const PHASE_LABELS = {
   failed: 'Failed',
   stopped: 'Stopped',
 };
+
+// A run may wait a while before the provider produces its first meaningful
+// frame. Rather than repeating the dry "Starting the run", give that otherwise
+// empty interval a little character without pretending to know what the model
+// is doing. Pick a label when an agent turn is created, not from elapsed time:
+// rendering a long-running turn must never make its wording change on a timer.
+const STARTING_ACTIVITY_LABELS = [
+  'Forming…', 'Clouding…', 'Frosting…', 'Scampering…',
+  'Hatching…', 'Tinkering…', 'Sifting…', 'Plotting…',
+  'Weaving…', 'Brewing…', 'Pondering…', 'Warming up…',
+];
+let nextStartingActivityLabelIndex = 0;
+
+function allocateStartingActivityLabel() {
+  const label = STARTING_ACTIVITY_LABELS[nextStartingActivityLabelIndex];
+  nextStartingActivityLabelIndex = (nextStartingActivityLabelIndex + 1) % STARTING_ACTIVITY_LABELS.length;
+  return label;
+}
 
 export function phaseLabel(turn) {
   if (turn.phase === 'tool') {
@@ -617,6 +644,7 @@ export function phaseLabel(turn) {
  * later thinking round.
  */
 export function activityLabel(turn, now = Date.now()) {
+  if (turn.phase === 'starting') return turn.startingActivityLabel || STARTING_ACTIVITY_LABELS[0];
   if (turn.phase === 'thinking' && Number.isFinite(turn.thinkingStartedAt)) {
     const elapsed = Math.max(0, now - turn.thinkingStartedAt);
     if (elapsed >= DEEP_THINKING_MS) return 'Deep thinking';

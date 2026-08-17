@@ -1179,6 +1179,33 @@ class Router:
     async def _gateway_client_for_session(self, session_id: str) -> GatewayClient:
         return (await self._execution_target_for_session(session_id)).client
 
+    async def _gateway_client_for_watch_profile(
+        self, profile_name: str | None
+    ) -> GatewayClient:
+        """Resolve the gateway that owns an externally-created worker session.
+
+        A Kanban worker predates Mission Control's local session-persona
+        record, so `_gateway_client_for_session()` cannot infer its profile.
+        The Kanban resolver supplies that profile explicitly. Validate it
+        against the dashboard inventory before any isolated runner can be
+        started; an arbitrary SSE query parameter must never spawn a process.
+        """
+        normalized = str(profile_name or "").strip()
+        if not normalized or normalized == self.s.live_default_profile:
+            return self.gateway
+        if self.runner_manager is None:
+            raise RunnerSpawnError(
+                "runner_unavailable",
+                "profile-specific session watch is unavailable",
+            )
+        if not await self._profile_exists(normalized):
+            raise RunnerSpawnError(
+                "runner_profile_missing", f"no such profile: {normalized!r}"
+            )
+        client = await self.runner_manager.ensure_profile_gateway(normalized)
+        self.runner_manager.touch(normalized)
+        return client
+
     async def _profile_exists(self, profile_name: str) -> bool:
         """True when profile_name is in the dashboard's current profile
         inventory. Fails closed (False) on any upstream trouble — an
@@ -2742,6 +2769,10 @@ class Router:
         # every ordinary request then queued behind them until the whole app
         # appeared frozen. One stream carries everything instead.
         watch_id = (request.query_params.get("watch") or "").strip()
+        # This selects only the gateway that owns the watched chat session.
+        # `profile` below continues to filter normal fleet events for the
+        # surrounding dashboard tab, which may be a different profile.
+        watch_profile = (request.query_params.get("watch_profile") or "").strip()
         profile_id = str(request.query_params.get("profile") or self.s.live_default_profile)
         queue = self.event_bus.make_queue()
 
@@ -2757,7 +2788,9 @@ class Router:
         # flight should be picked up the moment the request arrives — not after
         # the replay backlog has been walked.
         watcher = (
-            asyncio.create_task(self._pump_session_frames(watch_id, queue))
+            asyncio.create_task(self._pump_session_frames(
+                watch_id, queue, profile_name=watch_profile,
+            ))
             if watch_id else None
         )
 
@@ -2796,7 +2829,13 @@ class Router:
             },
         )
 
-    async def _pump_session_frames(self, session_id: str, queue: "asyncio.Queue[dict]") -> None:
+    async def _pump_session_frames(
+        self,
+        session_id: str,
+        queue: "asyncio.Queue[dict]",
+        *,
+        profile_name: str | None = None,
+    ) -> None:
         """Relay one session's live turn frames into an open `/api/events/stream`.
 
         Re-wrapped rather than passed through raw: the browser reads this
@@ -2814,8 +2853,9 @@ class Router:
         while True:
             resp = None
             try:
+                gateway = await self._gateway_client_for_watch_profile(profile_name)
                 resp, _rid = await chat_proxy.open_session_events(
-                    self.gateway, session_id, after_seq=after_seq,
+                    gateway, session_id, after_seq=after_seq,
                 )
                 buffer = ""
                 async for chunk in chat_proxy.iter_forwarded_frames(resp, _rid):
@@ -2843,6 +2883,29 @@ class Router:
                             after_seq = 0
             except asyncio.CancelledError:
                 raise
+            except chat_proxy.UpstreamError as exc:
+                # A missing session is terminal, not an intermittent stream
+                # failure. Continuing this loop made the browser repeatedly
+                # poll a false/default-gateway reference and obscured the
+                # actual worker chat. Preserve the SSE connection for other
+                # fleet events but report this watched-session outcome once.
+                if exc.status == 404:
+                    await queue.put({"_frame": sse_frame_named("chat.frame", {
+                        "session_id": session_id,
+                        "event": "error",
+                        "data": {
+                            "code": "session_not_found",
+                            "message": "The selected session is not available in its profile.",
+                        },
+                    })})
+                    return
+            except RunnerSpawnError as exc:
+                await queue.put({"_frame": sse_frame_named("chat.frame", {
+                    "session_id": session_id,
+                    "event": "error",
+                    "data": {"code": exc.code, "message": str(exc)},
+                })})
+                return
             except Exception:
                 # The upstream watch is a best-effort overlay on this channel.
                 # It must never take the channel down with it — the rest of the

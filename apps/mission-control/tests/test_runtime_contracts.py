@@ -611,6 +611,9 @@ async def test_session_frame_relay_resumes_after_the_last_live_sequence() -> Non
     try:
         router = bare_router()
         router.gateway = object()
+        async def gateway_for_watch(_profile):
+            return router.gateway
+        router._gateway_client_for_watch_profile = gateway_for_watch
         queue: asyncio.Queue[dict] = asyncio.Queue()
         task = asyncio.create_task(router._pump_session_frames("session-1", queue))
         for _ in range(3):
@@ -660,6 +663,9 @@ async def test_session_frame_relay_resets_cursor_after_a_terminal_frame() -> Non
     try:
         router = bare_router()
         router.gateway = object()
+        async def gateway_for_watch(_profile):
+            return router.gateway
+        router._gateway_client_for_watch_profile = gateway_for_watch
         queue: asyncio.Queue[dict] = asyncio.Queue()
         task = asyncio.create_task(router._pump_session_frames("session-1", queue))
         for _ in range(2):
@@ -675,6 +681,81 @@ async def test_session_frame_relay_resets_cursor_after_a_terminal_frame() -> Non
             pass
         chat_proxy.open_session_events = original_open
         routes_mod.asyncio.sleep = original_sleep
+
+
+async def test_session_frame_relay_uses_the_resolved_worker_profile() -> None:
+    """An externally-created worker must be watched through its own gateway."""
+    from agent_mission_control import chat_proxy
+
+    class FakeStreamResponse:
+        async def aiter_bytes(self):
+            yield b'event: run.started\ndata: {"run_id":"run-1","seq":1}\n\n'
+
+        async def aclose(self):
+            return None
+
+    selected: list[str | None] = []
+    seen_gateways: list[object] = []
+    worker_gateway = object()
+
+    async def gateway_for_watch(profile):
+        selected.append(profile)
+        return worker_gateway
+
+    async def fake_open(gateway, _session_id, after_seq=0):
+        seen_gateways.append(gateway)
+        return FakeStreamResponse(), "rid"
+
+    original_open = chat_proxy.open_session_events
+    chat_proxy.open_session_events = fake_open
+    task = None
+    try:
+        router = bare_router()
+        router._gateway_client_for_watch_profile = gateway_for_watch
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        task = asyncio.create_task(router._pump_session_frames(
+            "worker-session", queue, profile_name="comfyui-worker",
+        ))
+        await asyncio.wait_for(queue.get(), timeout=1)
+        assert selected == ["comfyui-worker"]
+        assert seen_gateways == [worker_gateway]
+    finally:
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        chat_proxy.open_session_events = original_open
+
+
+async def test_session_frame_relay_stops_after_session_not_found() -> None:
+    """A confirmed upstream 404 is emitted once, never retried forever."""
+    from agent_mission_control import chat_proxy
+
+    calls = 0
+
+    async def gateway_for_watch(_profile):
+        return object()
+
+    async def fake_open(_gateway, _session_id, after_seq=0):
+        nonlocal calls
+        calls += 1
+        raise chat_proxy.UpstreamError(404, {"detail": "not found"})
+
+    original_open = chat_proxy.open_session_events
+    chat_proxy.open_session_events = fake_open
+    try:
+        router = bare_router()
+        router._gateway_client_for_watch_profile = gateway_for_watch
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        await router._pump_session_frames("missing-session", queue)
+        frame = await asyncio.wait_for(queue.get(), timeout=1)
+        assert calls == 1
+        assert "session_not_found" in frame["_frame"]
+        assert "missing-session" in frame["_frame"]
+    finally:
+        chat_proxy.open_session_events = original_open
 
 
 def test_created_session_id_reads_the_nested_gateway_shape() -> None:
@@ -1022,24 +1103,35 @@ def test_config_write_tree_excludes_every_credential_branch() -> None:
     # A named-but-empty branch collapses so the upstream merge stays a no-op.
     assert _prune_to_allow_tree({"agent": {"model": "x"}}, CONFIG_WRITE_ALLOW_TREE) == {}
     assert _prune_to_allow_tree(
-        {"skills": {"mode": "prune", "disabled": ["leave-alone"]}},
+        {"skills": {"mode": {"prune": ["research"]}, "disabled": ["leave-alone"]}},
         CONFIG_WRITE_ALLOW_TREE,
-    ) == {"skills": {"mode": "prune"}}
+    ) == {"skills": {"mode": {"prune": ["research"]}}}
     # PUT /api/config/raw is never allowlisted: it would carry sentinels back.
     assert match_upstream_mutation("/api/config/raw", "PUT") is None
     assert match_upstream_mutation("/api/config", "PUT") is None
 
 
 def test_config_skills_modes_fail_closed_before_upstream() -> None:
-    assert _invalid_skills_mode_in_patch({"skills": {"mode": "visible"}}) is None
-    assert _invalid_skills_mode_in_patch({"skills": {"mode": "compact"}})
+    assert _invalid_skills_mode_in_patch({
+        "skills": {"mode": {"prune": ["research"], "invisible": ["private"]}}
+    }) is None
+    assert _invalid_skills_mode_in_patch({"skills": {"mode": "prune"}})
+    assert _invalid_skills_mode_in_patch({
+        "skills": {"mode": {"visible": ["research"]}}
+    })
+    assert _invalid_skills_mode_in_patch({
+        "skills": {"mode": {"prune": ["same"], "invisible": ["same"]}}
+    })
     assert _invalid_skills_mode_in_patch({
         "platforms": {
             "telegram": {
                 "extra": {
                     "group_topics": [{
                         "chat_id": "-100",
-                        "topics": [{"thread_id": "20", "skills_mode": "invisible"}],
+                        "topics": [{
+                            "thread_id": "20",
+                            "skills_mode": {"invisible": ["private"]},
+                        }],
                     }],
                 },
             },
@@ -2197,6 +2289,10 @@ async def main() -> None:
     await test_chat_relay_forwards_bytes_as_they_arrive()
     await test_chat_relay_closes_upstream_when_the_client_hangs_up()
     await test_chat_stream_forwards_the_model_lock_flag()
+    await test_session_frame_relay_resumes_after_the_last_live_sequence()
+    await test_session_frame_relay_resets_cursor_after_a_terminal_frame()
+    await test_session_frame_relay_uses_the_resolved_worker_profile()
+    await test_session_frame_relay_stops_after_session_not_found()
     await test_session_changed_names_the_session_that_moved()
     await test_session_changed_burst_is_capped()
     test_created_session_id_reads_the_nested_gateway_shape()

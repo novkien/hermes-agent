@@ -19,6 +19,9 @@ const stream = new SseClient({ profile: 'alpha' });
 assert.match(stream.url, /profile=alpha/);
 stream.setProfile('beta');
 assert.match(stream.url, /profile=beta/);
+stream.watch('worker-session', 'comfyui-worker');
+assert.match(stream.url, /watch=worker-session/);
+assert.match(stream.url, /watch_profile=comfyui-worker/);
 
 function bootstrap(profile, revision, id, title) {
   return {

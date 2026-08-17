@@ -1950,10 +1950,13 @@ def _bridge_max_turns_from_config(home: "Path") -> None:
     if not config_path.exists():
         return
     try:
-        from hermes_cli.config import _expand_env_vars, read_user_config_raw
-        # Presence-sensitive env bridge: raw read is deliberate (only keys the
-        # user actually wrote get bridged); overlay + expansion applied below.
-        cfg = read_user_config_raw(config_path)
+        from hermes_cli.config import (
+            _expand_env_vars,
+            read_config_with_profile_inheritance,
+        )
+        # Presence-sensitive bridge: include explicit root fields inherited by
+        # a named profile, but do not materialize schema defaults.
+        cfg = read_config_with_profile_inheritance(config_path)
         cfg = _expand_env_vars(cfg)
         if not isinstance(cfg, dict):
             cfg = {}
@@ -2141,11 +2144,14 @@ os.environ["HERMES_TURN_LEASE_TIMEOUT"] = str(
 _config_path = _hermes_home / 'config.yaml'
 if _config_path.exists():
     try:
-        # Presence-sensitive env bridge: raw read is deliberate — only keys the
-        # user actually wrote may be bridged (a defaults merge would export the
-        # whole DEFAULT_CONFIG into the env). Overlay + expansion applied below.
-        from hermes_cli.config import _expand_env_vars, read_user_config_raw
-        _cfg = read_user_config_raw(_config_path)
+        # Presence-sensitive env bridge: explicit profile fields plus explicit
+        # inheritable root fields may be bridged. Schema defaults stay out so
+        # the whole DEFAULT_CONFIG is never exported into the environment.
+        from hermes_cli.config import (
+            _expand_env_vars,
+            read_config_with_profile_inheritance,
+        )
+        _cfg = read_config_with_profile_inheritance(_config_path)
         # Expand ${ENV_VAR} references before bridging to env vars.
         _cfg = _expand_env_vars(_cfg)
         if not isinstance(_cfg, dict):
@@ -3283,46 +3289,34 @@ def _gateway_config_home() -> Path:
 
 
 def _load_gateway_config() -> dict:
-    """Load and parse ~/.hermes/config.yaml, returning {} on any error.
+    """Load effective gateway configuration, returning ``{}`` on errors.
 
-    Uses the module-level ``_hermes_home`` (so tests that monkeypatch it
-    still see their fixture) and shares the mtime-keyed raw-yaml cache
-    from ``hermes_cli.config.read_raw_config`` when the paths match.
+    The loader merges explicit root fields beneath explicit profile fields,
+    but deliberately does not inject ``DEFAULT_CONFIG``. Gateway call sites
+    keep their established local fallback semantics while named profiles see
+    every missing root field. Managed scope, environment expansion, and model
+    normalization are then applied consistently.
 
-    Managed scope is overlaid on the result (via the shared helper) so the
-    gateway honors administrator-pinned values — neither read_raw_config nor a
-    direct yaml.safe_load carries the managed merge on its own. Fail-open.
+    Write-back flows must read raw YAML separately so inherited root values are
+    never materialized into a profile file.
     """
     config_home = _gateway_config_home()
     config_path = config_home / 'config.yaml'
     raw: dict = {}
-    used_canonical = False
     try:
-        from hermes_cli.config import get_config_path, read_raw_config
-        # Fast path: if _hermes_home agrees with the canonical config
-        # location, reuse the shared cache. Otherwise fall through to a
-        # direct read (keeps test fixtures with a monkeypatched
-        # _hermes_home working).
-        if config_path == get_config_path():
-            raw = read_raw_config()
-            used_canonical = True
+        if config_path.exists():
+            from hermes_cli.config import (
+                _expand_env_vars,
+                read_config_with_profile_inheritance,
+            )
+            raw = read_config_with_profile_inheritance(config_path)
+            raw = _expand_env_vars(raw)
     except Exception:
-        pass
+        logger.debug("Could not load gateway config from %s", config_path)
+        raw = {}
 
-    if not used_canonical:
-        try:
-            if config_path.exists():
-                import yaml
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    raw = yaml.safe_load(f) or {}
-        except Exception:
-            logger.debug("Could not load gateway config from %s", config_path)
-            raw = {}
-
-    # Overlay managed scope. read_raw_config() returns the user's raw YAML
-    # WITHOUT the managed merge (that lives in load_config/_load_config_impl),
-    # so the overlay is required on both paths for the gateway to honor pinned
-    # values. Helper is fail-open and a no-op when no managed scope exists.
+    # The explicit profile/root layer above does not include managed scope, so
+    # overlay administrator-pinned values here.
     try:
         from hermes_cli import managed_scope
         raw = managed_scope.apply_managed_overlay(raw if isinstance(raw, dict) else {})
@@ -3332,8 +3326,8 @@ def _load_gateway_config() -> dict:
         return {}
     # Canonicalize model-id aliases (model.name / model.model → model.default)
     # and migrate stale root-level provider/base_url into the model section.
-    # The gateway bypasses load_config() (it reads raw YAML for speed), so the
-    # normalization that load_config() applies must be replayed here or the
+    # This path bypasses load_config(), so its model-key normalization must be
+    # replayed here or the
     # gateway would resolve an empty model for ``model: {name: <id>}`` configs
     # while the CLI resolves it correctly. See issue #34500. Fail-open.
     try:
@@ -9254,16 +9248,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         that genuinely lacks the key clears the chain.
         """
         try:
-            from hermes_cli.config import read_user_config_raw
+            from hermes_cli.config import read_config_with_profile_inheritance
             cfg_path = _hermes_home / "config.yaml"
             if not cfg_path.exists():
                 self._fallback_model = None
                 return self._fallback_model
-            # Raw primitive (raises on parse failure) is required here: the
-            # canonical fail-open loader would return {} on a torn mid-edit
-            # write and WIPE the last known-good chain. The overlay/expansion
-            # below fixes the managed-scope/${VAR} drift without losing that.
-            cfg = read_user_config_raw(cfg_path)
+            # The explicit root+profile reader raises on a torn profile/root
+            # edit, preserving the last-known-good chain, while also honoring
+            # root inheritance. The canonical fail-open loader would return {}
+            # on a parse failure and wipe a cached agent's fallback chain.
+            cfg = read_config_with_profile_inheritance(cfg_path)
             try:
                 from hermes_cli import managed_scope
                 cfg = managed_scope.apply_managed_overlay(cfg)
@@ -29341,9 +29335,9 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
         _audit_cfg = None
         try:
-            from hermes_cli.config import read_raw_config
-
-            _audit_cfg = read_raw_config()
+            # Security settings are behavioral config too: a profile that
+            # omits them must be audited using the inherited root values.
+            _audit_cfg = _load_gateway_config()
         except Exception:
             _audit_cfg = None
         log_startup_security_warnings(hermes_home=_hermes_home, config=_audit_cfg)

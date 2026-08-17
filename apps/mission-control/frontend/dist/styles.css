@@ -2718,7 +2718,7 @@ tr:hover .row-actions, tr.is-selected .row-actions, .row-actions:focus-within { 
   background: var(--accent); animation: chat-pulse 1.1s ease-in-out infinite;
 }
 @keyframes chat-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
-.chat-activity-label { flex: none; font-weight: 600; color: var(--text); }
+.chat-activity-label { flex: none; min-inline-size: 12ch; font-weight: 600; color: var(--text); }
 .chat-activity-detail {
   flex: 0 1 auto; min-width: 0; max-width: 260px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
