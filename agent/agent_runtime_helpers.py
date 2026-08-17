@@ -3737,18 +3737,73 @@ def intent_ack_continuation_enabled(agent) -> bool:
 
 
 
+def _preserve_thinking_for_active_model(agent) -> bool:
+    """Return whether the active custom-provider model opts into thinking replay.
+
+    ``providers.<provider>.models.<model>.preserve_thinking: true`` enables
+    lossless replay of an explicit ``reasoning_content`` field for that exact
+    runtime model id and route. This is PRESERVE semantics, not the REQUIRE
+    semantics used by DeepSeek/Kimi/MiMo: missing reasoning is never fabricated
+    or promoted from the internal ``reasoning`` trajectory field.
+
+    The destination tuple is cached per agent. Model/provider/base-url changes
+    (including fallback activation and primary restore) naturally invalidate it.
+    """
+    key = (
+        str(getattr(agent, "requested_provider", "") or getattr(agent, "provider", "") or ""),
+        str(getattr(agent, "model", "") or ""),
+        str(getattr(agent, "base_url", "") or ""),
+    )
+    cached = getattr(agent, "_preserve_thinking_cache", None)
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == key:
+        return bool(cached[1])
+
+    enabled = False
+    try:
+        from hermes_cli.config import get_custom_provider_model_capability
+
+        enabled = get_custom_provider_model_capability(
+            model=key[1],
+            base_url=key[2],
+            capability="preserve_thinking",
+        ) is True
+    except Exception:
+        enabled = False
+
+    try:
+        agent._preserve_thinking_cache = (key, enabled)
+    except Exception:
+        pass
+    return enabled
+
+
 def copy_reasoning_content_for_api(agent, source_msg: dict, api_msg: dict) -> None:
     """Copy provider-facing reasoning fields onto an API replay message.
 
-    Forwarder — the strip-vs-repad POLICY is owned by
-    ``agent.message_sanitization.apply_reasoning_content_policy`` (audit F4);
-    this only supplies the agent's cached provider-direction flag.
+    Policy precedence is REQUIRE > PRESERVE > STRIP:
+
+    * DeepSeek/Kimi/MiMo keep the existing REQUIRE behavior, including the
+      single-space pad when their protocol demands a non-empty field.
+    * A model with ``preserve_thinking: true`` keeps an explicit
+      ``reasoning_content`` byte-for-byte but never fabricates one.
+    * Every other destination keeps the existing strict-provider STRIP behavior.
     """
     from agent.message_sanitization import apply_reasoning_content_policy
 
-    apply_reasoning_content_policy(
-        source_msg, api_msg, agent._needs_thinking_reasoning_pad()
-    )
+    needs_thinking_pad = agent._needs_thinking_reasoning_pad()
+    if not needs_thinking_pad and _preserve_thinking_for_active_model(agent):
+        if source_msg.get("role") != "assistant":
+            return
+        existing = source_msg.get("reasoning_content")
+        if isinstance(existing, str):
+            api_msg["reasoning_content"] = existing
+        else:
+            # PRESERVE is intentionally non-synthetic: unlike REQUIRE-side
+            # providers, do not promote internal ``reasoning`` or inject " ".
+            api_msg.pop("reasoning_content", None)
+        return
+
+    apply_reasoning_content_policy(source_msg, api_msg, needs_thinking_pad)
 
 
 def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
@@ -3782,9 +3837,15 @@ def reapply_reasoning_echo_for_provider(agent, api_messages: list) -> int:
     """
     from agent.message_sanitization import reapply_reasoning_echo
 
-    return reapply_reasoning_echo(
-        api_messages, agent._needs_thinking_reasoning_pad()
-    )
+    needs_thinking_pad = agent._needs_thinking_reasoning_pad()
+    if not needs_thinking_pad and _preserve_thinking_for_active_model(agent):
+        # The initial request copy already retained every explicit
+        # reasoning_content field. Leave it untouched while this destination
+        # opts into PRESERVE. If fallback/model switch selects a destination
+        # without the flag, the existing strict path below strips it.
+        return 0
+
+    return reapply_reasoning_echo(api_messages, needs_thinking_pad)
 
 
 def _iter_httpx_pool_objects(http_client: Any):
