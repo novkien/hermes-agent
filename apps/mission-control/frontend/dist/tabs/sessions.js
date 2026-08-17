@@ -10,6 +10,7 @@ import { filterRows, filterSummary } from '../pure/text-filter.js';
 import { renderSessionDetail } from './session-detail.js';
 import { fetchWorkerLinks, mergeTaskChanged } from '../pure/session-operational-context.js';
 import { workerContextNodes } from '../components/session-operational-context.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const SSE_EVENTS = Object.freeze(['session.changed', 'task.changed']);
 
@@ -28,7 +29,7 @@ export const SSE_EVENTS = Object.freeze(['session.changed', 'task.changed']);
 // working right now surfaces instead of sinking to its root's timestamp.
 const WINDOW_SIZE = 100; // dashboard /api/sessions caps `limit` at 100
 
-export function createSessions({ api, profile, sse }) {
+export function createSessions({ api, profile, sse, liveStore }) {
   const root = el('div', { class: 'tab tab-sessions' });
   const toolbarHost = el('div', { class: 'sessions-toolbar-host' });
   const kpiRow = el('div', { class: 'kpi-row' });
@@ -132,20 +133,22 @@ export function createSessions({ api, profile, sse }) {
     return Math.floor((page * pageSize) / WINDOW_SIZE);
   }
 
-  async function load() {
+  async function load(background = false) {
     loading = true;
     try {
-      await loadOnce();
+      await loadOnce(background);
     } finally {
       loading = false;
       lastLoadedAt = Date.now();
     }
   }
 
-  async function loadOnce() {
+  async function loadOnce(background = false) {
     renderToolbar();
-    clear(listPane);
-    listPane.append(skeleton({ lines: 7 }));
+    if (!background || !windowRows.length) {
+      clear(listPane);
+      listPane.append(skeleton({ lines: 7 }));
+    }
     const query = new URLSearchParams({
       offset: String(windowIndex() * WINDOW_SIZE),
       limit: String(WINDOW_SIZE),
@@ -155,10 +158,14 @@ export function createSessions({ api, profile, sse }) {
     try {
       sessions = await api.get(`/api/upstream/api/sessions?${query.toString()}`, { profile });
     } catch (err) {
-      sessions = null;
-      windowRows = [];
-      clear(listPane);
-      listPane.append(errorPanel({ message: err.message, requestId: err.request_id, onRetry: load }));
+      if (!windowRows.length) {
+        sessions = null;
+        clear(listPane);
+        listPane.append(errorPanel({ message: err.message, requestId: err.request_id, onRetry: load }));
+      } else {
+        sessions.meta = { ...(sessions.meta || {}), freshness: 'stale', last_error: err.message };
+        render();
+      }
       return;
     }
 
@@ -305,6 +312,23 @@ export function createSessions({ api, profile, sse }) {
       ]));
   }
 
+  function applyLiveSessions() {
+    const live = liveRows(liveStore, 'sessions', profile);
+    if (!live) return false;
+    windowRows = mergeProjectedRows(windowRows, live.rows, idOf);
+    windowRows.sort((a, b) => chainActivity(b) - chainActivity(a));
+    sessions = {
+      data: { sessions: windowRows, total: windowRows.length },
+      meta: live.meta,
+    };
+    if (openSessionId && !windowRows.some((row) => idOf(row) === openSessionId || row.tip?.tip_id === openSessionId)) {
+      openSessionId = null;
+    }
+    render();
+    if (inspectorHost) renderInspector(inspectorHost);
+    return true;
+  }
+
   // Transcript rendering lives in `session-detail.js` so the Fleet/Topology
   // popup renders the identical thing from the identical code.
   async function openDetail(id) {
@@ -317,8 +341,13 @@ export function createSessions({ api, profile, sse }) {
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
-    const handles = SSE_EVENTS.map((name) => sse.on(name, () => {
+    if (unsubscribe) return;
+    const handles = [];
+    const liveOff = bindLiveResources(liveStore, ['sessions'], profile, () => {
+      if (root.isConnected) applyLiveSessions();
+    });
+    if (liveOff) handles.push(liveOff);
+    if (sse) for (const name of SSE_EVENTS) handles.push(sse.on(name, (event) => {
       if (!root.isConnected) return;
       // A load costs two upstream reads (dashboard page + tip resolution), and
       // the stream replays its buffer on connect, so an event that lands while
@@ -332,6 +361,7 @@ export function createSessions({ api, profile, sse }) {
         if (changed) render();
         return;
       }
+      if (liveStore) return;
       if (loading || Date.now() - lastLoadedAt < 2000) return;
       load().catch(() => null);
     }));
@@ -366,7 +396,8 @@ export function createSessions({ api, profile, sse }) {
     },
     async activate(params = {}) {
       bindEvents();
-      await load();
+      const hydrated = applyLiveSessions();
+      await load(hydrated);
       const selected = params.s || params.session || params.session_id || openSessionId;
       if (selected) await openDetail(selected);
     },

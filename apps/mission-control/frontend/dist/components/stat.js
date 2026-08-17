@@ -59,27 +59,85 @@ export function createStat({
   });
 
   const head = el('div', { class: 'stat-head' });
-  if (iconName) head.append(icon(iconName, { size: 12 }));
-  head.append(el('span', { class: 'stat-label', text: label }));
-  const d = deltaNode(delta, { unit: deltaUnit });
-  if (d) { head.append(el('span', { style: 'flex:1' })); head.append(d); }
+  const iconHost = el('span', { class: 'stat-icon', 'aria-hidden': 'true' });
+  const labelNode = el('span', { class: 'stat-label' });
+  const spacer = el('span', { style: 'flex:1' });
+  const deltaHost = el('span', { class: 'stat-delta-host' });
+  head.append(iconHost, labelNode, spacer, deltaHost);
   node.append(head);
 
-  node.append(el('div', {
-    class: 'stat-value',
-    text: value === null || value === undefined ? '—' : String(value),
-  }));
-  if (foot) node.append(el('div', { class: 'stat-foot', text: foot }));
-  const sparkNode = statSpark(spark, { seriesIndex });
-  if (sparkNode) node.append(sparkNode);
+  const valueNode = el('div', { class: 'stat-value' });
+  const footNode = el('div', { class: 'stat-foot' });
+  const sparkHost = el('div', { class: 'stat-spark-host' });
+  node.append(valueNode, footNode, sparkHost);
+
+  let previousIcon = null;
+  let previousSpark = '';
+  node.update = ({
+    label: nextLabel = '', value: nextValue = null, iconName: nextIcon = null,
+    delta: nextDelta = null, deltaUnit: nextDeltaUnit = '%', spark: nextSpark = null,
+    seriesIndex: nextSeriesIndex = 1, foot: nextFoot = '', onClick: nextOnClick = null,
+  } = {}) => {
+    labelNode.textContent = nextLabel;
+    valueNode.textContent = nextValue === null || nextValue === undefined ? '—' : String(nextValue);
+    footNode.textContent = nextFoot || '';
+    footNode.hidden = !nextFoot;
+
+    if (previousIcon !== nextIcon) {
+      iconHost.replaceChildren(...(nextIcon ? [icon(nextIcon, { size: 12 })] : []));
+      previousIcon = nextIcon;
+    }
+    deltaHost.replaceChildren(...(() => {
+      const next = deltaNode(nextDelta, { unit: nextDeltaUnit });
+      return next ? [next] : [];
+    })());
+    spacer.hidden = !deltaHost.firstChild;
+
+    const sparkKey = JSON.stringify([nextSpark || [], nextSeriesIndex]);
+    if (sparkKey !== previousSpark) {
+      const next = statSpark(nextSpark, { seriesIndex: nextSeriesIndex });
+      sparkHost.replaceChildren(...(next ? [next] : []));
+      sparkHost.hidden = !next;
+      previousSpark = sparkKey;
+    }
+
+    if (node.tagName === 'BUTTON') {
+      node.onclick = nextOnClick || null;
+      node.disabled = !nextOnClick;
+    }
+  };
+  node.update({ label, value, iconName, delta, deltaUnit, spark, seriesIndex, foot, onClick });
   return node;
 }
 
 /** Row of tiles. Pass the same specs `createStat` takes. */
 export function createStatRow(specs = []) {
   const row = el('div', { class: 'stat-row' });
-  specs.filter(Boolean).forEach((spec, i) => {
-    row.append(createStat({ seriesIndex: (i % 8) + 1, ...spec }));
-  });
+  const nodes = new Map();
+  row.setStats = (nextSpecs = []) => {
+    const ordered = [];
+    const active = new Set();
+    nextSpecs.filter(Boolean).forEach((spec, i) => {
+      const normalized = { seriesIndex: (i % 8) + 1, ...spec };
+      const key = String(spec.key || spec.label || i);
+      active.add(key);
+      let node = nodes.get(key);
+      if (!node || (node.tagName === 'BUTTON') !== Boolean(spec.onClick)) {
+        node = createStat(normalized);
+        nodes.set(key, node);
+      } else {
+        node.update(normalized);
+      }
+      ordered.push(node);
+    });
+    for (const [key, node] of nodes) {
+      if (!active.has(key)) {
+        node.remove();
+        nodes.delete(key);
+      }
+    }
+    row.append(...ordered);
+  };
+  row.setStats(specs);
   return row;
 }

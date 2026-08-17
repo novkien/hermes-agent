@@ -15,6 +15,7 @@ import {
   filterInput, loadEnvelope, paint, sideHint, tabToolbar,
 } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
+import { createKeyedReconciler } from '../pure/keyed-dom.js';
 
 export const ROUTE = 'activity';
 export const LABEL = 'Activity';
@@ -66,6 +67,10 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
 
   const feedPane = el('div');
   main.append(feedPane);
+  const feedHead = el('div', { class: 'panel-head' });
+  const feedBody = el('div', { class: 'panel-body' });
+  const feedTrack = el('ol', { class: 'timeline' });
+  feedPane.append(el('section', { class: 'panel' }, [feedHead, feedBody]));
 
   const MAX_ROWS = 300;
   let rows = [];
@@ -74,6 +79,7 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
   let reason = '';
   let selected = null;
   let unsubscribe = null;
+  let loadedFromSource = false;
   const filters = { source: '', coverage: '', type: '', query: '' };
   // The three dropdowns narrow by facet; this narrows by content. An event feed
   // without a text filter means scrolling 300 rows to find the one that
@@ -96,6 +102,43 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
     return filterRows(faceted, filters.query, SEARCH_FIELDS);
   }
 
+  function paintEvent(node, row) {
+    clear(node);
+    node.append(
+      el('div', { class: 'timeline-marker', 'aria-hidden': 'true' }),
+      el('button', {
+        class: 'timeline-body timeline-button', type: 'button',
+        onclick: () => { selected = node._eventRow; renderFeed(); renderSide(); },
+      }, [
+        el('div', { class: 'timeline-head' }, [
+          statusChip(TYPE_TONE[row.type] || 'idle', row.type),
+          el('span', { class: 'cell-dim mono', text: `${row.entityType} ${row.entityId}`.trim() }),
+          statusChip(COVERAGE_TONE[row.coverage] || 'unknown', row.coverage),
+          el('span', { class: 'timeline-when mono', text: row.iso ? fmtAge(row.iso) : '' }),
+        ]),
+        Object.keys(row.payload).length
+          ? el('div', { class: 'timeline-payload mono', text: JSON.stringify(row.payload).slice(0, 220) })
+          : null,
+      ].filter(Boolean)),
+    );
+  }
+
+  const feedRows = createKeyedReconciler({
+    container: feedTrack,
+    key: (row) => row.id,
+    create: (row) => {
+      const node = el('li', { class: 'timeline-item' });
+      node._eventRow = row;
+      paintEvent(node, row);
+      return node;
+    },
+    update: (node, row, previous) => {
+      node._eventRow = row;
+      node.classList.toggle('is-selected', selected?.id === row.id);
+      if (previous !== row) paintEvent(node, row);
+    },
+  });
+
   function selectOne(label, value, options, onChange) {
     const node = el('select', {
       class: 'select input-sm', 'aria-label': label,
@@ -111,52 +154,32 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
   }
 
   function renderFeed() {
-    clear(feedPane);
     const list = visible();
-
-    const body = el('div', { class: 'panel-body' });
+    clear(feedHead);
+    feedHead.append(
+      el('div', { class: 'panel-title', text: 'Event feed' }),
+      el('span', { class: 'chip', text: `${list.length}${list.length === rows.length ? '' : ` of ${rows.length}`}` }),
+      sse ? statusChip('ok', 'live') : null,
+    );
     if (state === 'unavailable') {
-      body.append(unavailableState({ reason, requestId: meta?.request_id }));
+      feedRows.reconcile([]);
+      clear(feedBody);
+      feedBody.append(unavailableState({ reason, requestId: meta?.request_id }));
     } else if (!rows.length) {
-      body.append(emptyState({
+      feedRows.reconcile([]);
+      clear(feedBody);
+      feedBody.append(emptyState({
         title: 'No events buffered',
         note: 'The event bus replay buffer is empty. New events appear here live as the source workers publish them.',
       }));
     } else if (!list.length) {
-      body.append(emptyState({ title: 'No events match these filters' }));
+      feedRows.reconcile([]);
+      clear(feedBody);
+      feedBody.append(emptyState({ title: 'No events match these filters' }));
     } else {
-      const track = el('ol', { class: 'timeline' });
-      for (const row of list.slice(0, MAX_ROWS)) {
-        const isSelected = selected && selected.id === row.id;
-        track.append(el('li', { class: `timeline-item${isSelected ? ' is-selected' : ''}` }, [
-          el('div', { class: 'timeline-marker', 'aria-hidden': 'true' }),
-          el('button', {
-            class: 'timeline-body timeline-button', type: 'button',
-            onclick: () => { selected = row; renderFeed(); renderSide(); },
-          }, [
-            el('div', { class: 'timeline-head' }, [
-              statusChip(TYPE_TONE[row.type] || 'idle', row.type),
-              el('span', { class: 'cell-dim mono', text: `${row.entityType} ${row.entityId}`.trim() }),
-              statusChip(COVERAGE_TONE[row.coverage] || 'unknown', row.coverage),
-              el('span', { class: 'timeline-when mono', text: row.iso ? fmtAge(row.iso) : '' }),
-            ]),
-            Object.keys(row.payload).length
-              ? el('div', { class: 'timeline-payload mono', text: JSON.stringify(row.payload).slice(0, 220) })
-              : null,
-          ].filter(Boolean)),
-        ]));
-      }
-      body.append(track);
+      if (feedTrack.parentNode !== feedBody) { clear(feedBody); feedBody.append(feedTrack); }
+      feedRows.reconcile(list.slice(0, MAX_ROWS));
     }
-
-    feedPane.append(el('section', { class: 'panel' }, [
-      el('div', { class: 'panel-head' }, [
-        el('div', { class: 'panel-title', text: 'Event feed' }),
-        el('span', { class: 'chip', text: `${list.length}${list.length === rows.length ? '' : ` of ${rows.length}`}` }),
-        sse ? statusChip('ok', 'live') : null,
-      ].filter(Boolean)),
-      body,
-    ]));
   }
 
   function renderInspector(container) {
@@ -205,8 +228,10 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
   }
 
   async function load() {
-    clear(feedPane);
-    feedPane.append(skeleton({ lines: 8 }));
+    if (!rows.length) {
+      clear(feedBody);
+      feedBody.append(skeleton({ lines: 8 }));
+    }
     const result = await loadEnvelope(api, '/api/events/recent?limit=300', {
       profile,
       pick: (raw) => (Array.isArray(raw) ? raw : raw?.events || []),
@@ -217,6 +242,7 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
     reason = result.reason;
     rows = (Array.isArray(result.data) ? result.data : []).map(eventRow)
       .sort((a, b) => b.sort - a.sort);
+    loadedFromSource = true;
     renderFeed();
     renderToolbar(toolbar);
     renderSide();
@@ -270,6 +296,7 @@ export function createActivity({ api, profile, sse, toolbar, onNavigate: navigat
     activate() {
       bindEvents();
       renderToolbar(toolbar);
+      if (loadedFromSource) { renderFeed(); return Promise.resolve(); }
       return load();
     },
     deactivate() {

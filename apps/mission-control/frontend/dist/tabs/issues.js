@@ -17,6 +17,7 @@ import { toast } from '../components/toast.js';
 import {
   loadEnvelope, applyStateToTable, tabToolbar, runMutation, sideHint, paint, confirmAction,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'issues';
 export const LABEL = 'Issues';
@@ -121,7 +122,7 @@ const VIEWS = [
   { value: 'all', label: 'All' },
 ];
 
-export function createIssues({ api, profile, sse, toolbar }) {
+export function createIssues({ api, profile, sse, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-issues' });
   const stats = el('div', { class: 'stat-row-host' });
   const main = el('div', { class: 'split-main' });
@@ -135,6 +136,7 @@ export function createIssues({ api, profile, sse, toolbar }) {
   let severity = '';
   let search = '';
   let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -208,6 +210,7 @@ export function createIssues({ api, profile, sse, toolbar }) {
     table.setLoading();
     const result = await loadEnvelope(api, '/api/adapter/issues', { profile, pick: pickIssues });
     meta = result.meta;
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     rows = (Array.isArray(result.data) ? result.data : []).map(normalizeIssue).filter(Boolean);
 
     const wanted = initialSelection ? String(initialSelection) : selected?.id ?? null;
@@ -218,6 +221,27 @@ export function createIssues({ api, profile, sse, toolbar }) {
     renderStats();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive(initialSelection = null) {
+    const live = liveRows(liveStore, 'issues', profile, normalizeIssue);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    const wanted = initialSelection ? String(initialSelection) : selected?.id ?? null;
+    selected = (wanted && rows.find((row) => row.id === wanted)) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderStats();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  async function revalidate(initialSelection = null) {
+    if (!liveStore) return load(initialSelection);
+    await liveStore.resyncResource('issues', profile, { force: true });
+    applyLive(initialSelection);
   }
 
   function refilter() {
@@ -348,7 +372,7 @@ export function createIssues({ api, profile, sse, toolbar }) {
           { pending: 'Apply update', ok: `Issue ${issue.id} updated` },
         );
         form.setBusy(false);
-        if (res) await load(issue.id);
+        if (res) await revalidate(issue.id);
       },
     });
     return form;
@@ -381,7 +405,7 @@ export function createIssues({ api, profile, sse, toolbar }) {
         );
         if (res) {
           selected = null;
-          await load();
+          await revalidate();
         }
       },
     });
@@ -441,7 +465,11 @@ export function createIssues({ api, profile, sse, toolbar }) {
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
+    if (unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, ['issues'], profile, () => {
+      if (root.isConnected) applyLive(selected?.id ?? null);
+    });
+    if (unsubscribe || !sse) return;
     const handles = SSE_EVENTS.map((name) => sse.on(name, () => {
       if (!root.isConnected) return;
       load(selected?.id ?? null).catch(() => null);
@@ -456,7 +484,9 @@ export function createIssues({ api, profile, sse, toolbar }) {
     renderInspector,
     activate(params = {}) {
       bindEvents();
-      return load(params.issue || params.id || null);
+      const selectedId = params.issue || params.id || null;
+      applyLive(selectedId);
+      return loadedFromSource ? Promise.resolve() : load(selectedId);
     },
     deactivate() {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }

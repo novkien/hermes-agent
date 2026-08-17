@@ -23,6 +23,7 @@ import {
   compactNumber, formatCost,
 } from '../pure/analytics-shape.js';
 import { loadEnvelope, tabToolbar, paint, sideHint } from './_kit.js';
+import { bindLiveResources, liveSummary } from './_live.js';
 
 export const ROUTE = 'analytics';
 export const LABEL = 'Analytics / Spend';
@@ -41,7 +42,7 @@ const VIEWS = Object.freeze([
   { value: 'skills', label: 'Skills' },
 ]);
 
-export function createAnalytics({ api, profile, toolbar, onNavigate: navigate }) {
+export function createAnalytics({ api, profile, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-analytics' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -59,18 +60,23 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
   let days = [];
   let range = null; // [fromDay, toDay] carried in from an Overview brush
   let chartNode = null;
+  let statRow = null;
   let selectedRow = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
 
   function windowDays() {
     if (!range) return days;
     return days.filter((day) => day.day >= range[0] && day.day <= range[1]);
   }
 
-  async function load() {
-    clear(statsPane);
-    clear(trendPane);
-    clear(breakdownPane);
-    statsPane.append(skeleton({ lines: 3 }));
+  async function load(background = false) {
+    if (!background || !usage) {
+      clear(statsPane);
+      clear(trendPane);
+      clear(breakdownPane);
+      statsPane.append(skeleton({ lines: 3 }));
+    }
 
     const [usageResult, modelResult] = await Promise.all([
       loadEnvelope(api, `/api/upstream/api/analytics/usage?days=${period}`, { profile, allowEmpty: false }),
@@ -79,13 +85,30 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
     usage = usageResult;
     models = modelResult;
     days = dailySeries(usageResult.data);
+    loadedFromSource = true;
     render();
+  }
+
+  function applyLive() {
+    const live = liveSummary(liveStore, 'analytics.usage', profile);
+    if (!live) return false;
+    usage = { data: live.data, meta: live.meta, state: 'ready' };
+    models = { data: { models: live.data.by_model || [] }, meta: live.meta, state: 'ready' };
+    days = dailySeries(live.data);
+    render();
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, ['analytics.usage'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
   }
 
   // ------------------------------------------------------------------- tiles
 
   function renderStats() {
-    clear(statsPane);
     const window = windowDays();
     const totals = sliceTotals(window);
     // Hermes reports estimated and actual separately; the class tells the
@@ -93,7 +116,7 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
     // number is non-zero rather than assumed.
     const costClass = classifyCost(totals.actual_cost > 0 ? 'actual' : 'estimated');
 
-    statsPane.append(createStatRow([
+    const specs = [
       {
         label: 'Input tokens', value: compactNumber(totals.input_tokens), seriesIndex: 1,
         spark: window.map((day) => day.input_tokens),
@@ -131,12 +154,28 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
         label: 'Actual cost', value: formatCost(totals.actual_cost),
         foot: costLabel(costClass),
       },
-    ]));
+    ];
+    if (!statRow) {
+      statRow = createStatRow(specs);
+      statsPane.replaceChildren(statRow);
+    } else {
+      statRow.setStats(specs);
+      if (statRow.parentNode !== statsPane) statsPane.replaceChildren(statRow);
+    }
   }
 
   // ------------------------------------------------------------------- trend
 
   function renderTrend() {
+    const brushIndexes = range
+      ? [days.findIndex((d) => d.day === range[0]), days.findIndex((d) => d.day === range[1])]
+      : null;
+    const nextChart = {
+      labels: days.map((day) => day.day.slice(5)),
+      series: TOKEN_SERIES.map((spec) => ({ ...spec, values: days.map((day) => day[spec.key]) })),
+      brush: brushIndexes,
+    };
+    if (days.length && chartNode?.update?.(nextChart)) return;
     clear(trendPane);
     if (chartNode?.dispose) chartNode.dispose();
     chartNode = null;
@@ -147,12 +186,9 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
         ? unavailableState({ reason: usage.reason, requestId: usage.requestId })
         : emptyState({ title: 'No daily usage rows', note: `Analytics reported nothing for the last ${period} days.` }));
     } else {
-      const brushIndexes = range
-        ? [days.findIndex((d) => d.day === range[0]), days.findIndex((d) => d.day === range[1])]
-        : null;
       chartNode = barChart({
-        labels: days.map((day) => day.day.slice(5)),
-        series: TOKEN_SERIES.map((spec) => ({ ...spec, values: days.map((day) => day[spec.key]) })),
+        labels: nextChart.labels,
+        series: nextChart.series,
         formatValue: (value) => compactNumber(Math.round(value)),
         ariaLabel: `Input and output tokens per day over ${days.length} days`,
         brush: brushIndexes && brushIndexes[0] >= 0 ? brushIndexes : null,
@@ -390,6 +426,7 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
     mount(container) { clear(container); container.append(root); },
     renderInspector,
     activate(params = {}) {
+      bindLive();
       // The Overview's brush deep-links here with the exact window it selected.
       if (params.days) {
         const wanted = Number(params.days);
@@ -397,12 +434,15 @@ export function createAnalytics({ api, profile, toolbar, onNavigate: navigate })
       }
       range = params.from && params.to ? [params.from, params.to] : null;
       renderToolbar(toolbar);
-      return load().catch(() => render());
+      const hydrated = applyLive();
+      if (loadedFromSource) return Promise.resolve();
+      return load(hydrated).catch(() => render());
     },
     deactivate() {
-      if (chartNode?.dispose) chartNode.dispose();
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { period, view };
     },
+    dispose() { if (chartNode?.dispose) chartNode.dispose(); },
     refresh: load,
     renderToolbar,
     get data() { return { days, models: modelRows(models?.data) }; },

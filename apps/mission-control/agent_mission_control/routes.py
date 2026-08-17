@@ -1861,10 +1861,43 @@ class Router:
             topic = _mutation_change_topic(path)
             if bus is not None and topic:
                 event_name, entity_type = topic
+                entity_id = str(tokens.get("job_id") or tokens.get("name") or "")
+                event_payload: dict[str, Any] = {"state": None}
+                resource_key = None
+                operation = None
+                revision = None
+                if event_name == "cron.changed" and self.read_model is not None:
+                    resource_key = "cron.jobs"
+                    operation = "invalidate"
+                    data, _upstream_meta = split_upstream_envelope(resp_body)
+                    candidate = data.get("job") if isinstance(data, dict) and isinstance(data.get("job"), dict) else data
+                    candidate = dict(candidate) if isinstance(candidate, dict) else {}
+                    if isinstance(body, dict):
+                        updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
+                        candidate.update(updates)
+                    if path.endswith("/pause"):
+                        candidate["state"] = "paused"
+                    elif path.endswith("/resume"):
+                        candidate["state"] = "scheduled"
+                    entity_id = str(entity_id or candidate.get("id") or candidate.get("name") or "")
+                    if request.method == "DELETE" and entity_id:
+                        revision = self.read_model.delete_entity(
+                            resource_key, entity_id,
+                            profile_id=profile_id or self.s.live_default_profile,
+                        )
+                        event_payload = {}
+                        operation = "delete"
+                    elif entity_id:
+                        candidate["id"] = entity_id
+                        revision, event_payload = self.read_model.upsert_entity(
+                            resource_key, candidate,
+                            profile_id=profile_id or self.s.live_default_profile,
+                        )
+                        operation = "upsert"
                 await bus.safe_publish(
                     event_name, "dashboard", entity_type,
-                    str(tokens.get("job_id") or tokens.get("name") or ""),
-                    {"state": None}, coverage="native", profile_id=profile_id,
+                    entity_id, event_payload, coverage="native", profile_id=profile_id,
+                    resource_key=resource_key, operation=operation, revision=revision,
                 )
         freshness = "live" if status < 400 else "unavailable"
         return JSONResponse(

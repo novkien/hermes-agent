@@ -18,6 +18,7 @@ import {
   loadEnvelope, applyStateToTable, tabToolbar, runMutation, sideHint,
   paint, primaryButton, confirmAction,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'cron';
 export const LABEL = 'Cron';
@@ -77,7 +78,7 @@ const VIEWS = [
   { value: 'paused', label: 'Paused' },
 ];
 
-export function createCron({ api, profile, sse, toolbar }) {
+export function createCron({ api, profile, sse, toolbar, liveStore }) {
   const root = el('div', { class: 'tab tab-cron' });
   const stats = el('div', { class: 'stat-row-host' });
   const main = el('div', { class: 'split-main' });
@@ -91,6 +92,7 @@ export function createCron({ api, profile, sse, toolbar }) {
   let search = '';
   let creating = false;
   let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -144,7 +146,7 @@ export function createCron({ api, profile, sse, toolbar }) {
         label: `Fire ${row.name} now`,
         onClick: () => runMutation(
           () => api.post(`/api/upstream/api/cron/jobs/${encodeURIComponent(row.id)}/fire`, {}, { profile }),
-          { pending: 'Fire job', ok: `${row.name} fired`, onDone: () => load(row.id) },
+          { pending: 'Fire job', ok: `${row.name} fired`, onDone: () => revalidate(row.id) },
         ),
       }),
       iconButton({
@@ -159,7 +161,7 @@ export function createCron({ api, profile, sse, toolbar }) {
           {
             pending: 'Toggle job',
             ok: `${row.name} ${row.state === 'paused' ? 'resumed' : 'paused'}`,
-            onDone: () => load(row.id),
+            onDone: () => revalidate(row.id),
           },
         ),
       }),
@@ -188,6 +190,7 @@ export function createCron({ api, profile, sse, toolbar }) {
       pick: (raw) => (Array.isArray(raw) ? raw : raw?.jobs || raw?.items || null),
     });
     meta = result.meta;
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     rows = (Array.isArray(result.data) ? result.data : []).map(cronRow).filter(Boolean);
 
     const wanted = initialSelection ? String(initialSelection) : selected?.id ?? null;
@@ -198,6 +201,27 @@ export function createCron({ api, profile, sse, toolbar }) {
     renderStats();
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive(initialSelection = null) {
+    const live = liveRows(liveStore, 'cron.jobs', profile, cronRow);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    const wanted = initialSelection ? String(initialSelection) : selected?.id ?? null;
+    selected = (wanted && rows.find((row) => row.id === wanted)) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderStats();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  async function revalidate(initialSelection = null) {
+    if (!liveStore) return load(initialSelection);
+    await liveStore.resyncResource('cron.jobs', profile, { force: true });
+    applyLive(initialSelection);
   }
 
   function refilter() {
@@ -315,7 +339,7 @@ export function createCron({ api, profile, sse, toolbar }) {
         form.setBusy(false);
         if (res) {
           creating = false;
-          await load(res.data?.id ?? res.data?.job?.id ?? null);
+          await revalidate(res.data?.id ?? res.data?.job?.id ?? null);
         }
       },
     });
@@ -348,7 +372,7 @@ export function createCron({ api, profile, sse, toolbar }) {
           { pending: 'Save job', ok: `${job.name} updated` },
         );
         form.setBusy(false);
-        if (res) await load(job.id);
+        if (res) await revalidate(job.id);
       },
     });
     return form;
@@ -424,7 +448,7 @@ export function createCron({ api, profile, sse, toolbar }) {
       actions: [
         primaryButton('Fire now', 'play', () => runMutation(
           () => api.post(`/api/upstream/api/cron/jobs/${encodeURIComponent(job.id)}/fire`, {}, { profile }),
-          { pending: 'Fire job', ok: `${job.name} fired`, onDone: () => load(job.id) },
+          { pending: 'Fire job', ok: `${job.name} fired`, onDone: () => revalidate(job.id) },
         )),
         confirmAction({
           label: 'Delete job',
@@ -435,7 +459,7 @@ export function createCron({ api, profile, sse, toolbar }) {
             {
               pending: 'Delete job',
               ok: `${job.name} deleted`,
-              onDone: () => { selected = null; return load(); },
+              onDone: () => { selected = null; return revalidate(); },
             },
           ),
         }),
@@ -445,7 +469,11 @@ export function createCron({ api, profile, sse, toolbar }) {
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
+    if (unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, ['cron.jobs'], profile, () => {
+      if (root.isConnected) applyLive(selected?.id ?? null);
+    });
+    if (unsubscribe || !sse) return;
     const off = sse.on('cron.changed', () => {
       if (!root.isConnected) return;
       load(selected?.id ?? null).catch(() => null);
@@ -460,7 +488,9 @@ export function createCron({ api, profile, sse, toolbar }) {
     renderInspector,
     activate(params = {}) {
       bindEvents();
-      return load(params.job || params.id || null);
+      const selectedId = params.job || params.id || null;
+      applyLive(selectedId);
+      return loadedFromSource ? Promise.resolve() : load(selectedId);
     },
     deactivate() {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }

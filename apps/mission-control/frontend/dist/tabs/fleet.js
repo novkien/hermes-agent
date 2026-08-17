@@ -25,6 +25,7 @@ import { createDetail } from '../components/detail.js';
 import { loadEnvelope, tabToolbar, sideHint, paint } from './_kit.js';
 import { createSessionDetailModal } from './session-detail.js';
 import { createChatModal } from './chat.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'fleet';
 export const LABEL = 'Fleet / Topology';
@@ -95,7 +96,7 @@ function trunkPath(hubX, hubY, spineY, childXs, childY) {
   return parts.join(' ');
 }
 
-export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }) {
+export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-fleet' });
 
   const servicePane = el('div');
@@ -110,6 +111,8 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
   let meta = null;
   let unsubscribe = null;
   let inspectorHost = null;
+  let topologyInputs = null;
+  let loadedFromSource = false;
 
   // Both popups are created on first use so a tab that never opens one does
   // not append an overlay to the document.
@@ -906,6 +909,15 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
       threadSessions,
       roomCards,
     });
+    topologyInputs = {
+      rooms: rooms.data,
+      sessions: Array.isArray(sessions.data) ? sessions.data : [],
+      tasks: Array.isArray(tasks.data) ? tasks.data : [],
+      topics: Array.isArray(rooms.data?.topics) ? rooms.data.topics : [],
+      threadSessions,
+      roomCards,
+    };
+    loadedFromSource = true;
 
     // Keep the current selection pointing at the refreshed object, not a stale
     // copy — otherwise a refresh silently freezes the inspector.
@@ -937,6 +949,32 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
     renderSide();
   }
 
+  function applyLive() {
+    if (!topologyInputs) return false;
+    const taskState = liveRows(liveStore, 'kanban.tasks', profile);
+    const sessionState = liveRows(liveStore, 'sessions', profile);
+    if (!taskState && !sessionState) return false;
+    topologyInputs = {
+      ...topologyInputs,
+      tasks: taskState
+        ? mergeProjectedRows(topologyInputs.tasks, taskState.rows, (task) => task.id)
+        : topologyInputs.tasks,
+      sessions: sessionState
+        ? mergeProjectedRows(topologyInputs.sessions, sessionState.rows, (session) => session.session_id || session.id)
+        : topologyInputs.sessions,
+    };
+    model = buildOrgChart(topologyInputs);
+    if (selected?.kind === 'card') {
+      const task = topologyInputs.tasks.find((row) => String(row.id) === String(selected.id));
+      if (task) selected = { ...selected, task };
+    }
+    renderGraph();
+    renderLists();
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
   function renderToolbar(host) {
     if (!host) return;
     paint(host, tabToolbar({
@@ -950,13 +988,18 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
+    if (unsubscribe) return;
+    const handles = [];
+    const liveOff = bindLiveResources(liveStore, ['sessions', 'kanban.tasks'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
+    if (liveOff) handles.push(liveOff);
     // Only events in SseClient.EVENT_TYPES are ever delivered — subscribing to
     // anything else is silently dead, so keep this list inside that allowlist.
-    const handles = ['session.changed', 'task.changed']
+    if (sse) handles.push(...['session.changed', 'task.changed']
       .map((name) => sse.on(name, () => {
-        if (root.isConnected) load().catch(() => null);
-      }));
+        if (root.isConnected && !liveStore) load().catch(() => null);
+      })));
     unsubscribe = () => { for (const off of handles) off?.(); };
   }
 
@@ -965,7 +1008,8 @@ export function createFleet({ api, profile, sse, toolbar, onNavigate: navigate }
     activate() {
       bindEvents();
       renderToolbar(toolbar);
-      return load();
+      applyLive();
+      return loadedFromSource ? Promise.resolve() : load();
     },
     deactivate() {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }

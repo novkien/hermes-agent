@@ -19,6 +19,7 @@ from .live_resources import RESOURCE_SPECS, ROUTE_RESOURCES
 
 
 READ_MODEL_SCHEMA_VERSION = 1
+READ_MODEL_PROJECTOR_VERSION = 2
 MAX_ENTITIES_PER_RESOURCE = 5000
 MAX_PROJECTED_JSON_BYTES = 1_000_000
 
@@ -61,7 +62,7 @@ CREATE TABLE IF NOT EXISTS source_state (
 # Fields are intentionally explicit. Unknown upstream keys are dropped.
 PROJECTOR_FIELDS: dict[str, frozenset[str]] = {
     "source.health": frozenset({"source_id", "healthy", "status", "previous", "checked_at", "message"}),
-    "sessions": frozenset({"id", "session_id", "title", "profile", "platform", "model", "message_count", "created_at", "updated_at", "last_activity_at", "last_active", "ended_at", "archived"}),
+    "sessions": frozenset({"id", "session_id", "title", "profile", "platform", "source", "model", "message_count", "created_at", "updated_at", "last_activity_at", "last_active", "ended_at", "end_reason", "archived", "is_active"}),
     "sessions.running": frozenset({"session_id", "run_id", "started_at", "platform", "profile"}),
     "kanban.tasks": frozenset({"id", "title", "status", "assignee", "priority", "board", "profile", "current_run_id", "created_at", "updated_at", "started_at", "completed_at", "last_heartbeat_at"}),
     "permits": frozenset({"permit_id", "id", "title", "status", "severity", "approved", "executed", "created_at", "updated_at", "expires_at"}),
@@ -76,7 +77,7 @@ PROJECTOR_FIELDS: dict[str, frozenset[str]] = {
 
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
     "overview.summary": frozenset({"total", "running", "ready", "blocked", "done", "pending_permits", "open_issues"}),
-    "analytics.usage": frozenset({"total_tokens", "tokens", "token_count", "input_tokens", "output_tokens", "cost", "currency", "period", "from", "to"}),
+    "analytics.usage": frozenset({"total_tokens", "tokens", "token_count", "input_tokens", "output_tokens", "cost", "currency", "period", "period_days", "from", "to", "daily", "by_model", "by_task", "tools", "skills", "totals"}),
     "iframe.health": frozenset({"service", "healthy", "status", "checked_at"}),
 }
 
@@ -110,6 +111,36 @@ def project_entity(resource_key: str, value: dict[str, Any]) -> dict[str, Any]:
 
 
 def project_summary(resource_key: str, value: dict[str, Any]) -> dict[str, Any]:
+    if resource_key == "analytics.usage":
+        metric_keys = {
+            "day", "model", "model_id", "provider", "task", "tool", "skill",
+            "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens",
+            "total_tokens", "tokens", "token_count", "estimated_cost", "actual_cost",
+            "cost", "currency", "sessions", "api_calls", "tool_calls", "last_used_at",
+            "avg_tokens_per_session", "count", "percentage", "models", "view_count",
+            "manage_count", "manage_calls", "total_skill_loads", "total_skill_edits",
+            "total_skill_actions", "distinct_skills_used",
+        }
+
+        def analytics_value(child: Any, depth: int = 0) -> Any:
+            if depth > 3:
+                return None
+            if isinstance(child, dict):
+                return {
+                    key: analytics_value(item, depth + 1)
+                    for key, item in list(child.items())[:200]
+                    if key in metric_keys or key in {"summary", "top_skills"}
+                }
+            if isinstance(child, list):
+                return [analytics_value(item, depth + 1) for item in child[:500]]
+            return _safe_scalar(child)
+
+        allowed = SUMMARY_FIELDS[resource_key]
+        return {
+            key: analytics_value(child)
+            for key, child in value.items()
+            if key in allowed and key.lower() not in FORBIDDEN_KEYS
+        }
     allowed = SUMMARY_FIELDS.get(resource_key, frozenset())
     return {
         key: _safe_scalar(child)
@@ -358,7 +389,6 @@ class ReadModel:
         if entity_id in (None, ""):
             raise ValueError(f"entity lacks {spec.entity_key}: {resource_key}")
         entity_id = str(entity_id)
-        encoded = _json(value)
         now = time.time()
         try:
             with self._lock:
@@ -369,6 +399,14 @@ class ReadModel:
                     "WHERE profile_id=? AND resource_key=? AND entity_id=?",
                     (profile, resource_key, entity_id),
                 ).fetchone()
+                if current is not None:
+                    try:
+                        previous = json.loads(current["payload_json"])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        previous = {}
+                    if isinstance(previous, dict):
+                        value = {**previous, **value}
+                encoded = _json(value)
                 if current is not None and current["payload_json"] == encoded:
                     conn.commit()
                     return int(current["revision"]), value

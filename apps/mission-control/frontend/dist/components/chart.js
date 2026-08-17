@@ -62,7 +62,7 @@ export function barChart({
   onBrush = null, onSelect = null, brush = null, ariaLabel = 'chart',
 } = {}) {
   const count = labels.length;
-  const live = series.filter((s) => Array.isArray(s.values) && s.values.length);
+  let live = series.filter((s) => Array.isArray(s.values) && s.values.length);
   const root = el('div', { class: 'chart' });
   if (!count || !live.length) return root;
 
@@ -74,8 +74,8 @@ export function barChart({
   const plotWidth = width - padLeft - padRight;
   const plotHeight = height - padTop - padBottom;
 
-  const stackTotals = labels.map((_, i) => live.reduce((total, s) => total + (Number(s.values[i]) || 0), 0));
-  const max = niceMax(Math.max(...stackTotals, 0));
+  let stackTotals = labels.map((_, i) => live.reduce((total, s) => total + (Number(s.values[i]) || 0), 0));
+  let max = niceMax(Math.max(...stackTotals, 0));
   const slot = plotWidth / count;
   const barWidth = Math.max(2, slot - 2); // the 2px gap between adjacent bars
 
@@ -85,13 +85,16 @@ export function barChart({
   });
 
   // Gridlines + y labels. Recessive: hairline, muted text, behind the marks.
+  const gridNodes = [];
   for (let step = 0; step <= 2; step += 1) {
     const value = (max / 2) * step;
     const y = padTop + plotHeight - (value / max) * plotHeight;
-    svg.append(svgEl('line', { class: 'chart-grid', x1: padLeft, y1: y, x2: width - padRight, y2: y }));
+    const line = svgEl('line', { class: 'chart-grid', x1: padLeft, y1: y, x2: width - padRight, y2: y });
+    svg.append(line);
     const text = svgEl('text', { class: 'chart-axis', x: padLeft - 6, y: y + 3, 'text-anchor': 'end' });
     text.textContent = formatValue(value);
     svg.append(text);
+    gridNodes.push({ step, line, text });
   }
 
   const brushLayer = svgEl('rect', { class: 'chart-brush', x: 0, y: padTop, width: 0, height: plotHeight, rx: 3 });
@@ -102,7 +105,6 @@ export function barChart({
     let cursor = padTop + plotHeight;
     live.forEach((s, sIndex) => {
       const value = Number(s.values[i]) || 0;
-      if (value <= 0) return;
       const segment = (value / max) * plotHeight;
       const top = cursor - segment;
       const isTop = live.slice(sIndex + 1).every((other) => !(Number(other.values[i]) > 0));
@@ -113,10 +115,12 @@ export function barChart({
         width: barWidth,
         // Only the top of the stack gets the 4px rounded data-end; inner
         // segments stay square so the stack reads as one bar.
-        height: Math.max(1, segment - (sIndex === 0 ? 0 : 2)),
+        height: value > 0 ? Math.max(1, segment - (sIndex === 0 ? 0 : 2)) : 0,
         rx: isTop ? 3 : 0,
+        'data-bucket': i,
+        'data-series': sIndex,
       }));
-      cursor = top - 2; // 2px surface gap between stacked segments
+      cursor = top - (value > 0 ? 2 : 0); // 2px surface gap between stacked segments
     });
   });
   svg.append(bars);
@@ -150,6 +154,40 @@ export function barChart({
     brushLayer.setAttribute('width', String((hi - lo + 1) * slot));
   }
   paintBrush(brush);
+
+  root.update = ({ labels: nextLabels = labels, series: nextSeries = live, brush: nextBrush = null } = {}) => {
+    if (nextLabels.length !== labels.length || nextLabels.some((label, index) => label !== labels[index])) return false;
+    const nextLive = nextSeries.filter((item) => Array.isArray(item.values) && item.values.length);
+    if (nextLive.length !== live.length) return false;
+    live = nextLive;
+    stackTotals = labels.map((_, index) => live.reduce(
+      (total, item) => total + (Number(item.values[index]) || 0), 0,
+    ));
+    max = niceMax(Math.max(...stackTotals, 0));
+    for (const item of gridNodes) {
+      const value = (max / 2) * item.step;
+      const y = padTop + plotHeight - (value / max) * plotHeight;
+      item.line?.setAttribute('y1', String(y));
+      item.line?.setAttribute('y2', String(y));
+      item.text.setAttribute('y', String(y + 3));
+      item.text.textContent = formatValue(value);
+    }
+    labels.forEach((_, index) => {
+      let cursor = padTop + plotHeight;
+      live.forEach((item, seriesIndex) => {
+        const value = Number(item.values[index]) || 0;
+        const segment = (value / max) * plotHeight;
+        const top = cursor - segment;
+        const rect = bars.querySelector(`[data-bucket="${index}"][data-series="${seriesIndex}"]`);
+        if (!rect) return;
+        rect.setAttribute('y', String(top));
+        rect.setAttribute('height', String(value > 0 ? Math.max(1, segment - (seriesIndex === 0 ? 0 : 2)) : 0));
+        cursor = top - (value > 0 ? 2 : 0);
+      });
+    });
+    paintBrush(nextBrush);
+    return true;
+  };
 
   function pointIndex(event) {
     const rect = svg.getBoundingClientRect();

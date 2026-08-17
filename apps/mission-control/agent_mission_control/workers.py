@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable, Optional
 from .cache import Cache
 from .clients import AdapterClient, DashboardClient, GatewayClient
 from .event_bus import EventBus
-from .read_model import ReadModel, project_entity
+from .read_model import READ_MODEL_PROJECTOR_VERSION, ReadModel, project_entity
 from .store import Store
 
 DEFAULT_BACKOFF_MAX = 300  # 5 minutes
@@ -548,6 +548,7 @@ class SourceWorkers:
         if model is None or not model.available:
             return
         profile = getattr(self.cfg, "live_default_profile", "default")
+        fingerprint = f"p{READ_MODEL_PROJECTOR_VERSION}:{fingerprint}"
         if name == "kanban":
             model.replace_entities("kanban.tasks", data.get("tasks", []), profile_id=profile, fingerprint=fingerprint)
         elif name in {"permits", "issues", "cron", "sessions", "running"}:

@@ -62,6 +62,7 @@ import { createThreadSearch, openCommandPalette } from './chat/palette.js';
 import { fetchChainTips } from './_kit.js';
 import { CONTEXT_REFRESH_MS, fetchWorkerLinks, isWorkerRunning, mergeTaskChanged } from '../pure/session-operational-context.js';
 import { workerContextNodes } from '../components/session-operational-context.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const GATEWAY_UNAVAILABLE_REASON =
   'Hermes Gateway is not reachable from the Pi BFF. Session history remains readable; create/send actions are disabled.';
@@ -87,7 +88,7 @@ const RELOAD_BACKOFF_MS = [400, 1200, 2500];
 const MIRROR_INTERVAL_MS = 6000;
 const MIRROR_HIDDEN_INTERVAL_MS = 30000;
 
-export function createChat({ api, profile, sse, refreshInspector, onNavigate }) {
+export function createChat({ api, profile, sse, refreshInspector, onNavigate, liveStore }) {
   const root = el('div', { class: 'tab tab-chat' });
   const threadPane = el('div', { class: 'chat-main' });
   root.append(threadPane);
@@ -131,6 +132,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   let selectedSession = null;
   let loaded = false;
   let unsubscribeSessionChanged = null;
+  let unsubscribeLiveSessions = null;
   let sessionQuery = '';
   let inspectorHost = null;
   let composerHandle = null;
@@ -243,9 +245,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
   }
   function syncContextRefresh() {
     if (contextTimer) { clearInterval(contextTimer); contextTimer = null; }
-    if (!document.hidden && root.isConnected && isOpenChatActive()) {
-      contextTimer = setInterval(refreshOpenContext, CONTEXT_REFRESH_MS);
-    }
+    if (!document.hidden && root.isConnected && isOpenChatActive()) refreshOpenContext();
   }
   function stopContextRefresh() { if (contextTimer) clearInterval(contextTimer); contextTimer = null; contextQueued = false; }
   function bindContextVisibility() {
@@ -871,6 +871,31 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
     notifyInspector();
   }
 
+  function applyLiveSessions() {
+    const live = liveRows(liveStore, 'sessions', profile);
+    if (!live) return false;
+    const existing = allSessions || [];
+    const sameProfile = existing.filter((row) => (row.profile || profile) === profile);
+    const otherProfiles = existing.filter((row) => (row.profile || profile) !== profile);
+    const projected = live.rows.map((row) => ({ profile: row.profile || profile, ...row }));
+    const merged = mergeProjectedRows(sameProfile, projected, idOf);
+    allSessions = mergeSessions(otherProfiles, merged, idOf, sessionTimestamp);
+    if (selectedSession) {
+      const next = allSessions.find((row) => idOf(row) === selectedSessionId || row.tip?.tip_id === selectedSessionId);
+      if (next) Object.assign(selectedSession, next.tip || next);
+    }
+    applyPins();
+    notifyInspector();
+    return true;
+  }
+
+  function subscribeToLiveSessions() {
+    if (unsubscribeLiveSessions) return;
+    unsubscribeLiveSessions = bindLiveResources(liveStore, ['sessions'], profile, () => {
+      if (root.isConnected) applyLiveSessions();
+    });
+  }
+
   function stopMirror() {
     if (mirrorTimer) clearInterval(mirrorTimer);
     mirrorTimer = null;
@@ -880,35 +905,10 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
 
   function startMirror(sessionId, sessionProfile, list) {
     stopMirror();
-    let hidden = document.hidden;
-    const arm = () => {
-      if (mirrorTimer) clearInterval(mirrorTimer);
-      hidden = document.hidden;
-      // A backgrounded tab still mirrors, just slowly. Chrome throttles timers
-      // in hidden tabs well past whatever interval is asked for anyway, which
-      // is exactly why coming back cannot be left to the timer — see below.
-      mirrorTimer = setInterval(
-        () => { mirrorThread(sessionId, sessionProfile, list).catch(() => null); },
-        hidden ? MIRROR_HIDDEN_INTERVAL_MS : MIRROR_INTERVAL_MS,
-      );
-    };
-
-    // Returning to the tab has to catch up NOW, not on the next tick.
-    //
-    // Without this the whole feature still felt like it needed a refresh, for a
-    // reason that is invisible from the code alone: the interval a hidden tab
-    // was armed with is not the interval it gets. Chrome throttles background
-    // timers hard — measured here at roughly 45s against a 30s interval — so
-    // switching back to a thread that had advanced meant staring at a stale
-    // transcript for the better part of a minute. Refreshing was simply faster,
-    // which is precisely the behaviour this was meant to remove. The visible
-    // path also re-arms at the fast interval instead of inheriting the slow one.
     mirrorVisibility = () => {
-      arm();
       if (!document.hidden) mirrorThread(sessionId, sessionProfile, list).catch(() => null);
     };
     document.addEventListener('visibilitychange', mirrorVisibility);
-    arm();
   }
 
   function onTurnSettled(turn, session, sessionId, sessionProfile) {
@@ -1401,7 +1401,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       mirrorThread(sessionId, sessionProfile, list).catch(() => null);
       refreshOpenContext();
       // A list-level event also means the sider's ordering and counts moved.
-      refreshSessionList().catch(() => null);
+      if (!liveStore) refreshSessionList().catch(() => null);
     });
   }
 
@@ -1588,10 +1588,17 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       subscribeToRunning();
       subscribeToChatFrames();
       subscribeToTaskChanges();
+      subscribeToLiveSessions();
       bindContextVisibility();
       const deepLinked = params.s || params.session || null;
       if (deepLinked) selectedSessionId = deepLinked;
       pendingMessageAnchor = params.m || null;
+      if (loaded) {
+        applyLiveSessions();
+        if (selectedSessionId) return openThread(selectedSessionId, { navigate: false });
+        renderHero();
+        return Promise.resolve();
+      }
       return load().catch((err) => {
         clear(threadPane);
         threadPane.append(unavailableState({ reason: `Chat unavailable: ${err.message}`, requestId: err.request_id }));
@@ -1613,6 +1620,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       unsubscribeChatFrame = null;
       if (unsubscribeTaskChanged) unsubscribeTaskChanged();
       unsubscribeTaskChanged = null;
+      if (unsubscribeLiveSessions) unsubscribeLiveSessions();
+      unsubscribeLiveSessions = null;
       // Stop the shared stream carrying a session this tab is no longer showing.
       if (sse) sse.watch(null);
       return { s: selectedSessionId || undefined };
@@ -1630,6 +1639,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate }) 
       subscribeToRunning();
       subscribeToChatFrames();
       subscribeToTaskChanges();
+      subscribeToLiveSessions();
       bindContextVisibility();
       selectedSessionId = id;
       if (!loaded) await load();

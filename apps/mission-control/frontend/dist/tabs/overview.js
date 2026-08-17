@@ -24,6 +24,8 @@ import {
   alertRows, capabilityRegistry, listFrom, pulseRecord, summarizeSourceHealth, taskRows,
 } from '../pure/data-shape.js';
 import { loadEnvelope, tabToolbar, paint, sideHint } from './_kit.js';
+import { bindLiveResources, liveRows, liveSummary } from './_live.js';
+import { createKeyedReconciler } from '../pure/keyed-dom.js';
 
 export const GATEWAY_UNAVAILABLE_REASON =
   'Hermes Gateway is not reachable from the Pi BFF; read-only dashboard sources remain available.';
@@ -39,7 +41,7 @@ const TOKEN_SERIES = Object.freeze([
   { key: 'output_tokens', label: 'Output', seriesIndex: 5 },
 ]);
 
-export function createOverview({ api, profile, toolbar, onNavigate: navigate }) {
+export function createOverview({ api, profile, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-overview' });
   const statsPane = el('div');
   const trendPane = el('div');
@@ -59,14 +61,20 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
   let inspectorHost = null;
   let events = null;
   let chartNode = null;
+  let statRow = null;
+  let unsubscribe = null;
+  let loadedFromSource = false;
+  let analyticsRevision = -1;
 
   // -------------------------------------------------------------------- data
 
-  async function load() {
-    clear(statsPane);
-    clear(trendPane);
-    clear(gridPane);
-    statsPane.append(skeleton({ lines: 3 }));
+  async function load(background = false) {
+    if (!background || !tasks) {
+      clear(statsPane);
+      clear(trendPane);
+      clear(gridPane);
+      statsPane.append(skeleton({ lines: 3 }));
+    }
 
     const period = WINDOW_DAYS[currentWindow] || 14;
     const [pulseResult, usageResult, taskResult, permitResult, issueResult, alertResult, capResult] =
@@ -91,7 +99,57 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
     // The shell also pushes capabilities in via setSourceHealth; whichever
     // arrives last wins, and both carry the same envelope shape.
     sourceHealth = capResult;
+    loadedFromSource = true;
     render();
+  }
+
+  function rowEnvelope(resourceKey) {
+    const live = liveRows(liveStore, resourceKey, profile);
+    return live ? { data: live.rows, meta: live.meta, state: 'ready' } : null;
+  }
+
+  function applyLive() {
+    if (!liveStore) return false;
+    const nextTasks = rowEnvelope('kanban.tasks');
+    const nextPermits = rowEnvelope('permits');
+    const nextIssues = rowEnvelope('issues');
+    const nextAlerts = rowEnvelope('alerts');
+    const nextEvents = rowEnvelope('activity.events');
+    const healthRows = rowEnvelope('source.health');
+    const overview = liveSummary(liveStore, 'overview.summary', profile);
+    const analytics = liveSummary(liveStore, 'analytics.usage', profile);
+    if (![nextTasks, nextPermits, nextIssues, nextAlerts, healthRows, overview, analytics].some(Boolean)) return false;
+    if (nextTasks) tasks = nextTasks;
+    if (nextPermits) permits = nextPermits;
+    if (nextIssues) issues = nextIssues;
+    if (nextAlerts) alerts = nextAlerts;
+    if (nextEvents) events = nextEvents;
+    if (healthRows) sourceHealth = {
+      data: Object.fromEntries(healthRows.data.map((row) => [row.source_id, row])),
+      meta: healthRows.meta,
+      state: 'ready',
+    };
+    if (overview) pulse = { data: { ...(pulse?.data || {}), ...overview.data }, meta: overview.meta, state: 'ready' };
+    const usageChanged = analytics && analytics.state.revision !== analyticsRevision;
+    if (analytics) {
+      analyticsRevision = analytics.state.revision;
+      usage = { data: { ...(usage?.data || {}), ...analytics.data }, meta: analytics.meta, state: 'ready' };
+      if (!days.length) days = dailySeries(usage.data);
+    }
+    renderStats();
+    if (usageChanged || !trendPane.firstChild) renderTrend();
+    renderGrid();
+    renderToolbar(toolbar);
+    if (inspectorHost) renderInspector(inspectorHost);
+    return true;
+  }
+
+  function bindLive() {
+    if (unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, [
+      'overview.summary', 'source.health', 'kanban.tasks', 'permits', 'issues',
+      'alerts', 'analytics.usage', 'activity.events',
+    ], profile, () => { if (root.isConnected) applyLive(); });
   }
 
   // ------------------------------------------------------------------- tiles
@@ -102,7 +160,6 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
   }
 
   function renderStats() {
-    clear(statsPane);
     const p = pulseRecord(pulse?.data);
     const window = selectedDays();
     const totals = sliceTotals(window);
@@ -117,7 +174,7 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
     const activeAlerts = (Array.isArray(alerts?.data) ? alerts.data : [])
       .filter((alert) => String(alert.state || 'active').toLowerCase() === 'active');
 
-    statsPane.append(createStatRow([
+    const specs = [
       {
         label: 'Running tasks', value: activeTasks.length, iconName: 'kanban',
         foot: `${(tasks?.data || []).length} tracked`,
@@ -161,12 +218,25 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
         foot: costLabel(costClass),
         onClick: navigate ? () => navigate('analytics') : null,
       },
-    ]));
+    ];
+    if (!statRow) {
+      statRow = createStatRow(specs);
+      statsPane.replaceChildren(statRow);
+    } else {
+      statRow.setStats(specs);
+      if (statRow.parentNode !== statsPane) statsPane.replaceChildren(statRow);
+    }
   }
 
   // ------------------------------------------------------------------- trend
 
   function renderTrend() {
+    const nextChart = {
+      labels: days.map((day) => day.day.slice(5)),
+      series: TOKEN_SERIES.map((spec) => ({ ...spec, values: days.map((day) => day[spec.key]) })),
+      brush,
+    };
+    if (days.length && chartNode?.update?.(nextChart)) return;
     clear(trendPane);
     if (chartNode?.dispose) chartNode.dispose();
     chartNode = null;
@@ -187,8 +257,8 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
     }
 
     chartNode = barChart({
-      labels: days.map((day) => day.day.slice(5)),
-      series: TOKEN_SERIES.map((spec) => ({ ...spec, values: days.map((day) => day[spec.key]) })),
+      labels: nextChart.labels,
+      series: nextChart.series,
       formatValue: (value) => compactNumber(Math.round(value)),
       ariaLabel: `Input and output tokens per day over ${days.length} days`,
       brush,
@@ -323,20 +393,26 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
     ]);
   }
 
-  function render() {
-    renderStats();
-    renderTrend();
-    clear(gridPane);
+  const gridCards = createKeyedReconciler({
+    container: gridPane,
+    key: (item) => item.key,
+    create: (item) => item.node,
+    update: (node, item, previous) => {
+      if (!previous || previous.signature === item.signature) return;
+      node.replaceChildren(...item.node.childNodes);
+    },
+  });
 
+  function renderGrid() {
     const activeTasks = (Array.isArray(tasks?.data) ? tasks.data : [])
       .filter((task) => ['running', 'in_progress', 'active'].includes(String(task.status || '').toLowerCase()));
     const activeAlerts = (Array.isArray(alerts?.data) ? alerts.data : []);
     const eventRows = listFrom(events?.data, ['events']);
 
-    gridPane.append(
-      healthCard(),
-      pulseCard(),
-      listCard('Running tasks', tasks?.data ? activeTasks : null, {
+    gridCards.reconcile([
+      { key: 'health', signature: `health:${sourceHealth?.meta?.revision}:${JSON.stringify(sourceHealth?.data || {})}`, node: healthCard() },
+      { key: 'pulse', signature: `pulse:${pulse?.meta?.revision}:${JSON.stringify(pulse?.data || {})}`, node: pulseCard() },
+      { key: 'tasks', signature: `tasks:${tasks?.meta?.revision}:${JSON.stringify(activeTasks)}`, node: listCard('Running tasks', tasks?.data ? activeTasks : null, {
         meta: tasks?.meta,
         empty: 'No running tasks',
         route: 'kanban',
@@ -348,8 +424,8 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
           statusChip('running', task.status || 'running'),
           el('span', { class: 'cell-dim', text: task.assignee || '' }),
         ]),
-      }),
-      listCard('Alerts', alerts?.data ? activeAlerts : null, {
+      }) },
+      { key: 'alerts', signature: `alerts:${alerts?.meta?.revision}:${JSON.stringify(activeAlerts)}`, node: listCard('Alerts', alerts?.data ? activeAlerts : null, {
         meta: alerts?.meta,
         empty: 'No alerts',
         route: 'alerts',
@@ -362,8 +438,8 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
             alert.severity || 'info'),
           el('span', { class: 'cell-dim mono', text: alert.entity_id || alert.source_id || '' }),
         ]),
-      }),
-      listCard('Recent events', eventRows.length ? eventRows : (events ? [] : null), {
+      }) },
+      { key: 'events', signature: `events:${events?.meta?.revision}:${JSON.stringify(eventRows)}`, node: listCard('Recent events', eventRows.length ? eventRows : (events ? [] : null), {
         meta: events?.meta,
         empty: 'No recent events',
         route: 'activity',
@@ -372,9 +448,15 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
           el('span', { class: 'cell-dim mono', text: event.entity_id || '' }),
           el('span', { class: 'cell-dim', text: fmtAge(event.occurred_at || event.created_at) }),
         ]),
-      }),
-    );
+      }) },
+    ]);
 
+  }
+
+  function render() {
+    renderStats();
+    renderTrend();
+    renderGrid();
     renderToolbar(toolbar);
   }
 
@@ -420,16 +502,20 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate }) 
   return {
     mount(container) { clear(container); container.append(root); },
     activate() {
+      bindLive();
       renderToolbar(toolbar);
-      return load().catch((err) => {
+      const hydrated = applyLive();
+      if (loadedFromSource) return Promise.resolve();
+      return load(hydrated).catch((err) => {
         clear(statsPane);
         statsPane.append(errorPanel({ message: err.message, requestId: err.request_id, onRetry: load }));
       });
     },
     deactivate() {
-      if (chartNode?.dispose) chartNode.dispose();
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { scroll: root.scrollTop || 0, window: currentWindow };
     },
+    dispose() { if (chartNode?.dispose) chartNode.dispose(); },
     renderInspector,
     setSourceHealth,
     setEvents,

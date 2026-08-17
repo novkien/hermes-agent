@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from agent_mission_control.read_model import (  # noqa: E402
     READ_MODEL_SCHEMA_VERSION,
     ReadModel,
+    project_summary,
 )
 from agent_mission_control.workers import PollWorker  # noqa: E402
 
@@ -83,6 +84,38 @@ def main() -> None:
         )
         assert next_revision == 2 and projected["title"] == "Alpha updated"
         assert model.revision("kanban.tasks", profile_id="alpha") == 2
+
+        # Mutation/native deltas are intentionally partial. They must enrich,
+        # not erase, the last projected entity stored by the polling worker.
+        model.replace_entities(
+            "issues",
+            [{"id": 9, "title": "Keep this title", "severity": "high", "status": "open"}],
+            profile_id="alpha",
+        )
+        issue_revision, issue = model.upsert_entity(
+            "issues", {"id": 9, "status": "resolved"}, profile_id="alpha"
+        )
+        assert issue_revision == 2
+        assert issue == {
+            "id": 9, "title": "Keep this title", "severity": "high", "status": "resolved"
+        }
+        assert model.resource("issues", profile_id="alpha")["entities"][0]["payload"]["title"] == "Keep this title"
+
+        analytics = project_summary(
+            "analytics.usage",
+            {
+                "period_days": 30,
+                "daily": [{"day": "2026-08-17", "total_tokens": 12, "messages": ["drop"]}],
+                "by_model": [{"model": "safe-model", "api_calls": 2, "authorization": "drop"}],
+                "totals": {"total_tokens": 12, "estimated_cost": 0.2, "secret": "drop"},
+                "content": "drop",
+                "token": "drop",
+            },
+        )
+        assert analytics["daily"] == [{"day": "2026-08-17", "total_tokens": 12}]
+        assert analytics["by_model"] == [{"model": "safe-model", "api_calls": 2}]
+        assert analytics["totals"] == {"total_tokens": 12, "estimated_cost": 0.2}
+        assert "content" not in analytics and "token" not in analytics
         assert model.delete_entity("kanban.tasks", "a", profile_id="alpha") == 3
         assert model.resource("kanban.tasks", profile_id="alpha")["entities"] == []
         # Restore a last-known-good row for stale/restart checks below.

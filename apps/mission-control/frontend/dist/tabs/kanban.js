@@ -9,15 +9,17 @@ import { filterInput, sideHint, paint, tabToolbar } from './_kit.js';
 import { filterRows, filterSummary } from '../pure/text-filter.js';
 import { buildHash } from '../pure/hash-router.js';
 import { createDetail } from '../components/detail.js';
+import { createTable } from '../components/table.js';
 import { createChatModal } from './chat.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 const SSE_EVENTS = Object.freeze(['task.changed', 'run.changed']);
 
-export function createKanban({ api, profile, sse }) {
+export function createKanban({ api, profile, sse, liveStore }) {
   const root = el('div', { class: 'tab tab-kanban' });
   const toolbar = el('div', { class: 'tab-toolbar' });
   const kpiRow = el('div', { class: 'kpi-row' });
-  const tableWrap = el('div', { class: 'table-wrap' });
+  const tableWrap = el('div', { class: 'kanban-table-host' });
   root.append(toolbar, kpiRow, tableWrap);
 
   let summary = null;
@@ -27,6 +29,7 @@ export function createKanban({ api, profile, sse }) {
   let selectedId = null;
   let unsubscribe = null;
   let chatModalInstance = null;
+  let loadedFromSource = false;
   function chatModal() {
     if (!chatModalInstance) chatModalInstance = createChatModal({ api, profile, sse });
     return chatModalInstance;
@@ -43,13 +46,26 @@ export function createKanban({ api, profile, sse }) {
   // the one thing they cannot — finding a specific card among the ~1,900 this
   // deployment holds when you remember a word of its title, not its status.
   const SEARCH_FIELDS = ['id', 'title', 'assignee', 'board', 'status', 'priority', 'created_by'];
+  const taskTable = createTable({
+    rowId: (task) => task.id,
+    emptyTitle: 'No tasks match',
+    columns: [
+      { key: 'id', label: 'ID', mono: true, sortable: true },
+      { key: 'title', label: 'Title', sortable: true },
+      { key: 'status', label: 'Status', sortable: true, render: (task) => statusChip(task.status) },
+      { key: 'assignee', label: 'Assignee', sortable: true },
+      { key: 'priority', label: 'Priority', sortable: true },
+      { key: 'board', label: 'Board', sortable: true },
+    ],
+    onSelect: (task) => openDetail(task.id),
+  });
 
   function filterBar() {
     const bar = el('div', { class: 'filter-bar' });
     const boardSelect = el('select', {
       class: 'select',
       'aria-label': 'Board',
-      onchange: (event) => { filters.board = event.target.value; load(); },
+      onchange: (event) => { filters.board = event.target.value; if (liveStore) render(); else load(); },
     });
     const boardOptions = [['all', 'Board: all']].concat(
       boards.map((b) => [b.board, `${b.board} (${b.task_count})`]),
@@ -66,7 +82,7 @@ export function createKanban({ api, profile, sse }) {
         'aria-label': label,
         onchange: (event) => {
           filters[key] = event.target.value;
-          load();
+          if (liveStore) render(); else load();
         },
       });
       select.append(el('option', { value: '', text: `${label}: all` }));
@@ -92,8 +108,10 @@ export function createKanban({ api, profile, sse }) {
   }
 
   async function load() {
-    clear(tableWrap);
-    tableWrap.append(skeleton({ lines: 7 }));
+    if (!tasks) {
+      clear(tableWrap);
+      tableWrap.append(skeleton({ lines: 7 }));
+    }
     const query = new URLSearchParams({ page: '1', limit: '100' });
     if (filters.status) query.set('status', filters.status);
     if (filters.assignee) query.set('assignee', filters.assignee);
@@ -109,14 +127,39 @@ export function createKanban({ api, profile, sse }) {
     boards = boardResult.status === 'fulfilled'
       ? (listFrom(boardResult.value.data, ['boards']) || [])
       : [];
+    loadedFromSource = taskResult.status === 'fulfilled';
     render();
+  }
+
+  function applyLive() {
+    const live = liveRows(liveStore, 'kanban.tasks', profile);
+    if (!live) return false;
+    const current = taskRows(tasks?.data);
+    const rows = mergeProjectedRows(current, live.rows, (task) => task.id);
+    tasks = { data: { tasks: rows }, meta: live.meta };
+    const counts = rows.reduce((out, task) => {
+      const key = String(task.status || 'unknown');
+      out[key] = (out[key] || 0) + 1;
+      return out;
+    }, {});
+    summary = {
+      data: {
+        total_tasks: rows.length,
+        running_count: counts.running || 0,
+        blocked_count: counts.blocked || 0,
+        tasks_by_status: Object.entries(counts).map(([status, count]) => ({ status, count })),
+      },
+      meta: live.meta,
+    };
+    render();
+    return true;
   }
 
   function render() {
     renderSummary();
     renderSide();
-    clear(tableWrap);
     if (!tasks) {
+      clear(tableWrap);
       paint(toolbar, tabToolbar({ title: 'Kanban', onRefresh: () => load() }));
       tableWrap.append(unavailableState({ reason: 'Kanban source unavailable' }));
       return;
@@ -124,6 +167,9 @@ export function createKanban({ api, profile, sse }) {
 
     const loaded = taskRows(tasks.data);
     let rows = loaded;
+    if (filters.status) rows = rows.filter((task) => String(task.status || '').toLowerCase() === filters.status);
+    if (filters.assignee) rows = rows.filter((task) => String(task.assignee || '').toLowerCase() === filters.assignee);
+    if (filters.board && filters.board !== 'all') rows = rows.filter((task) => String(task.board || '') === filters.board);
     if (filters.priority) rows = rows.filter((task) => String(task.priority || '').toLowerCase() === filters.priority);
     rows = filterRows(rows, filters.query, SEARCH_FIELDS);
 
@@ -141,6 +187,7 @@ export function createKanban({ api, profile, sse }) {
     }));
 
     if (!rows.length) {
+      clear(tableWrap);
       tableWrap.append(emptyState({
         title: filters.query ? 'No card matches' : 'No tasks match',
         note: filters.query
@@ -150,26 +197,12 @@ export function createKanban({ api, profile, sse }) {
       return;
     }
 
-    const table = el('table', { class: 'table' });
-    table.append(el('thead', {}, [
-      el('tr', {}, ['ID', 'Title', 'Status', 'Assignee', 'Priority', 'Board']
-        .map((heading) => el('th', { text: heading }))),
-    ]));
-    const body = el('tbody');
-    for (const task of rows) {
-      const row = el('tr', { 'data-task-id': task.id || '', onclick: () => openDetail(task.id) }, [
-        el('td', { class: 'mono', text: task.id || '' }),
-        el('td', { text: task.title || '' }),
-        el('td', {}, [statusChip(task.status)]),
-        el('td', { text: task.assignee || '' }),
-        el('td', { text: task.priority || '' }),
-        el('td', { text: task.board || '' }),
-      ]);
-      if (task.id === selectedId) row.classList.add('is-selected');
-      body.append(row);
+    if (taskTable.node.parentNode !== tableWrap) {
+      clear(tableWrap);
+      tableWrap.append(taskTable.node);
     }
-    table.append(body);
-    tableWrap.append(table);
+    taskTable.setRows(rows);
+    taskTable.setSelected(selectedId);
   }
 
   function renderSummary() {
@@ -220,10 +253,7 @@ export function createKanban({ api, profile, sse }) {
     // indexes: the old version located the row by the position of the first
     // `.mono` cell, which silently highlighted the wrong card as soon as any
     // other column was rendered monospaced.
-    for (const row of tableWrap.querySelectorAll('tbody tr.is-selected')) row.classList.remove('is-selected');
-    if (!selectedId) return;
-    const match = tableWrap.querySelector(`tbody tr[data-task-id="${cssEscape(selectedId)}"]`);
-    if (match) match.classList.add('is-selected');
+    taskTable.setSelected(selectedId);
   }
 
   /**
@@ -344,9 +374,15 @@ export function createKanban({ api, profile, sse }) {
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
-    const handles = SSE_EVENTS.map((name) => sse.on(name, () => {
+    if (unsubscribe) return;
+    const handles = [];
+    const liveOff = bindLiveResources(liveStore, ['kanban.tasks'], profile, () => {
+      if (root.isConnected) applyLive();
+    });
+    if (liveOff) handles.push(liveOff);
+    if (sse) for (const name of SSE_EVENTS) handles.push(sse.on(name, () => {
       if (!root.isConnected) return;
+      if (liveStore) return;
       // The list is a point-in-time snapshot with no live refresh otherwise,
       // so a card can sit on a stale status (e.g. "ready" in the table, the
       // real task already "running") until something reloads it. Re-fetch
@@ -365,7 +401,8 @@ export function createKanban({ api, profile, sse }) {
     async activate(params = {}) {
       bindEvents();
       try {
-        await load();
+        applyLive();
+        if (!loadedFromSource) await load();
         if (params.task) await openDetail(params.task);
       } catch (err) {
         clear(tableWrap);
@@ -381,6 +418,7 @@ export function createKanban({ api, profile, sse }) {
     refresh: load,
     setFilter(next) {
       Object.assign(filters, next);
+      if (liveStore) { render(); return Promise.resolve(); }
       return load();
     },
   };

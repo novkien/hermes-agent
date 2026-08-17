@@ -12,6 +12,7 @@ function resourceState() {
     fetchedAt: null,
     error: null,
     syncing: false,
+    version: 0,
   };
 }
 
@@ -90,6 +91,7 @@ export function createLiveResourceStore({
     state.fetchedAt = incoming.fetched_at || null;
     state.error = incoming.last_error || null;
     state.syncing = false;
+    state.version += 1;
     return true;
   }
 
@@ -138,6 +140,7 @@ export function createLiveResourceStore({
         state.syncing = false;
         state.error = String(error?.message || error);
         if (state.entities.size || state.snapshot != null) state.provenance = 'stale';
+        state.version += 1;
       }
       notify();
       return null;
@@ -216,6 +219,7 @@ export function createLiveResourceStore({
     state.revision = Math.max(state.revision, revision);
     state.provenance = event.operation === 'invalidate' ? state.provenance : 'live';
     state.error = null;
+    state.version += 1;
     notify();
     return true;
   }

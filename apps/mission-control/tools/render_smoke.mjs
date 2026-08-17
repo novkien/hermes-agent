@@ -407,7 +407,7 @@ async function run() {
   // One session for the whole run: the BFF rate-limits session issuance per IP.
   await rawRequest('/api/csrf');
 
-  const sse = { on: () => () => {}, close: () => {} };
+  const sse = { on: () => () => {}, watch: () => {}, close: () => {} };
   const results = [];
 
   for (const [route, factoryName] of TABS) {

@@ -19,6 +19,7 @@ import {
   loadEnvelope, applyStateToTable, tabToolbar, runMutation, sideHint,
   paint, confirmAction,
 } from './_kit.js';
+import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
 
 export const ROUTE = 'permits';
 export const LABEL = 'Permits';
@@ -160,7 +161,7 @@ const VIEWS = [
   { value: 'all', label: 'All' },
 ];
 
-export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate }) {
+export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate, liveStore }) {
   const root = el('div', { class: 'tab tab-permits' });
   const main = el('div', { class: 'split-main' });
   let inspectorHost = null;
@@ -172,6 +173,7 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
   let view = 'open';
   let search = '';
   let unsubscribe = null;
+  let loadedFromSource = false;
 
   const table = createTable({
     rowId: (row) => row.id,
@@ -236,6 +238,7 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
     table.setLoading();
     const result = await loadEnvelope(api, '/api/adapter/permits', { profile, pick: pickPermits });
     meta = result.meta;
+    loadedFromSource = result.state === 'ready' || result.state === 'partial';
     rows = (Array.isArray(result.data) ? result.data : []).map(normalizePermit).filter(Boolean);
 
     const wanted = initialSelection || selected?.id || null;
@@ -248,6 +251,26 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
     table.setSelected(selected?.id ?? null);
     renderToolbar(toolbar);
     renderSide();
+  }
+
+  function applyLive(initialSelection = null) {
+    const live = liveRows(liveStore, 'permits', profile, normalizePermit);
+    if (!live) return false;
+    meta = live.meta;
+    rows = mergeProjectedRows(rows, live.rows, (row) => row.id);
+    const wanted = initialSelection ? String(initialSelection) : selected?.id ?? null;
+    selected = (wanted && rows.find((row) => row.id === wanted)) || null;
+    table.setRows(visibleRows());
+    table.setSelected(selected?.id ?? null);
+    renderToolbar(toolbar);
+    renderSide();
+    return true;
+  }
+
+  async function revalidate(initialSelection = null) {
+    if (!liveStore) return load(initialSelection);
+    await liveStore.resyncResource('permits', profile, { force: true });
+    applyLive(initialSelection);
   }
 
   function refilter() {
@@ -326,7 +349,7 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
           { pending: 'Record decision', ok: `Decision recorded on ${permit.id}` },
         );
         form.setBusy(false);
-        if (res) await load(permit.id);
+        if (res) await revalidate(permit.id);
       },
     });
     return form;
@@ -417,7 +440,7 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
             {
               pending: 'Delete permit',
               ok: `Permit ${permit.id} deleted`,
-              onDone: () => { selected = null; return load(); },
+              onDone: () => { selected = null; return revalidate(); },
             },
           ),
         }),
@@ -427,7 +450,11 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
   }
 
   function bindEvents() {
-    if (!sse || unsubscribe) return;
+    if (unsubscribe) return;
+    unsubscribe = bindLiveResources(liveStore, ['permits'], profile, () => {
+      if (root.isConnected) applyLive(selected?.id ?? null);
+    });
+    if (unsubscribe || !sse) return;
     const handles = SSE_EVENTS.map((name) => sse.on(name, () => {
       if (!root.isConnected) return;
       load(selected?.id ?? null).catch(() => null);
@@ -442,7 +469,9 @@ export function createPermits({ api, profile, sse, toolbar, onNavigate: navigate
     renderInspector,
     activate(params = {}) {
       bindEvents();
-      return load(params.permit || params.id || null);
+      const selectedId = params.permit || params.id || null;
+      applyLive(selectedId);
+      return loadedFromSource ? Promise.resolve() : load(selectedId);
     },
     deactivate() {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
