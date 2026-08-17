@@ -4639,9 +4639,9 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
         session_id = request.match_info["session_id"]
-        _, err = await self._get_existing_session_or_404(session_id)
-        if err:
-            return err
+        # Session event transport is observation-only. CLI/Kanban turns may
+        # persist in another profile state DB, so observation must not require
+        # ownership in this gateway's session store. Authentication still applies.
 
         try:
             after_seq = int(request.query.get("after_seq") or 0)
@@ -4712,9 +4712,9 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
         session_id = request.match_info["session_id"]
-        _, err = await self._get_existing_session_or_404(session_id)
-        if err:
-            return err
+        # Session event transport is observation-only. CLI/Kanban turns may
+        # persist in another profile state DB, so observation must not require
+        # ownership in this gateway's session store. Authentication still applies.
 
         accepted = 0
         started_here = False

@@ -904,13 +904,27 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   }
 
   function startMirror(sessionId, sessionProfile, list) {
-    stopMirror();
-    mirrorVisibility = () => {
-      if (!document.hidden) mirrorThread(sessionId, sessionProfile, list).catch(() => null);
-    };
-    document.addEventListener('visibilitychange', mirrorVisibility);
-  }
+  stopMirror();
 
+  const scheduleMirror = () => {
+    if (mirrorTimer) clearInterval(mirrorTimer);
+    const intervalMs = document.hidden
+      ? MIRROR_HIDDEN_INTERVAL_MS
+      : MIRROR_INTERVAL_MS;
+    mirrorTimer = setInterval(() => {
+      mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+    }, intervalMs);
+  };
+
+  mirrorVisibility = () => {
+    scheduleMirror();
+    if (!document.hidden) {
+      mirrorThread(sessionId, sessionProfile, list).catch(() => null);
+    }
+  };
+  document.addEventListener('visibilitychange', mirrorVisibility);
+  scheduleMirror();
+}
   function onTurnSettled(turn, session, sessionId, sessionProfile) {
     // Refresh the sider's recency ordering without a full reload. The runtime
     // the gateway REPORTS having used also lands here, so the header chip
