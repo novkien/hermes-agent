@@ -658,7 +658,10 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     // Point the app's one SSE connection at this session so its live turn
     // frames ride the stream that is already open, instead of this tab opening
     // a second permanent connection of its own.
-    if (sse) sse.watch(sessionId, sessionProfile);
+    // Detached Kanban workers publish frames to the dispatch-owning gateway's
+    // observation hub, not Mission Control's isolated profile runner. History
+    // remains profile-scoped; only the live watch target drops the profile.
+    if (sse) sse.watch(sessionId, workerLink ? null : sessionProfile);
     startMirror(sessionId, sessionProfile, list);
     refreshOpenContext();
     syncContextRefresh();

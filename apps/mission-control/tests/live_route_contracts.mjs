@@ -28,6 +28,11 @@ assert.match(chat, /visibilitychange/, 'chat has no event-driven background-tab 
 assert.match(chat, /setTimeout\(/, 'chat has no scheduled transcript catch-up');
 assert.match(chat, /lastChatFrameAt/, 'chat cannot recover when a watched stream goes silent');
 assert.match(chat, /WATCH_SILENT_CATCHUP_MS/, 'chat does not promptly catch up a silent remote watcher');
+assert.match(
+  chat,
+  /sse\.watch\(sessionId, workerLink \? null : sessionProfile\)/,
+  'Kanban worker chat is not watching the dispatcher observation hub',
+);
 
 const activity = fs.readFileSync(new URL('tabs/activity.js', ROOT), 'utf8');
 assert.match(activity, /createKeyedReconciler\(/, 'activity feed does not retain keyed event rows');

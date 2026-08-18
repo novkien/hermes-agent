@@ -10329,6 +10329,23 @@ def _default_spawn(
 
     prompt = f"work kanban task {task.id}"
     env = dict(os.environ)
+
+    # Pin live-turn telemetry to the gateway that owns this dispatcher BEFORE
+    # the child activates its assignee profile. Profile startup loads .env with
+    # override=True and may replace API_SERVER_KEY/PORT; these dedicated vars
+    # survive that profile switch and affect observation only.
+    relay_url = str(os.environ.get("HERMES_SESSION_EVENT_RELAY_URL") or "").strip()
+    relay_key = str(os.environ.get("HERMES_SESSION_EVENT_RELAY_KEY") or "").strip()
+    if not (relay_url and relay_key):
+        parent_api_key = str(os.environ.get("API_SERVER_KEY") or "").strip()
+        if parent_api_key:
+            parent_api_port = str(os.environ.get("API_SERVER_PORT") or "8642").strip() or "8642"
+            relay_url = f"http://127.0.0.1:{parent_api_port}"
+            relay_key = parent_api_key
+    if relay_url and relay_key:
+        env["HERMES_SESSION_EVENT_RELAY_URL"] = relay_url.rstrip("/")
+        env["HERMES_SESSION_EVENT_RELAY_KEY"] = relay_key
+
     # The dispatcher is detached from every conversation. Its worker must never
     # inherit routing mirrored by a previous gateway turn, even before the first
     # session binds ContextVars in this process.
