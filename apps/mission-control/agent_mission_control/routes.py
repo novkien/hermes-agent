@@ -19,6 +19,7 @@ import logging
 import re
 import secrets
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -2793,6 +2794,7 @@ class Router:
             ))
             if watch_id else None
         )
+        shutdown_requested = getattr(request.app.state, "shutdown_requested", None)
 
         async def gen():
             try:
@@ -2800,23 +2802,44 @@ class Router:
                 for ev in replay:
                     yield sse_frame(ev)
                 yield f"retry: {self.event_bus.retry_ms}\n\n"
-                from contextlib import suppress
-
                 with suppress(asyncio.CancelledError):
                     while True:
+                        queue_get = asyncio.create_task(queue.get())
+                        shutdown_wait = (
+                            asyncio.create_task(shutdown_requested.wait())
+                            if shutdown_requested is not None else None
+                        )
+                        waiting = {queue_get}
+                        if shutdown_wait is not None:
+                            waiting.add(shutdown_wait)
                         try:
-                            ev = await asyncio.wait_for(
-                                queue.get(), timeout=self.event_bus.heartbeat_seconds
+                            done, _pending = await asyncio.wait(
+                                waiting,
+                                timeout=self.event_bus.heartbeat_seconds,
+                                return_when=asyncio.FIRST_COMPLETED,
                             )
+                        finally:
+                            for task in waiting:
+                                if not task.done():
+                                    task.cancel()
+                            await asyncio.gather(*waiting, return_exceptions=True)
+                        if shutdown_wait is not None and shutdown_wait in done:
+                            if queue_get in done:
+                                queue_get.result()
+                            return
+                        if queue_get in done:
+                            ev = queue_get.result()
                             # Watch frames are already SSE-shaped; bus
                             # events need the envelope this channel is defined by.
                             yield ev["_frame"] if "_frame" in ev else sse_frame(ev)
-                        except asyncio.TimeoutError:
+                        else:
                             yield sse_heartbeat()
             finally:
                 self.event_bus.unsubscribe("*", subscriber)
                 if watcher is not None:
                     watcher.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await watcher
 
         return StreamingResponse(
             gen(),

@@ -82,3 +82,11 @@ def test_gateway_unit_source_declares_only_one_way_wants() -> None:
     assert "PartOf=hermes-mission-control.service" not in source
     assert "BindsTo=hermes-mission-control.service" not in source
     assert "Requires=hermes-mission-control.service" not in source
+
+
+def test_foreground_server_signals_sse_before_uvicorn_shutdown() -> None:
+    source = Path("hermes_cli/mission_control.py").read_text(encoding="utf-8")
+
+    signal = source.index("mission_control_app.state.shutdown_requested.set()")
+    uvicorn_exit = source.index("super().handle_exit(sig, frame)")
+    assert signal < uvicorn_exit

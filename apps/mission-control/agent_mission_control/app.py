@@ -358,6 +358,10 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
                   redoc_url=None, openapi_url=None)
     app.state.settings = s
     app.state.deps = deps
+    # Set by the foreground server's signal handler before Uvicorn starts
+    # waiting for long-lived HTTP requests to finish.  SSE generators wait on
+    # this event so service restarts can drain without forced cancellation.
+    app.state.shutdown_requested = asyncio.Event()
 
     app.middleware("http")(_security_headers_middleware)
     app.middleware("http")(_body_limit_middleware)

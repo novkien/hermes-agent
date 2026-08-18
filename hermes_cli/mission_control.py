@@ -385,14 +385,26 @@ def run_foreground(*, host: str | None = None, port: int | None = None) -> None:
     os.chdir(data_root)
 
     import uvicorn
+    from agent_mission_control.main import app as mission_control_app
 
-    uvicorn.run(
-        "agent_mission_control.main:app",
+    class MissionControlServer(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: Any) -> None:
+            # Uvicorn waits for open HTTP requests before it runs FastAPI's
+            # shutdown hook.  Mission Control's SSE requests are intentionally
+            # long-lived, so wake them as soon as the process receives the
+            # stop signal; otherwise every restart reaches the graceful timeout
+            # and force-cancels the ASGI tasks with noisy tracebacks.
+            mission_control_app.state.shutdown_requested.set()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(
+        mission_control_app,
         app_dir=str(app_root),
         host=selected_host,
         port=selected_port,
         timeout_graceful_shutdown=5,
     )
+    MissionControlServer(config).run()
 
 
 def mission_control_command(args: Any) -> None:
