@@ -399,7 +399,6 @@ def run_foreground(*, host: str | None = None, port: int | None = None) -> None:
 
     config = uvicorn.Config(
         mission_control_app,
-        app_dir=str(app_root),
         host=selected_host,
         port=selected_port,
         timeout_graceful_shutdown=5,

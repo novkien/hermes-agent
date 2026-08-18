@@ -90,3 +90,5 @@ def test_foreground_server_signals_sse_before_uvicorn_shutdown() -> None:
     signal = source.index("mission_control_app.state.shutdown_requested.set()")
     uvicorn_exit = source.index("super().handle_exit(sig, frame)")
     assert signal < uvicorn_exit
+    config_call = source[source.index("config = uvicorn.Config("):uvicorn_exit]
+    assert "app_dir=" not in config_call
