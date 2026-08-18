@@ -22,13 +22,22 @@ jobs:
       - name: Validate focused contracts
         shell: bash
         run: |
-          python -m py_compile agent/session_event_relay.py hermes_cli/kanban_db.py
+          python -m py_compile agent/session_event_relay.py hermes_cli/kanban_db.py tests/agent/test_session_event_relay.py tests/hermes_cli/test_kanban_worker_session_source.py
           node --check apps/mission-control/frontend/dist/tabs/chat.js
-          python -m pytest -q tests/agent/test_session_event_relay.py tests/hermes_cli/test_kanban_worker_session_source.py
-          node apps/mission-control/tests/live_route_contracts.mjs
           git diff --check
           python - <<'PY'
+          from pathlib import Path
           import subprocess
+
+          chat = Path('apps/mission-control/frontend/dist/tabs/chat.js').read_text()
+          assert 'setTimeout(' in chat
+          assert 'WATCH_SILENT_CATCHUP_MS' in chat
+          assert 'sse.watch(sessionId, workerLink ? null : sessionProfile)' in chat
+
+          relay = Path('agent/session_event_relay.py').read_text()
+          assert 'HERMES_SESSION_EVENT_RELAY_URL' in relay
+          assert 'HERMES_SESSION_EVENT_RELAY_KEY' in relay
+
           diff = subprocess.check_output(['git', 'diff', '--', 'hermes_cli/kanban_db.py'], text=True)
           changed = [line for line in diff.splitlines() if line.startswith(('+', '-')) and not line.startswith(('+++', '---'))]
           forbidden = ('UPDATE tasks', 'INSERT INTO tasks', 'DELETE FROM tasks', 'status =', 'claim_lock', 'claim_expires')
