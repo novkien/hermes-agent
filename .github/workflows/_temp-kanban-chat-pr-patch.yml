@@ -1,0 +1,54 @@
+name: temp-kanban-chat-pr-patch
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/fix-kanban-chat-conflict-regression'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Apply patch
+        run: python .github/_temp_kanban_chat_patch.py
+      - name: Validate focused contracts
+        shell: bash
+        run: |
+          python -m py_compile agent/session_event_relay.py hermes_cli/kanban_db.py
+          node --check apps/mission-control/frontend/dist/tabs/chat.js
+          python -m pytest -q tests/agent/test_session_event_relay.py tests/hermes_cli/test_kanban_worker_session_source.py
+          node apps/mission-control/tests/live_route_contracts.mjs
+          git diff --check
+          python - <<'PY'
+          import subprocess
+          diff = subprocess.check_output(['git', 'diff', '--', 'hermes_cli/kanban_db.py'], text=True)
+          changed = [line for line in diff.splitlines() if line.startswith(('+', '-')) and not line.startswith(('+++', '---'))]
+          forbidden = ('UPDATE tasks', 'INSERT INTO tasks', 'DELETE FROM tasks', 'status =', 'claim_lock', 'claim_expires')
+          assert changed
+          for line in changed:
+              if any(token in line for token in forbidden):
+                  raise AssertionError(f'native Kanban transition touched: {line}')
+          PY
+      - name: Commit patch and remove temporary helpers
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/_temp_kanban_chat_patch.py \
+            .github/workflows/_temp-kanban-chat-observation-fix.yml \
+            .github/workflows/_temp-kanban-chat-pr-patch.yml
+          git add agent/session_event_relay.py hermes_cli/kanban_db.py \
+            apps/mission-control/frontend/dist/tabs/chat.js \
+            apps/mission-control/tests/live_route_contracts.mjs \
+            tests/agent/test_session_event_relay.py \
+            tests/hermes_cli/test_kanban_worker_session_source.py
+          git commit -m "fix: pin Kanban live events to dispatcher observation hub"
+          git push origin HEAD:${{ github.head_ref }}
