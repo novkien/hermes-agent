@@ -80,6 +80,18 @@ import {
   planNextPages,
   remainingCount,
 } from '../frontend/dist/pure/session-pager.js';
+import { createCache } from '../frontend/dist/pure/preload.js';
+
+// Profile switching invalidates only the previous profile's prefetched data.
+// The shell iterates cache.keys(), so the bounded cache wrapper must retain
+// that Map-compatible surface instead of throwing during switchProfile().
+const profileCache = createCache({ maxEntries: 4 });
+profileCache.set('profile:default:overview', { id: 'default' });
+profileCache.set('profile:researcher:overview', { id: 'researcher' });
+for (const key of [...profileCache.keys()]) {
+  if (key.startsWith('profile:default:')) profileCache.delete(key);
+}
+assert.deepEqual([...profileCache.keys()], ['profile:researcher:overview']);
 
 // Session operational context is separate from lifecycle: an open session is
 // not automatically a running Kanban worker, and a worker never gains an id

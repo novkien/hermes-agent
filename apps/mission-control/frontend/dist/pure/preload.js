@@ -71,6 +71,9 @@ export function createCache({ maxEntries = 16 } = {}) {
     has(key) {
       return map.has(key);
     },
+    keys() {
+      return map.keys();
+    },
     async swr(key, fetchFn, { revalidate = true } = {}) {
       return swr(this, key, fetchFn, { revalidate });
     },
