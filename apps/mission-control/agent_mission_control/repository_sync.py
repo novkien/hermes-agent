@@ -697,8 +697,9 @@ class RepositorySyncService:
                     )
             current_branch = self._run_ok(spec, "symbolic-ref", "--short", "HEAD")
             head = self._run_ok(spec, "rev-parse", "HEAD")
-            remote = self._run_ok(spec, "rev-parse", f"origin/{spec.branch}")
-            counts = self._run_ok(spec, "rev-list", "--left-right", "--count", f"HEAD...origin/{spec.branch}")
+            origin_ref = self._origin_ref(spec)
+            remote = self._run_ok(spec, "rev-parse", origin_ref)
+            counts = self._run_ok(spec, "rev-list", "--left-right", "--count", f"HEAD...{origin_ref}")
             parts = counts.split()
             ahead = int(parts[0]) if parts else 0
             behind = int(parts[1]) if len(parts) > 1 else 0
@@ -836,7 +837,7 @@ class RepositorySyncService:
 
     def _push_if_ahead(self, spec: RepoSpec) -> str | None:
         """Push synchronized local commits only when this checkout is ahead."""
-        count = self._run_ok(spec, "rev-list", "--count", f"origin/{spec.branch}..HEAD")
+        count = self._run_ok(spec, "rev-list", "--count", f"{self._origin_ref(spec)}..HEAD")
         if int(count.strip() or "0") <= 0:
             return None
         pushed = self.runner.git(spec, "push", "origin", spec.branch)
@@ -894,6 +895,16 @@ class RepositorySyncService:
     def _deployment_state_path(self, spec: RepoSpec) -> Path:
         return self.store.root / "deployments" / f"{spec.name}.json"
 
+    @staticmethod
+    def _origin_ref(spec: RepoSpec) -> str:
+        """Return the fully-qualified remote-tracking ref for a branch.
+
+        A local branch may legally be named ``origin/<branch>``. Git resolves
+        that ambiguous short name before the remote-tracking ref, so status and
+        push preflights must use the explicit remote ref namespace.
+        """
+        return f"refs/remotes/origin/{spec.branch}"
+
     def _deploy_work_tree(self, spec: RepoSpec) -> dict[str, Any] | None:
         """Deploy tracked source files from an isolated checkout to production.
 
@@ -903,6 +914,18 @@ class RepositorySyncService:
         """
         if not spec.deployment_root or not spec.deployment_paths:
             return None
+        source_root = Path(spec.work_tree or self.runner.resolve_path(spec)).resolve()
+        target_root = Path(spec.deployment_root).expanduser().resolve()
+        # The profile repository is already its live source tree. Copying a
+        # tracked file onto itself unlinks the source before shutil.copy2 can
+        # read it, so this topology has nothing to deploy.
+        if source_root == target_root:
+            return {
+                "root": str(target_root),
+                "copied": 0,
+                "removed": 0,
+                "skipped_same_worktree": True,
+            }
         manifest_result = self.runner.git(
             spec, "ls-files", "-z", "--", *spec.deployment_paths
         )
@@ -916,8 +939,6 @@ class RepositorySyncService:
             for item in manifest_result.stdout.split("\0")
             if self._safe_deployment_path(item)
         )
-        source_root = Path(spec.work_tree or self.runner.resolve_path(spec)).resolve()
-        target_root = Path(spec.deployment_root).expanduser().resolve()
         state_path = self._deployment_state_path(spec)
         previous: list[str] = []
         try:

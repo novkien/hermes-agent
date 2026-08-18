@@ -68,17 +68,13 @@ function fmtWhen(value) {
 }
 
 function repoError(repo) {
-  return repo?.error || repo?.last_operation?.error || null;
+  // A repository can be healthy after a previous operation failed. Keep that
+  // failure in Latest operation, but do not turn a synced card red.
+  return repo?.error || null;
 }
 
 function conflictFiles(repo) {
-  const direct = Array.isArray(repo?.conflict_files) ? repo.conflict_files : [];
-  const op = repo?.last_operation || {};
-  const details = op?.error?.details || {};
-  const fromOp = Array.isArray(details.conflict_files) ? details.conflict_files : [];
-  const restore = Array.isArray(details.stash_restore_conflicts)
-    ? details.stash_restore_conflicts : [];
-  return [...new Set([...direct, ...fromOp, ...restore])];
+  return Array.isArray(repo?.conflict_files) ? repo.conflict_files : [];
 }
 
 function operationFailure(operation) {
@@ -658,8 +654,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
 
   function conflictPanel(repo) {
     const files = conflictFiles(repo);
-    const op = repo.last_operation || {};
-    const err = actionError || op.error || repo.error;
+    const err = actionError || repo.error;
     const details = err?.details || {};
     if (!files.length && !err) return null;
     return sideSection('Failure / conflict', [
@@ -671,10 +666,8 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('span', { class: 'repo-side-label', text: 'Conflicting files' }),
         ...files.map((path) => el('code', { text: path })),
       ]) : null,
-      details.stash_sha || op.stash_sha
-        ? kv('Preserved stash', details.stash_sha || op.stash_sha, { mono: true }) : null,
-      details.backup_branch || op.backup_branch
-        ? kv('Backup branch', details.backup_branch || op.backup_branch, { mono: true }) : null,
+      details.stash_sha ? kv('Preserved stash', details.stash_sha, { mono: true }) : null,
+      details.backup_branch ? kv('Backup branch', details.backup_branch, { mono: true }) : null,
       details.recovery_note
         ? el('div', { class: 'repo-recovery-note', text: details.recovery_note }) : null,
     ].filter(Boolean), 'repo-side-section-danger');
@@ -707,6 +700,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     }
     const dirty = repo.working_tree || {};
     const op = repo.last_operation || null;
+    const historicalFailure = operationFailure(op);
     const pending = activeRepos.has(repo.name) || syncingAll;
 
     inspectorHost.append(
@@ -743,6 +737,10 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         kv('Result', op.ok ? 'OK' : 'FAILED', { tone: op.ok ? 'is-ok' : 'is-danger' }),
         kv('Finished', fmtWhen(op.finished_at)),
         kv('Duration', op.duration_ms != null ? `${op.duration_ms} ms` : '—'),
+        historicalFailure ? el('div', {
+          class: 'repo-side-empty',
+          text: `Historical failure: ${historicalFailure.message || historicalFailure.code || 'Unknown error'}`,
+        }) : null,
       ] : [el('div', { class: 'repo-side-empty', text: 'No repository operation recorded yet.' })]),
       sideSection('Automation', [
         el('div', { class: 'repo-automation-row' }, [

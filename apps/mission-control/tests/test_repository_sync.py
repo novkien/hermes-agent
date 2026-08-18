@@ -289,6 +289,40 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         status = self.service.status("demo", fetch=False, include_github=True)
         self.assertIsNone(status["upstream_drift"])
 
+    def test_status_uses_remote_tracking_ref_when_a_local_origin_branch_exists(self):
+        remote_head = self.push_remote_file("remote.txt", "remote\n", "remote update")
+        git(self.prod, "branch", "origin/main", "HEAD")
+
+        status = self.service.status("demo", fetch=True, include_github=False)
+
+        self.assertEqual(status["remote_sha"], remote_head)
+        self.assertEqual(status["ahead"], 0)
+        self.assertEqual(status["behind"], 1)
+
+    def test_sync_skips_deployment_when_source_and_destination_are_the_same_tree(self):
+        same_tree_spec = RepoSpec(
+            name="demo",
+            repo_full_name="example/demo",
+            branch="main",
+            path_candidates=(str(self.prod),),
+            deployment_root=str(self.prod),
+            deployment_paths=("base.txt",),
+            private=True,
+        )
+        service = RepositorySyncService(
+            {"demo": same_tree_spec},
+            runner=RepositoryGitRunner(timeout=20),
+            store=OperationStore(self.state),
+            github=OfflineGithub(),
+            timeout=20,
+        )
+
+        result = service.sync("demo", trigger="dashboard", auto_commit=False)
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["deployment"]["skipped_same_worktree"])
+        self.assertEqual((self.prod / "base.txt").read_text(encoding="utf-8"), "base\n")
+
     def test_upstream_sync_is_blocked_without_github_call(self):
         result = self.service.sync_upstream("demo")
         self.assertFalse(result["ok"])
