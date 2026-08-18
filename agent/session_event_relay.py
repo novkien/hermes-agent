@@ -214,6 +214,17 @@ def gateway_ingest_target() -> Optional[tuple]:
                 pass
         return os.environ.get(name, default)
 
+    # Detached workers can activate another profile before this relay starts.
+    # That profile loads its own .env with override=True, so API_SERVER_* can no
+    # longer be trusted to identify the gateway that spawned the worker. A
+    # dispatcher pins an observation-only target in dedicated process env.
+    relay_url = os.environ.get("HERMES_SESSION_EVENT_RELAY_URL", "").strip()
+    relay_key = os.environ.get("HERMES_SESSION_EVENT_RELAY_KEY", "").strip()
+    if relay_url and relay_key:
+        return relay_url.rstrip("/"), relay_key
+
+    # Backward compatibility for ordinary CLI turns and deployments that have
+    # not pinned a dedicated observation target.
     key = _read("API_SERVER_KEY", "")
     if not key:
         return None

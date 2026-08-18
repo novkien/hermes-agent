@@ -36,6 +36,8 @@ def test_worker_spawn_tags_session_source_kanban(monkeypatch, tmp_path):
     monkeypatch.setattr("subprocess.Popen", _fake_popen)
     monkeypatch.setattr(kb, "_retag_legacy_worker_sessions", lambda _root: None)
     monkeypatch.setattr(kb, "worker_logs_dir", lambda board=None: tmp_path / "logs")
+    monkeypatch.setenv("API_SERVER_KEY", "dispatcher-observation-key")
+    monkeypatch.setenv("API_SERVER_PORT", "8642")
 
     task = kb.Task(
         id="t_b21733fb",
@@ -60,6 +62,8 @@ def test_worker_spawn_tags_session_source_kanban(monkeypatch, tmp_path):
     kb._default_spawn(task, workspace)
 
     assert captured["env"]["HERMES_SESSION_SOURCE"] == "kanban"
+    assert captured["env"]["HERMES_SESSION_EVENT_RELAY_URL"] == "http://127.0.0.1:8642"
+    assert captured["env"]["HERMES_SESSION_EVENT_RELAY_KEY"] == "dispatcher-observation-key"
 
 
 def test_kanban_rows_stay_out_of_the_session_list(db):
