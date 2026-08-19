@@ -3,7 +3,7 @@ name: PR mergeability
 on:
   pull_request_target:
     branches: [master]
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
 
 permissions:
   contents: read
