@@ -1,9 +1,10 @@
 import { writeFileSync } from 'node:fs'
 
 import type { ScrollBoxHandle } from '@hermes/ink'
-import { evictInkCaches } from '@hermes/ink'
+import { evictInkCaches, forceRedraw } from '@hermes/ink'
 import { type RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 
+import { DASHBOARD_TUI_MODE, STARTUP_RESUME_ID } from '../config/env.js'
 import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
 import { introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
@@ -25,6 +26,30 @@ import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
+
+// Zero-width PTY control consumed by web/src/lib/pty-resume-sanitizer.ts.
+// It terminates resume-only erase suppression before a full redraw so live
+// tool/thinking updates can clear their previous rows instead of stacking.
+const DASHBOARD_RESUME_COMPLETE_MARKER = '\x1b]777;hermes-resume-complete\x07'
+
+const scheduleDashboardResumeComplete = () => {
+  if (!DASHBOARD_TUI_MODE || !STARTUP_RESUME_ID) {
+    return
+  }
+
+  setTimeout(() => {
+    try {
+      process.stdout.write(DASHBOARD_RESUME_COMPLETE_MARKER)
+      // The marker is ordered before this repaint. Dashboard filtering switches
+      // to live mode first, then Ink's legitimate ESC[K/ESC[X cleanup reaches
+      // xterm and removes any replay-era stale rows that survived suppression.
+      forceRedraw(process.stdout)
+    } catch {
+      // Best-effort browser-host hint only; a dead PTY is handled by the
+      // normal output-stream lifecycle guards in entry.tsx.
+    }
+  }, 0).unref?.()
+}
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
 
@@ -397,6 +422,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             hydrateLiveSessionInflight(r.inflight)
             cancelResumeScrollRef.current?.()
             cancelResumeScrollRef.current = scheduleResumeScrollToBottom(scrollRef)
+            scheduleDashboardResumeComplete()
 
             if (previousSid && previousSid !== r.session_id) {
               void closeSession(previousSid)
