@@ -1,0 +1,9 @@
+api_version: hermes.repository/v1
+repository_id: hermes-agent
+registry: ops/repository-control/repositories.yaml
+default_branch: master
+normal_publication: branch-pull-request
+normal_merge_method: squash
+authoring_hosts: [workstation]
+deployment_targets: [jarvis]
+source_paths_root: "$HERMES_HOME"
