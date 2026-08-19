@@ -139,8 +139,13 @@ jobs:
           while IFS=$'\t' read -r pr_number listed_head; do
             [ -n "$pr_number" ] || continue
             git reset --hard "$base_sha" >/dev/null
-            git fetch --force --no-tags origin \
-              "pull/${pr_number}/head:refs/remotes/origin/pr-${pr_number}"
+            if ! git fetch --force --no-tags origin \
+              "pull/${pr_number}/head:refs/remotes/origin/pr-${pr_number}"; then
+              publish_status "$listed_head" error "Unable to fetch PR head; retry required"
+              echo "::warning::Unable to fetch PR #${pr_number}; continuing."
+              continue
+            fi
+
             head_sha="$(git rev-parse "refs/remotes/origin/pr-${pr_number}")"
             [ "$head_sha" = "$listed_head" ] || publish_status "$head_sha" pending "Rechecking updated PR head"
 
