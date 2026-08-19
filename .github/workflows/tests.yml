@@ -150,7 +150,7 @@ jobs:
   # (including PRs) get balanced slicing.
   save-durations:
     needs: test
-    if: needs.test.result == 'success' && github.ref == 'refs/heads/main'
+    if: needs.test.result == 'success' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
