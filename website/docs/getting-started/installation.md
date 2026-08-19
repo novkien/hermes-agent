@@ -90,7 +90,7 @@ That logs you in, sets Nous as your provider, and turns on the Tool Gateway in o
 
 - **uv** (fast Python package manager)
 - **Python 3.11** (via uv, no sudo needed)
-- **Node.js v22** (for browser automation and WhatsApp bridge)
+- **Node.js 26+** for installer-managed browser automation, WhatsApp, and desktop builds; the workspace package engine itself requires Node.js 22.22+
 - **ripgrep** (fast file search)
 - **ffmpeg** (audio format conversion for TTS)
 

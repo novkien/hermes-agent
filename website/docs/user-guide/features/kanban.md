@@ -27,7 +27,7 @@ This is the shape that covers the workloads `delegate_task` can't:
 - **Engineering pipelines** — decompose → implement in parallel worktrees → review → iterate → PR.
 - **Fleet work** — one specialist managing N subjects (50 social accounts, 12 monitored services).
 
-For the full design rationale, comparative analysis against Cline Kanban / Paperclip / NanoClaw / Google Gemini Enterprise, and the eight canonical collaboration patterns, see `docs/hermes-kanban-v1-spec.pdf` in the repository.
+For historical design rationale, comparative analysis against Cline Kanban / Paperclip / NanoClaw / Google Gemini Enterprise, and the eight canonical collaboration patterns, see `docs/hermes-kanban-v1-spec.pdf` in the repository. The implementation, tests, and this guide are the source of truth for current behavior.
 
 ## Kanban vs. `delegate_task`
 
@@ -915,7 +915,7 @@ The board supports these eight patterns without any new primitives:
 | **P8 Fleet farming** | one profile, N subjects | 50 social accounts |
 | **P9 Triage specifier** | rough idea → `triage` → `hermes kanban specify` expands body → `todo` | "turn this one-liner into a spec'd task" |
 
-For worked examples of each, see `docs/hermes-kanban-v1-spec.pdf`.
+For historical worked examples of each, see `docs/hermes-kanban-v1-spec.pdf`; use the implementation, tests, and this guide for current behavior.
 
 ## Handing context to follow-up cards (the parent link)
 
@@ -1160,4 +1160,4 @@ Kanban is deliberately single-host. `~/.hermes/kanban.db` is a local SQLite file
 
 ## Design spec
 
-The complete design — architecture, concurrency correctness, comparison with other systems, implementation plan, risks, open questions — lives in `docs/hermes-kanban-v1-spec.pdf`. Read that before filing any behavior-change PR.
+The PDF in `docs/hermes-kanban-v1-spec.pdf` is historical design context covering architecture, concurrency correctness, comparisons, the original implementation plan, risks, and open questions. Before filing a behavior-change PR, use the implementation, tests, and this guide as the current sources of truth.

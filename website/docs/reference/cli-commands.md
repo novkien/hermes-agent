@@ -522,7 +522,10 @@ On-demand vulnerability scan against [OSV.dev](https://osv.dev). Covers the Herm
 ## `hermes login` / `hermes logout` *(Deprecated)*
 
 :::caution
-`hermes login` has been removed. Use `hermes auth` to manage OAuth credentials, `hermes model` to select a provider, or `hermes setup` for full interactive setup.
+`hermes login` is retained as a hidden compatibility shim for older scripts. It
+does not authenticate; it prints a deprecation message. Use `hermes auth` to
+manage OAuth credentials, `hermes model` to select a provider, or `hermes setup`
+for full interactive setup.
 :::
 
 ## `hermes auth`
@@ -650,7 +653,7 @@ Board resolution order (highest precedence first): `--board <slug>` flag → `HE
 
 All actions are also available as a slash command in the gateway (`/kanban …`), with the same argument surface — including `boards` subcommands and the `--board` flag.
 
-For the full design — comparison with Cline Kanban / Paperclip / NanoClaw / Gemini Enterprise, eight collaboration patterns, four user stories, concurrency correctness proof — see `docs/hermes-kanban-v1-spec.pdf` in the repository or the [Kanban user guide](/user-guide/features/kanban).
+For historical design context — comparison with Cline Kanban / Paperclip / NanoClaw / Gemini Enterprise, eight collaboration patterns, four user stories, and concurrency analysis — see `docs/hermes-kanban-v1-spec.pdf` in the repository or the current [Kanban user guide](/user-guide/features/kanban). The implementation, tests, and user guide are the source of truth for current behavior.
 
 ## `hermes egress`
 

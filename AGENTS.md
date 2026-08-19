@@ -285,10 +285,10 @@ versa), you're on the wrong loader. Check `DEFAULT_CONFIG` coverage.
 ### Working directory:
 - **CLI** — uses the process's current directory (`os.getcwd()`).
 - **Messaging** — uses `terminal.cwd` from `config.yaml`. The gateway bridges this
-  to the `TERMINAL_CWD` env var for child tools. **`MESSAGING_CWD` has been
-  removed** — the config loader prints a deprecation warning if it's set in
-  `.env`. Same for `TERMINAL_CWD` in `.env`; the canonical setting is
-  `terminal.cwd` in `config.yaml`.
+  to the `TERMINAL_CWD` env var for child tools. **`terminal.cwd` is canonical.**
+  `MESSAGING_CWD` and direct `TERMINAL_CWD` entries in `.env` remain compatibility
+  fallbacks; the config loader emits deprecation warnings for them. New
+  configurations should use `terminal.cwd` in `config.yaml`.
 
 ---
 

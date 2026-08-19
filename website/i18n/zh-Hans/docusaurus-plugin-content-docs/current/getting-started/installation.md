@@ -127,7 +127,7 @@ hermes setup --portal
 
 - **uv**（快速 Python 包管理器）
 - **Python 3.11**（通过 uv，无需 sudo）
-- **Node.js v22**（用于浏览器自动化和 WhatsApp 桥接）
+- **Node.js 26+**（安装器管理的浏览器自动化、WhatsApp 和桌面端构建需要；工作区 package engine 本身要求 Node.js 22.22+）
 - **ripgrep**（快速文件搜索）
 - **ffmpeg**（TTS 的音频格式转换）
 

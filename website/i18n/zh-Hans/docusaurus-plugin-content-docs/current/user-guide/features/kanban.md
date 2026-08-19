@@ -27,7 +27,7 @@ Hermes Kanban 是一个持久化任务看板，在所有 Hermes 配置文件之�
 - **工程流水线** —— 分解 → 在并行 worktree 中实现 → 审查 → 迭代 → PR。
 - **批量任务** —— 一个专家管理 N 个对象（50 个社交账号、12 个监控服务）。
 
-完整的设计原理、与 Cline Kanban / Paperclip / NanoClaw / Google Gemini Enterprise 的对比分析，以及八种典型协作模式，请参阅仓库中的 `docs/hermes-kanban-v1-spec.pdf`。
+历史设计原理、与 Cline Kanban / Paperclip / NanoClaw / Google Gemini Enterprise 的对比分析，以及八种典型协作模式，请参阅仓库中的 `docs/hermes-kanban-v1-spec.pdf`。当前行为以实现、测试和本指南为准。
 
 ## Kanban 与 `delegate_task` 的对比
 
@@ -665,7 +665,7 @@ Gateway 平台有实际的消息长度限制。如果 `/kanban list`、`/kanban 
 | **P8 批量任务** | 一个配置文件，N 个对象 | 50 个社交账号 |
 | **P9 分诊规格器** | 粗略想法 → `triage` → `hermes kanban specify` 扩展正文 → `todo` | "将这个一行描述变成规格化任务" |
 
-每种模式的详细示例，请参阅 `docs/hermes-kanban-v1-spec.pdf`。
+每种模式的历史示例，请参阅 `docs/hermes-kanban-v1-spec.pdf`；当前行为请以实现、测试和本指南为准。
 
 ## 向后续卡片传递上下文（父任务链接）
 
@@ -866,4 +866,4 @@ Kanban 是刻意单主机的。`~/.hermes/kanban.db` 是本地 SQLite 文件，�
 
 ## 设计规范
 
-完整的设计 —— 架构、并发正确性、与其他系统的比较、实现计划、风险、开放问题 —— 存在于 `docs/hermes-kanban-v1-spec.pdf` 中。在提交任何行为变更 PR 之前请先阅读它。
+`docs/hermes-kanban-v1-spec.pdf` 是历史设计背景，涵盖架构、并发正确性、系统比较、原始实现计划、风险和开放问题。提交行为变更 PR 前，请以实现、测试和本指南作为当前事实来源。
