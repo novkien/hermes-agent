@@ -4,16 +4,19 @@ on:
   pull_request_target:
     branches: [master]
     types: [opened, reopened, synchronize, ready_for_review, edited]
+  push:
+    branches: [master]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-mergeability-${{ github.event.pull_request.number }}
+  group: pr-mergeability-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   mergeability:
+    if: github.event_name == 'pull_request_target'
     name: Publish PR mergeability
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -61,11 +64,69 @@ jobs:
           if git merge --no-commit --no-ff "$actual_head"; then
             git merge --abort || true
             publish_status success "PR cleanly merges with current master"
-            echo "PR cleanly merges with current master."
           else
-            git status --short
             git merge --abort || true
             publish_status failure "PR conflicts with current master"
             echo "::error::PR conflicts with current master."
             exit 1
           fi
+
+  refresh-open-prs:
+    if: github.event_name == 'push'
+    name: Refresh open PR mergeability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out updated master
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Recheck every open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          publish_status() {
+            local head_sha="$1"
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/${GITHUB_REPOSITORY}/statuses/${head_sha}" \
+              -f state="$2" \
+              -f context="PR merges with master" \
+              -f description="$3" >/dev/null
+          }
+
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=master&per_page=100" \
+            --jq '.[] | [.number, .head.sha] | @tsv' > /tmp/open-prs.tsv
+
+          while IFS=$'\t' read -r pr_number listed_head; do
+            [ -n "$pr_number" ] || continue
+            git reset --hard "$base_sha" >/dev/null
+            git fetch --force --no-tags origin \
+              "pull/${pr_number}/head:refs/remotes/origin/pr-${pr_number}"
+            head_sha="$(git rev-parse "refs/remotes/origin/pr-${pr_number}")"
+            [ "$head_sha" = "$listed_head" ] || echo "PR #${pr_number} head advanced during refresh."
+            publish_status "$head_sha" pending "Rechecking merge after master update"
+
+            if git merge --no-commit --no-ff "$head_sha"; then
+              git merge --abort || true
+              publish_status "$head_sha" success "PR cleanly merges with current master"
+            else
+              git merge --abort || git reset --hard "$base_sha" >/dev/null
+              publish_status "$head_sha" failure "PR conflicts with current master"
+            fi
+          done < /tmp/open-prs.tsv
+
+          git reset --hard "$base_sha" >/dev/null
