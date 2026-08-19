@@ -1125,15 +1125,22 @@ class Router:
         origin = request.headers.get("Origin")
         if not origin:
             return True  # non-browser clients
-        return origin == self.s.allowed_origin
+        allowed = {entry.strip() for entry in self.s.allowed_origin.split(",") if entry.strip()}
+        return origin in allowed
 
     def _host_allowed(self, request: Request) -> bool:
         host = request.headers.get("Host", "")
         if not host:
             return False
         # Allow both the configured host:port and host-without-port (proxies often
-        # strip the port on forwarded Host headers).
-        return host == self.s.resolved_allowed_host or host == self.s.resolved_allowed_host.split(":", 1)[0]
+        # strip the port on forwarded Host headers). Multiple entries are CSV.
+        for entry in self.s.resolved_allowed_host.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if host == entry or host == entry.split(":", 1)[0]:
+                return True
+        return False
 
     def _guard_mutation(self, request: Request) -> dict[str, Any]:
         """Full pre-upstream chain every mutation owes: session, CSRF, Origin,
