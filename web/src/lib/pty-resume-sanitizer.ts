@@ -18,9 +18,11 @@
  *
  * 3. **Erase codes are only pathological during the resume replay.** Once the
  *    replay has settled, `ESC[K` / `ESC[X` are exactly how a TUI clears stale
- *    glyphs for spinners, progress bars, and status lines. Stripping them
- *    forever corrupts normal interactive output, so suppression is bounded to
- *    a short window after connect (see PTY_RESUME_SANITIZE_WINDOW_MS).
+ *    glyphs for spinners, progress bars, tool rows, and status lines. The TUI
+ *    therefore emits an explicit zero-width boundary after its resumed
+ *    transcript has committed; seeing that boundary ends erase suppression
+ *    immediately. The dashboard's 30s timer remains a fail-safe for older TUI
+ *    builds that do not emit the boundary.
  */
 
 /** A blank-line run: CRLF (real PTY, cooked mode) or bare LF (raw-mode PTY). */
@@ -29,6 +31,14 @@ const BLANK_LINE_BURST = /(?:\r?\n){50,}/g;
 const ERASE_LINE = /\x1b\[\d*K/g;
 // eslint-disable-next-line no-control-regex -- intentional ESC byte in ANSI sequence parser
 const ERASE_CHAR = /\x1b\[\d*X/g;
+
+/**
+ * Zero-width control marker emitted by the dashboard-hosted TUI once a
+ * resumed transcript has committed. The sanitizer consumes it and switches
+ * from replay filtering to normal live-redraw semantics.
+ */
+export const DASHBOARD_RESUME_COMPLETE_MARKER =
+  "\x1b]777;hermes-resume-complete\x07";
 
 /** Still-incomplete trailing escape: "\x1b", "\x1b[", "\x1b[\d*". */
 // eslint-disable-next-line no-control-regex -- intentional ESC byte in ANSI sequence parser
@@ -47,6 +57,28 @@ const TRAILING_NEWLINES = /(?:\r?\n)*\r?$/;
 
 /** Collapsed form of a pathological burst: one blank row, CRLF for xterm. */
 const COLLAPSED_BURST = "\r\n\r\n";
+
+/**
+ * Return the longest suffix of `input` that could be the beginning of the
+ * resume-complete marker. PTY reads can split the OSC anywhere, including
+ * immediately after ESC, so the incomplete suffix must not leak to xterm.
+ */
+function trailingResumeMarkerPrefixLength(input: string): number {
+  const max = Math.min(
+    input.length,
+    DASHBOARD_RESUME_COMPLETE_MARKER.length - 1,
+  );
+
+  for (let length = max; length > 0; length -= 1) {
+    if (
+      DASHBOARD_RESUME_COMPLETE_MARKER.startsWith(input.slice(-length))
+    ) {
+      return length;
+    }
+  }
+
+  return 0;
+}
 
 /**
  * Apply all suppression rules to a safely-completed string.
@@ -69,8 +101,8 @@ export class PtyResumeSanitizer {
 
   /**
    * Stop stripping erase codes while continuing to collapse blank-line bursts.
-   * Called when the resume-replay window closes so that ordinary interactive
-   * redraws (spinners, progress bars, status lines) keep their `ESC[K`.
+   * Called by the explicit TUI replay boundary and by the dashboard's timeout
+   * fallback so ordinary interactive redraws keep their `ESC[K` / `ESC[X`.
    */
   endEraseSuppression(): void {
     this.#stripErase = false;
@@ -83,10 +115,32 @@ export class PtyResumeSanitizer {
 
   /** Feed one decoded WebSocket frame payload. Returns the sanitized output. */
   next(chunk: string): string {
-    const combined = this.#pending + chunk;
+    let combined = this.#pending + chunk;
+    this.#pending = "";
+
     if (combined === "") {
-      this.#pending = "";
       return "";
+    }
+
+    // The TUI emits this OSC immediately before a full redraw once its resumed
+    // history is committed. Consume it rather than forwarding it to xterm and
+    // preserve erase codes for the redraw in the same frame or any later frame.
+    if (combined.includes(DASHBOARD_RESUME_COMPLETE_MARKER)) {
+      combined = combined.split(DASHBOARD_RESUME_COMPLETE_MARKER).join("");
+      this.endEraseSuppression();
+    }
+
+    // A PTY frame may end in the middle of the custom OSC. Buffer the longest
+    // possible marker prefix so it can be recognized on the next frame. The
+    // marker is a replay boundary, so any preceding newline run is complete at
+    // this point and can be filtered immediately rather than merged across it.
+    const markerPrefixLength = trailingResumeMarkerPrefixLength(combined);
+    if (markerPrefixLength > 0) {
+      this.#pending = combined.slice(-markerPrefixLength);
+      return applyPtyFilters(
+        combined.slice(0, -markerPrefixLength),
+        this.#stripErase,
+      );
     }
 
     // Hold back a trailing partial escape so a CSI split across frames is
@@ -114,10 +168,10 @@ export class PtyResumeSanitizer {
   /**
    * Drain buffered state at end of stream.
    *
-   * A buffered *partial escape* is dropped rather than written: `#pending` only
-   * ever holds an incomplete sequence, and emitting one would leave xterm's
-   * parser in an "in-escape" state that swallows subsequent output after
-   * reconnect. A buffered *newline run* is safe and is emitted (collapsed).
+   * A buffered *partial escape* (including a partial resume-boundary OSC) is
+   * dropped rather than written: emitting it would leave xterm's parser in an
+   * incomplete escape state. A buffered *newline run* is safe and is emitted
+   * collapsed.
    */
   flush(): string {
     const last = this.#pending;
