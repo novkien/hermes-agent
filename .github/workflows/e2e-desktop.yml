@@ -81,11 +81,11 @@ jobs:
       # The Playwright step below runs `npm run build` before testing so
       # dist/ is always fresh — no separate build step needed here.
 
-      # ── Restore visual baseline screenshots from main ──────────────────
-      # Baselines are generated on main (via --update-snapshots) and cached.
+      # ── Restore visual baseline screenshots from master ────────────────
+      # Baselines are generated on master (via --update-snapshots) and cached.
       # On PRs, we restore them so toHaveScreenshot has something to compare
       # against.  The cache key is keyed on the desktop source files so a
-      # UI change naturally invalidates it — but we fall back to the main
+      # UI change naturally invalidates it — but we fall back to the master
       # cache to avoid cold starts on unrelated PRs.
       - name: Restore visual baseline screenshots
         id: restore-baselines
@@ -94,19 +94,19 @@ jobs:
           path: apps/desktop/e2e/*-snapshots
           key: visual-baselines-${{ github.ref_name }}
           restore-keys: |
-            visual-baselines-main
+            visual-baselines-master
 
       # ── Run Playwright E2E under xvfb ─────────────────────────────────
       # xvfb runs at a fixed 1280x1024 screen so the 1220x800 Electron
       # window always has a consistent viewport for screenshot comparison.
-      # On main, we run with --update-snapshots to generate baselines.
+      # On master, we run with --update-snapshots to generate baselines.
       # `npm run test:e2e` builds dist/ as a pretest hook so the renderer
       # is always fresh — no separate build step needed.
       - name: Run Playwright E2E tests
         working-directory: apps/desktop
         run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "On main — generating/updating baseline screenshots"
+          if [ "${{ github.ref_name }}" = "master" ]; then
+            echo "On master — generating/updating baseline screenshots"
             npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
               npx playwright test --reporter=list --update-snapshots
           else
@@ -121,13 +121,13 @@ jobs:
           OPENAI_API_KEY: ''
           NOUS_API_KEY: ''
 
-      # ── Save updated baselines to cache (main only) ───────────────────
+      # ── Save updated baselines to cache (master only) ─────────────────
       - name: Save updated baselines to cache
-        if: github.ref_name == 'main' && always()
+        if: github.ref_name == 'master' && always()
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: apps/desktop/e2e/*-snapshots
-          key: visual-baselines-main
+          key: visual-baselines-master
 
       # ── Upload Playwright report (HTML + traces) ──────────────────────
       - name: Upload Playwright report
@@ -154,7 +154,7 @@ jobs:
       # ── Upload just the visual diffs (small, fast to review) ──────────
       - name: Upload visual diffs
         id: upload-diffs
-        if: always() && github.ref_name != 'main'
+        if: always() && github.ref_name != 'master'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: visual-diffs-${{ github.sha }}
@@ -201,7 +201,7 @@ jobs:
       # artifact. It turns selected images into GitHub attachment URLs; it
       # never checks out or runs this PR's code.
       - name: Upload inline E2E evidence
-        if: always() && github.ref_name != 'main'
+        if: always() && github.ref_name != 'master'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-evidence-${{ github.sha }}
@@ -260,7 +260,7 @@ jobs:
             echo "- [visual-diffs]($DIFFS_URL) — just the diffed screenshots (small, fast to review)"
           fi
           echo ""
-          echo "**To update baselines:** merge to main (baselines auto-update on main runs) or run \`npx playwright test --update-snapshots\` locally."
+          echo "**To update baselines:** merge to master (baselines auto-update on master runs) or run \`npx playwright test --update-snapshots\` locally."
 
           # Also parse the JSON report for pass/fail counts
           if [ -f playwright-report/results.json ]; then
