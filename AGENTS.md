@@ -28,6 +28,29 @@ Jarvis/Hermes. Current source and tests take precedence over older repository no
   deployment surface.
 - Root-level `agentos-dashboard.db*` files are runtime state, not source artifacts.
 
+## Documentation Drift Policy
+
+Documentation is part of the implementation. When behavior, configuration, APIs,
+commands, architecture, setup, or user-visible functionality changes, reconcile the
+affected documentation in the same task.
+
+- Search existing documentation before adding new documentation, including relevant
+  README files, `website/docs/`, architecture/design notes, setup guides, runbooks,
+  configuration references, CLI/API examples, and scoped `AGENTS.md` files.
+- Update the existing canonical document when one exists. Prefer correcting,
+  consolidating, or deleting stale documentation over creating another competing file.
+- Keep one canonical description for each current behavior. When multiple documents
+  overlap, identify the canonical source and merge, redirect, deprecate, or remove stale
+  duplicates rather than allowing divergent descriptions to remain current.
+- Treat current implementation, contract tests, schemas, configuration definitions, and
+  verified runtime behavior as the source of truth when documentation disagrees with
+  them. Do not preserve obsolete behavior merely because an older document describes it.
+- Do not document speculative, unpublished, or unimplemented behavior as current.
+- Preserve useful structure, terminology, frontmatter, and cross-links where they remain
+  valid, and run applicable documentation checks after edits.
+- A code change that makes existing documentation incorrect is incomplete until the
+  affected documentation has been reconciled.
+
 ## Runtime Architecture
 
 AgentOS is a FastAPI BFF between the browser SPA and three Hermes upstream families:
