@@ -20,6 +20,9 @@ jobs:
     name: Publish PR mergeability
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: mergeability-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
       statuses: write
@@ -35,6 +38,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
@@ -61,11 +65,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git merge --no-commit --no-ff "$actual_head"; then
-            git merge --abort || true
+          merge_result=success
+          if ! git merge --no-commit --no-ff "$actual_head"; then
+            merge_result=failure
+          fi
+          git merge --abort || git reset --hard "$EXPECTED_BASE" >/dev/null
+
+          git fetch --force --no-tags origin \
+            "master:refs/remotes/origin/current-master"
+          current_base="$(git rev-parse refs/remotes/origin/current-master)"
+          if [ "$current_base" != "$EXPECTED_BASE" ]; then
+            publish_status pending "Master advanced; awaiting current-base refresh"
+            echo "::notice::Master advanced while this run was active."
+            exit 0
+          fi
+
+          if [ "$merge_result" = success ]; then
             publish_status success "PR cleanly merges with current master"
           else
-            git merge --abort || true
             publish_status failure "PR conflicts with current master"
             echo "::error::PR conflicts with current master."
             exit 1
@@ -76,6 +93,9 @@ jobs:
     name: Refresh open PR mergeability
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: mergeability-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
@@ -111,14 +131,18 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=master&per_page=100" \
             --jq '.[] | [.number, .head.sha] | @tsv' > /tmp/open-prs.tsv
 
+          while IFS=$'\t' read -r _pr_number listed_head; do
+            [ -n "$listed_head" ] || continue
+            publish_status "$listed_head" pending "Rechecking merge after master update"
+          done < /tmp/open-prs.tsv
+
           while IFS=$'\t' read -r pr_number listed_head; do
             [ -n "$pr_number" ] || continue
             git reset --hard "$base_sha" >/dev/null
             git fetch --force --no-tags origin \
               "pull/${pr_number}/head:refs/remotes/origin/pr-${pr_number}"
             head_sha="$(git rev-parse "refs/remotes/origin/pr-${pr_number}")"
-            [ "$head_sha" = "$listed_head" ] || echo "PR #${pr_number} head advanced during refresh."
-            publish_status "$head_sha" pending "Rechecking merge after master update"
+            [ "$head_sha" = "$listed_head" ] || publish_status "$head_sha" pending "Rechecking updated PR head"
 
             if git merge --no-commit --no-ff "$head_sha"; then
               git merge --abort || true
