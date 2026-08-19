@@ -14,10 +14,12 @@ concurrency:
 
 jobs:
   mergeability:
-    if: github.event_name == 'pull_request_target'
-    name: PR merges with master
+    name: Publish PR mergeability
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - name: Check out trusted base
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -25,30 +27,45 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
-      - name: Verify clean merge
+      - name: Verify clean merge and publish head status
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+
+          publish_status() {
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/${GITHUB_REPOSITORY}/statuses/${EXPECTED_HEAD}" \
+              -f state="$1" \
+              -f context="PR merges with master" \
+              -f description="$2" >/dev/null
+          }
+
           git fetch --no-tags origin \
             "pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head"
           actual_head="$(git rev-parse refs/remotes/origin/pr-head)"
 
           if [ "$actual_head" != "$EXPECTED_HEAD" ]; then
-            echo "::notice::PR head moved; the newer synchronize run will validate it."
+            echo "::notice::PR head moved; the newer event will validate it."
             exit 0
           fi
 
+          publish_status pending "Checking merge with current master"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if git merge --no-commit --no-ff "$actual_head"; then
             git merge --abort || true
+            publish_status success "PR cleanly merges with current master"
             echo "PR cleanly merges with current master."
           else
             git status --short
             git merge --abort || true
+            publish_status failure "PR conflicts with current master"
             echo "::error::PR conflicts with current master."
             exit 1
           fi
