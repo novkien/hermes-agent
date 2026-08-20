@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for AgentOS repository synchronization.
-
-No network access is required. The integration cases build temporary local Git
-repositories and verify preservation of dirty files and divergent local commits.
-"""
+"""Focused regression tests for registry-driven repository owner control."""
 
 from __future__ import annotations
 
@@ -20,6 +16,7 @@ if str(APP_ROOT) not in sys.path:
 
 from agent_mission_control.repository_runner import RepositoryGitRunner  # noqa: E402
 from agent_mission_control.repository_sync import (  # noqa: E402
+    GitHubRestClient,
     OperationStore,
     RepoSpec,
     RepositorySyncError,
@@ -28,86 +25,72 @@ from agent_mission_control.repository_sync import (  # noqa: E402
 )
 
 
-class OfflineGithub:
-    def open_pulls(self, _spec, *, limit=10):
-        return []
-
-    def fork_drift(self, _spec):
-        raise AssertionError("upstream drift must never be queried")
-
-
-class TimelineGithub:
-    """In-memory GitHub double for the dashboard Safe sync merge sequence."""
-
-    def __init__(self, pulls, *, reject_numbers=()):
-        self.pulls = [dict(pull) for pull in pulls]
-        self.reject_numbers = set(reject_numbers)
-        self.merge_calls = []
-        self.ready_calls = []
-        self.open_calls = 0
-
-    def open_pulls(self, _spec, *, limit=10):
-        self.open_calls += 1
-        return [dict(pull) for pull in self.pulls[:limit]]
-
-    def merge_pr_rebase(self, _spec, number, *, expected_head_sha=None):
-        self.merge_calls.append((number, expected_head_sha))
-        if number in self.reject_numbers:
-            raise RepositorySyncError(
-                "github_merge_rejected",
-                f"PR #{number} has merge conflicts",
-                details={"pull_number": number},
-            )
-        self.pulls = [pull for pull in self.pulls if pull["number"] != number]
-        return {"merged": True, "sha": f"merged-{number}"}
-
-    def mark_pull_ready_for_review(self, _spec, number, *, pull_node_id=None):
-        self.ready_calls.append((number, pull_node_id))
-        for pull in self.pulls:
-            if pull["number"] == number:
-                pull["draft"] = False
-                return {"id": pull_node_id or f"node-{number}", "isDraft": False}
-        raise AssertionError(f"missing PR #{number}")
-
-
 def git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
-        ["git", "-C", str(cwd), *args],
-        check=False,
-        capture_output=True,
-        text=True,
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
     if proc.returncode != 0:
         raise AssertionError(
-            f"git {' '.join(args)} failed ({proc.returncode})\nstdout={proc.stdout}\nstderr={proc.stderr}"
+            f"git {' '.join(args)} failed ({proc.returncode})\n{proc.stdout}\n{proc.stderr}"
         )
     return (proc.stdout or "").strip()
 
 
-def configure_identity(repo: Path) -> None:
-    git(repo, "config", "user.email", "repo-sync-test@example.invalid")
-    git(repo, "config", "user.name", "Repo Sync Test")
+def identity(repo: Path) -> None:
+    git(repo, "config", "user.email", "repo-control-test@example.invalid")
+    git(repo, "config", "user.name", "Repository Control Test")
+
+
+class OfflineGithub:
+    def open_pulls(self, _spec, *, limit=20):
+        return []
+
+
+class MergeGithub(OfflineGithub):
+    def __init__(self, callback=None):
+        self.callback = callback
+        self.merge_calls = []
+
+    def pull_detail(self, _spec, number):
+        return {"number": number, "draft": False, "head": {"sha": "abc1234"}}
+
+    def merge_pr_rebase(self, _spec, number, *, expected_head_sha=None):
+        self.merge_calls.append((number, expected_head_sha))
+        if self.callback:
+            self.callback()
+        return {"merged": True, "merge_sha": "merged123", "head_sha": "abc1234"}
 
 
 class RepositoryRegistryTests(unittest.TestCase):
-    def test_owner_registry_is_exactly_six_repositories(self):
+    def test_registry_is_yaml_driven_and_contains_seven_repositories(self):
         registry = default_repository_registry()
         self.assertEqual(
             list(registry),
-            ["9router", "hermes-agent", "hermes-skills", "hermes-plugins", "agents", "llama-proxy"],
+            [
+                "hermes-agent", "hermes-skills", "hermes-plugins", "agents",
+                "llama-proxy", "9router", "godot-mcp",
+            ],
         )
-        self.assertNotIn("agent-mission-control", registry)
-        self.assertEqual(registry["9router"].branch, "master")
-        self.assertEqual(registry["9router"].upstream_repo, "decolua/9router")
-        self.assertEqual(registry["hermes-agent"].upstream_repo, "NousResearch/hermes-agent")
-        self.assertEqual(registry["llama-proxy"].transport, "ssh")
-        self.assertEqual(registry["hermes-skills"].branch, "master")
-        self.assertEqual(registry["hermes-plugins"].branch, "master")
-        self.assertEqual(registry["agents"].branch, "master")
-        self.assertEqual(registry["llama-proxy"].branch, "master")
+        self.assertEqual(registry["llama-proxy"].host, "jarvis-pi")
+        self.assertEqual(registry["llama-proxy"].ssh_target, "jarvis-pi")
+        self.assertEqual(registry["godot-mcp"].branch, "main")
+        expected_live = {
+            "hermes-agent": "~/.hermes/hermes-agent",
+            "hermes-skills": "~/.hermes",
+            "hermes-plugins": "~/.hermes/plugins",
+            "agents": "~/.hermes/profiles",
+            "llama-proxy": "/home/pi/llama-proxy",
+            "9router": "/home/pi/9router",
+            "godot-mcp": "/home/novkien/godot-mcp",
+        }
+        for name, spec in registry.items():
+            self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")
+            self.assertEqual(spec.work_tree, expected_live[name])
+            self.assertNotIn("/worktrees/", spec.work_tree)
+        self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))
 
-    def test_dirty_summary_reports_modified_staged_and_untracked(self):
+    def test_dirty_summary_is_compact_and_deterministic(self):
         summary = RepositorySyncService._dirty_summary(
             " M tracked.txt\nM  staged.txt\n?? new.txt\n"
         )
@@ -117,19 +100,21 @@ class RepositoryRegistryTests(unittest.TestCase):
         self.assertEqual(summary["untracked"], 1)
 
 
-class RepositorySyncIntegrationTests(unittest.TestCase):
+class RepositoryProductionTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="agentos-repo-sync-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="repository-control-")
         root = Path(self.tmp.name)
         self.origin = root / "origin.git"
         self.seed = root / "seed"
-        self.prod = root / "prod"
         self.writer = root / "writer"
-        self.state = root / "state"
+        self.hermes_home = root / ".hermes"
+        self.git_dir = self.hermes_home / "repos" / "demo.git"
+        self.work_tree = self.hermes_home / "demo"
+        self.state = self.hermes_home / "state" / "repository-control"
 
         subprocess.run(["git", "init", "--bare", str(self.origin)], check=True, capture_output=True)
         subprocess.run(["git", "clone", str(self.origin), str(self.seed)], check=True, capture_output=True)
-        configure_identity(self.seed)
+        identity(self.seed)
         git(self.seed, "checkout", "-b", "main")
         (self.seed / "base.txt").write_text("base\n", encoding="utf-8")
         git(self.seed, "add", "base.txt")
@@ -137,287 +122,172 @@ class RepositorySyncIntegrationTests(unittest.TestCase):
         git(self.seed, "push", "-u", "origin", "main")
         subprocess.run(
             ["git", "--git-dir", str(self.origin), "symbolic-ref", "HEAD", "refs/heads/main"],
-            check=True,
-            capture_output=True,
+            check=True, capture_output=True,
         )
-
-        subprocess.run(["git", "clone", str(self.origin), str(self.prod)], check=True, capture_output=True)
         subprocess.run(["git", "clone", str(self.origin), str(self.writer)], check=True, capture_output=True)
-        configure_identity(self.prod)
-        configure_identity(self.writer)
+        identity(self.writer)
 
         self.spec = RepoSpec(
             name="demo",
             repo_full_name="example/demo",
             branch="main",
-            path_candidates=(str(self.prod),),
+            host="local-test",
+            transport="local",
+            ssh_target=None,
+            hermes_home=str(self.hermes_home),
+            git_dir=str(self.git_dir),
+            work_tree=str(self.work_tree),
+            origin_url=str(self.origin),
             private=True,
         )
         self.service = RepositorySyncService(
             {"demo": self.spec},
-            runner=RepositoryGitRunner(timeout=20),
+            runner=RepositoryGitRunner(timeout=30),
             store=OperationStore(self.state),
             github=OfflineGithub(),
-            timeout=20,
+            timeout=30,
         )
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def push_remote_file(self, name: str, content: str, message: str) -> str:
+    def push(self, filename: str, content: str, message: str) -> str:
         git(self.writer, "pull", "--ff-only", "origin", "main")
-        (self.writer / name).write_text(content, encoding="utf-8")
-        git(self.writer, "add", name)
+        (self.writer / filename).write_text(content, encoding="utf-8")
+        git(self.writer, "add", filename)
         git(self.writer, "commit", "-m", message)
         git(self.writer, "push", "origin", "main")
         return git(self.writer, "rev-parse", "HEAD")
 
-    def test_safe_sync_preserves_uncommitted_modified_and_untracked_files(self):
-        self.push_remote_file("remote.txt", "remote\n", "remote update")
-        (self.prod / "base.txt").write_text("base\nlocal work\n", encoding="utf-8")
-        (self.prod / "untracked.txt").write_text("untracked\n", encoding="utf-8")
-
-        result = self.service.sync("demo", trigger="cron", auto_commit=False)
+    def test_initialize_creates_one_common_dir_and_direct_live_source(self):
+        result = self.service.initialize_layout("demo")
         self.assertTrue(result["ok"], result)
-        self.assertEqual((self.prod / "base.txt").read_text(encoding="utf-8"), "base\nlocal work\n")
-        self.assertEqual((self.prod / "untracked.txt").read_text(encoding="utf-8"), "untracked\n")
-        self.assertTrue((self.prod / "remote.txt").exists())
-        status = self.service.status("demo", fetch=False, include_github=False)
-        self.assertTrue(status["working_tree"]["dirty"])
-        self.assertEqual(status["behind"], 0)
+        self.assertTrue(self.git_dir.is_dir())
+        self.assertTrue(self.work_tree.is_dir())
+        self.assertFalse((self.work_tree / ".git").exists())
+        self.assertEqual(self.service.runner.git_dir(self.spec), str(self.git_dir))
+        self.assertEqual(self.service.runner.git(self.spec, "branch", "--show-current").stdout, "main")
+        self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")
 
-    def test_diverged_local_commit_gets_recovery_branch_before_rebase(self):
-        (self.prod / "local.txt").write_text("local commit\n", encoding="utf-8")
-        git(self.prod, "add", "local.txt")
-        git(self.prod, "commit", "-m", "local only")
-        local_before = git(self.prod, "rev-parse", "HEAD")
-        remote_head = self.push_remote_file("remote.txt", "remote\n", "remote only")
-
-        result = self.service.sync("demo", trigger="cron", auto_commit=False)
+    def test_pull_fast_forwards_the_live_production_worktree(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        remote = self.push("remote.txt", "remote\n", "remote update")
+        result = self.service.pull_production("demo")
         self.assertTrue(result["ok"], result)
-        backup = result.get("backup_branch")
-        self.assertTrue(backup, result)
-        self.assertEqual(git(self.prod, "rev-parse", backup), local_before)
-        self.assertTrue((self.prod / "local.txt").exists())
-        self.assertTrue((self.prod / "remote.txt").exists())
-        status = self.service.status("demo", fetch=False, include_github=False)
-        self.assertEqual(status["behind"], 0)
-        self.assertEqual(status["ahead"], 0)
-        self.assertEqual(result["pushed_sha"], git(self.prod, "rev-parse", "HEAD"))
-        self.assertNotEqual(git(self.prod, "rev-parse", "HEAD"), remote_head)
-        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
+        self.assertEqual(result["production"]["after_sha"], remote)
+        self.assertEqual(self.service.runner.git(self.spec, "rev-parse", "HEAD").stdout, remote)
+        self.assertTrue((self.work_tree / "remote.txt").exists())
 
-    def test_auto_commit_pushes_restored_local_changes_after_safe_sync(self):
-        (self.prod / "base.txt").write_text("base\nlocal work\n", encoding="utf-8")
-
-        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
-
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(result["committed_sha"])
-        self.assertEqual(result["pushed_sha"], result["committed_sha"])
-        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
-
-    def test_dashboard_safe_sync_merges_initial_prs_including_drafts_then_pulls_local(self):
-        self.push_remote_file("merged-on-origin.txt", "remote\n", "remote merge result")
-        github = TimelineGithub(
-            [
-                {
-                    "number": 22,
-                    "created_at": "2026-08-16T11:00:00Z",
-                    "head_sha": "head-22",
-                    "draft": False,
-                },
-                {
-                    "number": 11,
-                    "created_at": "2026-08-16T10:00:00Z",
-                    "head_sha": "head-11",
-                    "node_id": "node-11",
-                    "draft": True,
-                },
-            ]
-        )
-        self.service.github = github
-
-        result = self.service.safe_sync("demo", trigger="dashboard", auto_commit=False)
-
-        self.assertTrue(result["ok"], result)
-        self.assertEqual([row["number"] for row in result["merged_pulls"]], [11, 22])
-        self.assertEqual(github.merge_calls, [(11, "head-11"), (22, "head-22")])
-        self.assertEqual(github.ready_calls, [(11, "node-11")])
-        self.assertGreaterEqual(github.open_calls, 3)
-        self.assertTrue(result["production_sync"]["ok"], result)
-        self.assertTrue((self.prod / "merged-on-origin.txt").exists())
-
-    def test_dashboard_safe_sync_stops_at_first_pr_merge_rejection_without_pulling_local(self):
-        self.push_remote_file("not-pulled.txt", "remote\n", "remote update")
-        github = TimelineGithub(
-            [
-                {
-                    "number": 11,
-                    "created_at": "2026-08-16T10:00:00Z",
-                    "head_sha": "head-11",
-                    "draft": False,
-                },
-                {
-                    "number": 22,
-                    "created_at": "2026-08-16T11:00:00Z",
-                    "head_sha": "head-22",
-                    "draft": False,
-                },
-                {
-                    "number": 33,
-                    "created_at": "2026-08-16T12:00:00Z",
-                    "head_sha": "head-33",
-                    "draft": False,
-                },
-            ],
-            reject_numbers={22},
-        )
-        self.service.github = github
-
-        result = self.service.safe_sync("demo", trigger="dashboard", auto_commit=False)
-
-        self.assertFalse(result["ok"], result)
-        self.assertEqual(result["error"]["code"], "github_merge_rejected")
-        self.assertEqual(result["error"]["details"]["pull_number"], 22)
-        self.assertEqual([row["number"] for row in result["merged_pulls"]], [11])
-        self.assertEqual(github.merge_calls, [(11, "head-11"), (22, "head-22")])
-        self.assertNotIn("production_sync", result)
-        self.assertFalse((self.prod / "not-pulled.txt").exists())
-
-    def test_status_does_not_query_upstream_drift(self):
-        status = self.service.status("demo", fetch=False, include_github=True)
-        self.assertIsNone(status["upstream_drift"])
-
-    def test_status_uses_remote_tracking_ref_when_a_local_origin_branch_exists(self):
-        remote_head = self.push_remote_file("remote.txt", "remote\n", "remote update")
-        git(self.prod, "branch", "origin/main", "HEAD")
-
-        status = self.service.status("demo", fetch=True, include_github=False)
-
-        self.assertEqual(status["remote_sha"], remote_head)
-        self.assertEqual(status["ahead"], 0)
-        self.assertEqual(status["behind"], 1)
-
-    def test_sync_skips_deployment_when_source_and_destination_are_the_same_tree(self):
-        same_tree_spec = RepoSpec(
-            name="demo",
-            repo_full_name="example/demo",
-            branch="main",
-            path_candidates=(str(self.prod),),
-            deployment_root=str(self.prod),
-            deployment_paths=("base.txt",),
-            private=True,
-        )
-        service = RepositorySyncService(
-            {"demo": same_tree_spec},
-            runner=RepositoryGitRunner(timeout=20),
-            store=OperationStore(self.state),
-            github=OfflineGithub(),
-            timeout=20,
-        )
-
-        result = service.sync("demo", trigger="dashboard", auto_commit=False)
-
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(result["deployment"]["skipped_same_worktree"])
-        self.assertEqual((self.prod / "base.txt").read_text(encoding="utf-8"), "base\n")
-
-    def test_upstream_sync_is_blocked_without_github_call(self):
-        result = self.service.sync_upstream("demo")
+    def test_pull_refuses_dirty_production_without_stash_or_commit(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        (self.work_tree / "base.txt").write_text("dirty\n", encoding="utf-8")
+        result = self.service.pull_production("demo")
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "upstream_disabled")
+        self.assertEqual(result["error"]["code"], "production_dirty")
+        self.assertEqual((self.work_tree / "base.txt").read_text(), "dirty\n")
+        self.assertEqual(self.service.runner.git(self.spec, "stash", "list").stdout, "")
 
-    def test_auto_commit_pushes_staged_and_untracked_local_changes(self):
-        (self.prod / "base.txt").write_text("base\nstaged work\n", encoding="utf-8")
-        git(self.prod, "add", "base.txt")
-        (self.prod / "current-model.json").write_text("local model\n", encoding="utf-8")
-
-        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
-
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["pushed_sha"], result["committed_sha"])
-        self.assertEqual((self.prod / "current-model.json").read_text(encoding="utf-8"), "local model\n")
-        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
-
-    def test_auto_commit_preserves_worktree_version_of_added_file(self):
-        added = self.prod / "current-model.json"
-        added.write_text("staged model\n", encoding="utf-8")
-        git(self.prod, "add", "current-model.json")
-        added.write_text("latest model\n", encoding="utf-8")
-
-        result = self.service.sync("demo", trigger="dashboard", auto_commit=True)
-
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(added.read_text(encoding="utf-8"), "latest model\n")
-        self.assertEqual(git(self.prod, "show", "HEAD:current-model.json"), "latest model")
-
-    def test_commit_local_pushes_to_origin(self):
-        (self.prod / "local.txt").write_text("local work\n", encoding="utf-8")
-
-        result = self.service.commit_local("demo", trigger="dashboard")
-
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(result["committed_sha"])
-        self.assertEqual(result["pushed_sha"], result["committed_sha"])
-        self.assertEqual(git(self.prod, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
-
-    def test_stash_restore_conflict_is_reported_without_clean_or_reset(self):
-        # Same tracked line changes remotely and locally: pull itself is clean after
-        # the stash, but restoring local M must conflict and the stash must remain.
-        (self.prod / "base.txt").write_text("local replacement\n", encoding="utf-8")
-        git(self.writer, "pull", "--ff-only", "origin", "main")
-        (self.writer / "base.txt").write_text("remote replacement\n", encoding="utf-8")
-        git(self.writer, "add", "base.txt")
-        git(self.writer, "commit", "-m", "remote conflicting update")
-        git(self.writer, "push", "origin", "main")
-
-        result = self.service.sync("demo", trigger="cron", auto_commit=False)
-        self.assertFalse(result["ok"], result)
-        self.assertEqual(result["error"]["code"], "stash_restore_conflict")
-        details = result["error"]["details"]
-        self.assertIn("base.txt", details["conflict_files"])
-        self.assertTrue(details.get("stash_sha"))
-        self.assertTrue(git(self.prod, "stash", "list"))
-        self.assertTrue(git(self.prod, "diff", "--name-only", "--diff-filter=U"))
-
-    def test_tracked_deployment_preserves_runtime_and_skips_fastcontext(self):
-        live = Path(self.tmp.name) / "live"
-        (self.prod / "skills" / "example").mkdir(parents=True)
-        (self.prod / "skills" / "example" / "SKILL.md").write_text("source\n", encoding="utf-8")
-        (self.prod / "skills" / "example" / ".fastcontext").mkdir()
-        (self.prod / "skills" / "example" / ".fastcontext" / "trace.json").write_text(
-            "ignored\n", encoding="utf-8"
+    def test_merge_and_pull_blocks_known_dirty_production_before_github_merge(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        (self.work_tree / "base.txt").write_text("dirty\n", encoding="utf-8")
+        github = MergeGithub()
+        self.service.github = github
+        result = self.service.merge_and_pull(
+            "demo", 7, expected_head_sha="abc1234"
         )
-        git(self.prod, "add", "skills")
-        git(self.prod, "commit", "-m", "add deployable source")
-        deployed = RepoSpec(
-            name="demo",
-            repo_full_name="example/demo",
-            branch="main",
-            path_candidates=(str(self.prod),),
-            deployment_root=str(live),
-            deployment_paths=("skills",),
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "production_dirty")
+        self.assertEqual(github.merge_calls, [])
+
+    def test_merge_and_pull_reports_partial_success_if_host_drifts_after_merge(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+
+        def dirty_after_merge():
+            (self.work_tree / "base.txt").write_text("dirty after merge\n", encoding="utf-8")
+
+        github = MergeGithub(callback=dirty_after_merge)
+        self.service.github = github
+        result = self.service.merge_and_pull(
+            "demo", 7, expected_head_sha="abc1234"
         )
-        service = RepositorySyncService(
-            {"demo": deployed},
-            runner=RepositoryGitRunner(timeout=20),
-            store=OperationStore(self.state),
-            github=OfflineGithub(),
-            timeout=20,
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["partial_success"])
+        self.assertEqual(result["completed_phase"], "github_merge")
+        self.assertEqual(result["error"]["code"], "production_dirty")
+        self.assertEqual(github.merge_calls, [(7, "abc1234")])
+
+    def test_legacy_sync_uses_production_pull_semantics(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        remote = self.push("remote.txt", "remote\n", "remote update")
+        result = self.service.sync("demo", auto_commit=True, commit_message="ignored")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["production"]["after_sha"], remote)
+        self.assertEqual(
+            self.service.runner.git(self.spec, "log", "-1", "--format=%s").stdout,
+            "remote update",
         )
 
-        result = service._deploy_work_tree(deployed)
 
-        self.assertEqual(result["copied"], 1)
-        self.assertEqual((live / "skills" / "example" / "SKILL.md").read_text(encoding="utf-8"), "source\n")
-        self.assertFalse((live / "skills" / "example" / ".fastcontext" / "trace.json").exists())
+class CodexStateTests(unittest.TestCase):
+    class Client(GitHubRestClient):
+        def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
+            del method, body, accept
+            if path.endswith("/reviews?per_page=100"):
+                return [{
+                    "user": {"login": "chatgpt-codex-connector"},
+                    "body": "**Reviewed commit:** `abcdef1234`",
+                    "commit_id": "abcdef1234",
+                    "submitted_at": "2026-08-20T00:00:00Z",
+                }]
+            if path.endswith("/comments?per_page=100"):
+                return []
+            raise AssertionError(path)
 
-    def test_automation_commands_share_one_entrypoint_and_trigger_labels(self):
-        commands = self.service.automation_commands()
-        self.assertIn("--all --sync --auto-commit --json --trigger cron", commands["cron"])
-        self.assertIn("--trigger hook", commands["hook_template"])
-        self.assertIn("--status --json --trigger manual", commands["status"])
+        def _review_threads(self, spec, number):
+            del spec, number
+            return [{
+                "id": "thread-1", "resolved": False,
+                "comments": [{"author": "chatgpt-codex-connector", "body": "Fix this"}],
+            }]
+
+    def test_current_codex_review_with_unresolved_thread_is_has_findings(self):
+        spec = RepoSpec(
+            name="demo", repo_full_name="example/demo", branch="main", host="local",
+            transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
+            git_dir="/tmp/.hermes/repos/demo.git",
+            work_tree="/tmp/.hermes/demo",
+            origin_url="git@example.invalid:example/demo.git",
+        )
+        state = self.Client()._codex_state(
+            spec, 3, "abcdef1234567890", "2026-08-20T00:00:00Z"
+        )
+        self.assertEqual(state["state"], "has_findings")
+        self.assertTrue(state["current_head"])
+        self.assertEqual(state["unresolved_threads"], 1)
+
+    class ReRequestedClient(Client):
+        def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
+            if path.endswith("/comments?per_page=100"):
+                return [{
+                    "body": "@codex review",
+                    "created_at": "2026-08-20T00:10:00Z",
+                }]
+            return super().request(method, path, body, accept=accept)
+
+    def test_new_request_after_stale_review_is_requested(self):
+        spec = RepoSpec(
+            name="demo", repo_full_name="example/demo", branch="main", host="local",
+            transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
+            git_dir="/tmp/.hermes/repos/demo.git",
+            work_tree="/tmp/.hermes/demo",
+            origin_url="git@example.invalid:example/demo.git",
+        )
+        state = self.ReRequestedClient()._codex_state(
+            spec, 3, "feedface12345678", "2026-08-20T00:10:00Z"
+        )
+        self.assertEqual(state["state"], "requested")
+        self.assertFalse(state["current_head"])
+
 
 
 if __name__ == "__main__":
