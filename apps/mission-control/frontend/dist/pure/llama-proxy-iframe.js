@@ -1,6 +1,6 @@
 // llama-proxy iframe lifecycle (pure logic, DOM via injected document).
 // Loaded directly so dashboard asset/API changes do not depend on AgentOS URL rewriting.
-export const LLaMA_PROXY_URL = 'http://192.168.1.140:8082/dashboard';
+export const LLaMA_PROXY_URL = 'http://100.100.127.43:8082/dashboard';
 export const LLaMA_PROXY_MODE = 'direct-iframe';
 
 export function createIframeManager(doc, probeResult) {

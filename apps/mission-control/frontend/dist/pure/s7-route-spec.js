@@ -115,7 +115,7 @@ export const S7_ROUTE_SPEC = Object.freeze([
   },
   {
     id: 'llama-proxy', group: 'SYSTEM', source: 'direct-iframe',
-    endpoints: ['http://192.168.1.140:8082/dashboard'],
+    endpoints: ['http://100.100.127.43:8082/dashboard'],
     proxy: 'direct-iframe', readOnly: true,
     capabilityNote: 'direct browser iframe to Llama Proxy',
   },

@@ -914,7 +914,7 @@ _FRESHNESS = ("live", "fresh", "stale", "unavailable", "unsupported", "partial")
 
 _EXTERNAL_DASHBOARD_TARGETS = {
     "llama-proxy": {
-        "base_url": "http://192.168.1.140:8082",
+        "base_url": "http://100.100.127.43:8082",
         "index_path": "/dashboard",
     },
     "9router": {
