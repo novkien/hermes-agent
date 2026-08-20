@@ -27,8 +27,10 @@ s = s.replace(
     "assert.doesNotMatch(registry, /production_worktree|worktrees\\/\\{repository\\}\\/production/);\nassert.match(registry, /hermes-skills:[\\s\\S]*work_tree: \\.\\n[\\s\\S]*paths:[\\s\\S]*- skills[\\s\\S]*- workspace\\/skills-pack/);\nassert.match(registry, /hermes-plugins:[\\s\\S]*work_tree: plugins/);\nassert.match(registry, /agents:[\\s\\S]*work_tree: profiles/);\nassert.match(registry, /llama-proxy:[\\s\\S]*host: jarvis-pi[\\s\\S]*work_tree: llama-proxy/);",
 )
 s = s.replace('assert.match(tab, /Initialize production layout/);', 'assert.match(tab, /Initialize repository layout/);')
-s = s.replace('assert.match(servicePy, /git merge --ff-only/);', 'assert.match(servicePy, /git merge --ff-only/);\nassert.match(servicePy, /--git-dir=/);\nassert.match(servicePy, /--work-tree=/);')
-s = s.replace('assert.doesNotMatch(servicePy, /path_candidates/);', 'assert.doesNotMatch(servicePy, /path_candidates/);\nassert.doesNotMatch(servicePy, /worktrees\\/<repo>|worktrees\\/\\{repository\\}\\/production/);')
+if 'assert.match(servicePy, /--git-dir=/);' not in s:
+    s = s.replace('assert.match(servicePy, /git merge --ff-only/);', 'assert.match(servicePy, /git merge --ff-only/);\nassert.match(servicePy, /--git-dir=/);\nassert.match(servicePy, /--work-tree=/);')
+if 'assert.doesNotMatch(servicePy, /worktrees\\/<repo>|worktrees\\/\\{repository\\}\\/production/);' not in s:
+    s = s.replace('assert.doesNotMatch(servicePy, /path_candidates/);', 'assert.doesNotMatch(servicePy, /path_candidates/);\nassert.doesNotMatch(servicePy, /worktrees\\/<repo>|worktrees\\/\\{repository\\}\\/production/);')
 p.write_text(s, encoding='utf-8')
 
 # Focused Python tests.

@@ -6,7 +6,9 @@ s = p.read_text(encoding='utf-8')
 
 def sub(pattern, repl, label):
     global s
-    s2, n = re.subn(pattern, repl, s, count=1, flags=re.S)
+    if label == 'initialize' and '    def _scope_args(self, spec: RepoSpec)' in s:
+        return
+    s2, n = re.subn(pattern, lambda _match: repl, s, count=1, flags=re.S)
     if n == 0:
         return
     if n != 1:
@@ -61,7 +63,7 @@ initialize = '''    def _scope_args(self, spec: RepoSpec) -> tuple[str, ...]:
         listed = self.runner.git(spec, "ls-files", "-z")
         if listed.returncode != 0:
             raise RepositorySyncError("scope_list_failed", listed.stderr or "could not list repository files")
-        files = [row for row in listed.stdout.split("\0") if row]
+        files = [row for row in listed.stdout.split("\\0") if row]
         if files:
             for start in range(0, len(files), 200):
                 chunk = files[start:start + 200]

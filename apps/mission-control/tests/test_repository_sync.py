@@ -80,9 +80,9 @@ class RepositoryRegistryTests(unittest.TestCase):
             "hermes-skills": "~/.hermes",
             "hermes-plugins": "~/.hermes/plugins",
             "agents": "~/.hermes/profiles",
-            "llama-proxy": "~/.hermes/llama-proxy",
-            "9router": "~/.hermes/9router",
-            "godot-mcp": "~/.hermes/godot-mcp",
+            "llama-proxy": "/home/pi/llama-proxy",
+            "9router": "/home/pi/9router",
+            "godot-mcp": "/home/novkien/godot-mcp",
         }
         for name, spec in registry.items():
             self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")

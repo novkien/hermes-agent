@@ -53,14 +53,14 @@ repositories:
     github: novkien/llama-proxy
     branch: master
     host: jarvis-pi
-    work_tree: ~/llama-proxy
+    work_tree: /home/pi/llama-proxy
     visibility: private
 
   9router:
     github: novkien/9router
     branch: master
     host: jarvis-pi
-    work_tree: ~/9router
+    work_tree: /home/pi/9router
     visibility: public
     upstream: decolua/9router
 
@@ -68,6 +68,6 @@ repositories:
     github: novkien/godot-mcp
     branch: main
     host: workstation
-    work_tree: ~/godot-mcp
+    work_tree: /home/novkien/godot-mcp
     visibility: public
     upstream: tugcantopaloglu/godot-mcp

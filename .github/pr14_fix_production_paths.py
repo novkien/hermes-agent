@@ -10,6 +10,9 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 service_path = Path("apps/mission-control/agent_mission_control/repository_sync.py")
 s = service_path.read_text(encoding="utf-8")
 
+if "canonical live source path consumed by Hermes" in s:
+    raise SystemExit(0)
+
 s = replace_once(
     s,
     "The registry is the single source of truth. Every managed repository uses one\nGit common directory and one live production worktree on its declared host:\n\n    <HERMES_HOME>/repos/<repo>.git\n    <HERMES_HOME>/worktrees/<repo>/production\n",

@@ -160,8 +160,10 @@ def _live_path(home: str, value: Any, *, repository: str) -> str:
     elif relative.startswith("$HOME/"):
         relative = relative[6:]
     path = PurePosixPath(relative)
-    if path.is_absolute() or ".." in path.parts:
+    if ".." in path.parts:
         raise RepositorySyncError("registry_invalid", f"unsafe work_tree for {repository}: {relative!r}")
+    if path.is_absolute():
+        return str(path)
     if not str(path):
         return home.rstrip("/")
     return f"{home.rstrip('/')}/{str(path).lstrip('/')}"

@@ -5,6 +5,10 @@ s = p.read_text(encoding='utf-8')
 
 def one(old, new, label):
     global s
+    if label == 'helpers' and 'def _live_path(' in s:
+        return
+    if new in s:
+        return
     count = s.count(old)
     if count == 0:
         return

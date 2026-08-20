@@ -50,7 +50,9 @@ assert.doesNotMatch(registry, /production_worktree|worktrees\/\{repository\}\/pr
 assert.match(registry, /hermes-skills:[\s\S]*work_tree: \.\n[\s\S]*paths:[\s\S]*- skills[\s\S]*- workspace\/skills-pack/);
 assert.match(registry, /hermes-plugins:[\s\S]*work_tree: plugins/);
 assert.match(registry, /agents:[\s\S]*work_tree: profiles/);
-assert.match(registry, /llama-proxy:[\s\S]*host: jarvis-pi[\s\S]*work_tree: llama-proxy/);
+assert.match(registry, /llama-proxy:[\s\S]*host: jarvis-pi[\s\S]*work_tree: \/home\/pi\/llama-proxy/);
+assert.match(registry, /9router:[\s\S]*host: jarvis-pi[\s\S]*work_tree: \/home\/pi\/9router/);
+assert.match(registry, /godot-mcp:[\s\S]*host: workstation[\s\S]*work_tree: \/home\/novkien\/godot-mcp/);
 
 assert.match(tab, /Review with Codex/);
 assert.match(tab, /Merge & Pull/);
