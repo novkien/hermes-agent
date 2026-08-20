@@ -8,7 +8,7 @@ export const LABEL = '9router';
 export const GROUP = 'SYSTEM';
 export const READ_ONLY_NOTE = 'direct iframe to 9router';
 
-export const ROUTE_ENDPOINTS = Object.freeze(['http://192.168.1.140:20128/dashboard']);
+export const ROUTE_ENDPOINTS = Object.freeze(['http://100.100.127.43:20128/dashboard']);
 export const MODE = 'direct-iframe';
 
 export function diagnosticsStrip() {

@@ -908,7 +908,7 @@ class SourceWorkers:
         healthy = False
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("192.168.1.140", port), timeout=2.0
+                asyncio.open_connection("100.100.127.43", port), timeout=2.0
             )
             del reader
             healthy = True

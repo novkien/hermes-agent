@@ -918,7 +918,7 @@ _EXTERNAL_DASHBOARD_TARGETS = {
         "index_path": "/dashboard",
     },
     "9router": {
-        "base_url": "http://192.168.1.140:20128",
+        "base_url": "http://100.100.127.43:20128",
         "index_path": "/dashboard",
     },
 }

@@ -121,7 +121,7 @@ export const S7_ROUTE_SPEC = Object.freeze([
   },
   {
     id: '9router', group: 'SYSTEM', source: 'direct-iframe',
-    endpoints: ['http://192.168.1.140:20128/dashboard'],
+    endpoints: ['http://100.100.127.43:20128/dashboard'],
     proxy: 'direct-iframe', readOnly: true,
     capabilityNote: 'direct browser iframe to 9router',
   },
