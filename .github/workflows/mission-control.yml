@@ -39,21 +39,38 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
+      - name: Set up Node.js 26
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+
       - name: Install dependencies
         run: uv sync --locked --python 3.11 --extra all --extra dev
 
-      - name: Run Mission Control contract suites
+      - name: Install frontend contract dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run all Mission Control Python tests
         working-directory: apps/mission-control
         env:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
         run: |
-          uv run --project "$GITHUB_WORKSPACE" --no-sync python tests/test_runtime_contracts.py
-          uv run --project "$GITHUB_WORKSPACE" --no-sync python tests/test_static_repair_surface.py
-          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/frontend_contracts.mjs
-          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/skills_surface.mjs
-          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/repository_surface.mjs
+          set -euo pipefail
+          for test_file in tests/test_*.py; do
+            echo "Running $test_file"
+            uv run --project "$GITHUB_WORKSPACE" --no-sync python "$test_file"
+          done
+
+      - name: Run all Mission Control Node tests
+        working-directory: apps/mission-control
+        run: |
+          set -euo pipefail
+          for test_file in tests/*.mjs; do
+            echo "Running $test_file"
+            node "$test_file"
+          done
 
       - name: Compile backend
         working-directory: apps/mission-control
