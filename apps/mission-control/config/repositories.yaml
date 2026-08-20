@@ -1,0 +1,58 @@
+version: 1
+
+layout:
+  git_dir: repos/{repository}.git
+  production_worktree: worktrees/{repository}/production
+
+hosts:
+  jarvis:
+    transport: local
+    hermes_home: ~/.hermes
+  jarvis-pi:
+    transport: ssh
+    ssh_target: jarvis-pi
+    hermes_home: ~/.hermes
+  workstation:
+    transport: ssh
+    ssh_target: workstation
+    hermes_home: ~/.hermes
+
+repositories:
+  hermes-agent:
+    github: novkien/hermes-agent
+    branch: master
+    host: jarvis
+    visibility: public
+    upstream: NousResearch/hermes-agent
+  hermes-skills:
+    github: novkien/hermes-skills
+    branch: master
+    host: jarvis
+    visibility: private
+  hermes-plugins:
+    github: novkien/hermes-plugins
+    branch: master
+    host: jarvis
+    visibility: private
+  agents:
+    github: novkien/agents
+    branch: master
+    host: jarvis
+    visibility: private
+  llama-proxy:
+    github: novkien/llama-proxy
+    branch: master
+    host: jarvis-pi
+    visibility: private
+  9router:
+    github: novkien/9router
+    branch: master
+    host: jarvis-pi
+    visibility: public
+    upstream: decolua/9router
+  godot-mcp:
+    github: novkien/godot-mcp
+    branch: main
+    host: workstation
+    visibility: public
+    upstream: tugcantopaloglu/godot-mcp

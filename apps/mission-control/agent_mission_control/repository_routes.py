@@ -1,9 +1,8 @@
-"""Bounded AgentOS repository monitoring and synchronization routes."""
+"""Owner-only repository registry, PR review, merge, and production-pull routes."""
 
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from fastapi import APIRouter, Request, Response
@@ -14,7 +13,9 @@ from .repository_sync import RepositorySyncError, RepositorySyncService
 from .security import build_request_summary
 
 
-def _json_error(status: int, code: str, message: str, request_id: str, *, details: Any = None) -> JSONResponse:
+def _json_error(
+    status: int, code: str, message: str, request_id: str, *, details: Any = None
+) -> JSONResponse:
     payload: dict[str, Any] = {
         "error": {"message": message, "code": code},
         "request_id": request_id,
@@ -32,34 +33,38 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _clean_message(value: Any, *, default: str | None = None) -> str | None:
+async def _body(request: Request) -> dict[str, Any]:
+    try:
+        value = await request.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(value, dict):
+        raise RepositorySyncError("invalid_body", "JSON object required")
+    return value
+
+
+def _head_sha(body: dict[str, Any]) -> str | None:
+    value = body.get("expected_head_sha")
     if value is None:
-        return default
+        return None
     text = str(value).strip()
-    if not text:
-        return default
-    if len(text) > 240:
-        raise ValueError("commit message must be 240 characters or fewer")
-    if "\n" in text or "\r" in text:
-        raise ValueError("commit message must be one line")
+    if not 7 <= len(text) <= 64 or any(ch not in "0123456789abcdefABCDEF" for ch in text):
+        raise RepositorySyncError("invalid_body", "invalid expected_head_sha")
     return text
 
 
 def build_repository_router(core: Any) -> APIRouter:
-    """Build the six-repository control surface ahead of the generic catch-all."""
+    """Compose the registry-driven owner repository control plane."""
 
     router = APIRouter()
     service = RepositorySyncService(runner=RepositoryGitRunner())
-    # The HTTP routes and the server-side live worker must observe the same
-    # registry/store instance. Attaching it to the composition root avoids a
-    # second repository scanner and keeps browser polling out of the SPA.
     core.repository_service = service
 
     def envelope(data: Any, request: Request, *, read_only: bool) -> JSONResponse:
         return JSONResponse(
-            core._envelope(  # noqa: SLF001 - package composition boundary
+            core._envelope(  # noqa: SLF001
                 data,
-                source_id="repository-sync",
+                source_id="repository-control",
                 profile_id=core._request_profile(request),  # noqa: SLF001
                 freshness="live",
                 request_id=request.state.request_id,
@@ -67,7 +72,14 @@ def build_repository_router(core: Any) -> APIRouter:
                 mutations_supported=(
                     []
                     if read_only
-                    else ["sync", "commit", "rebase_merge_pr"]
+                    else [
+                        "initialize_layout",
+                        "pull_production",
+                        "codex_review",
+                        "mark_ready",
+                        "mark_draft",
+                        "merge_and_pull",
+                    ]
                 ),
             )
         )
@@ -112,27 +124,34 @@ def build_repository_router(core: Any) -> APIRouter:
             )
 
         ok = bool(result.get("ok"))
+        partial = bool(result.get("partial_success"))
         error = result.get("error") if isinstance(result, dict) else None
         code = str((error or {}).get("code") or "operation_failed")
         core._record_audit_result(  # noqa: SLF001
-            rid, 200 if ok else 409, "ok" if ok else f"error:{code}"
+            rid,
+            200 if (ok or partial) else 409,
+            "ok" if ok else ("partial_success" if partial else f"error:{code}"),
         )
         await core.event_bus.safe_publish(
             "repository.changed",
-            "repository-sync",
+            "repository-control",
             target,
             str(result.get("repo") or target),
             {
                 "action": action,
                 "ok": ok,
-                "trigger": result.get("trigger") or "dashboard",
+                "partial_success": partial,
                 "error_code": None if ok else code,
             },
         )
-        # Repository conflicts are operational results, not transport failures. A
-        # 200 envelope lets the SPA display the full recovery payload (stash SHA,
-        # backup branch and conflicting files) instead of collapsing it to a toast.
+        # Operational errors and partial success need the full phase receipt in
+        # the browser, so they remain a successful HTTP envelope.
         return envelope(result, request, read_only=False)
+
+    def known(repo: str, rid: str) -> JSONResponse | None:
+        if repo in service.registry:
+            return None
+        return _json_error(404, "repo_unknown", "unknown repository", rid)
 
     @router.get("/api/repositories")
     async def repositories(request: Request) -> Response:
@@ -144,8 +163,12 @@ def build_repository_router(core: Any) -> APIRouter:
         return envelope(
             {
                 "repositories": rows,
+                "registry": {
+                    "count": len(service.registry),
+                    "names": list(service.registry),
+                },
                 "automation": service.automation_commands(),
-                "recent_operations": service.store.recent(limit=30),
+                "recent_operations": service.store.recent(limit=50),
             },
             request,
             read_only=True,
@@ -153,8 +176,9 @@ def build_repository_router(core: Any) -> APIRouter:
 
     @router.get("/api/repositories/{repo}")
     async def repository_detail(request: Request, repo: str) -> Response:
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", request.state.request_id)
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         refresh = _bool(request.query_params.get("refresh"), True)
         status = await asyncio.to_thread(
             service.status, repo, fetch=refresh, include_github=True
@@ -162,7 +186,7 @@ def build_repository_router(core: Any) -> APIRouter:
         return envelope(
             {
                 "repository": status,
-                "operations": service.store.recent(repo, 50),
+                "operations": service.store.recent(repo, 100),
                 "automation": service.automation_commands(),
             },
             request,
@@ -171,162 +195,156 @@ def build_repository_router(core: Any) -> APIRouter:
 
     @router.get("/api/repositories/{repo}/operations")
     async def repository_operations(request: Request, repo: str) -> Response:
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", request.state.request_id)
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         try:
-            limit = max(1, min(int(request.query_params.get("limit", "50")), 200))
+            limit = max(1, min(int(request.query_params.get("limit", "100")), 200))
         except ValueError:
             return _json_error(400, "invalid_query", "limit must be an integer", request.state.request_id)
-        return envelope(
-            {"operations": service.store.recent(repo, limit)}, request, read_only=True
-        )
+        return envelope({"operations": service.store.recent(repo, limit)}, request, read_only=True)
 
-    @router.post("/api/repositories/sync-all")
-    async def sync_all(request: Request) -> Response:
-        rid = request.state.request_id
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-        if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "JSON object required", rid)
-        auto_commit = _bool(body.get("auto_commit"), True)
-        try:
-            message = _clean_message(body.get("commit_message"))
-        except ValueError as exc:
-            return _json_error(400, "invalid_body", str(exc), rid)
-
-        def run() -> dict[str, Any]:
-            def _run_sync(name: str) -> dict[str, Any]:
-                try:
-                    return service.sync(
-                        name,
-                        auto_commit=auto_commit,
-                        commit_message=message,
-                        trigger="dashboard",
-                    )
-                except Exception as exc:  # noqa: BLE001 - sync failures should be per-repo and reported together
-                    return {
-                        "repo": name,
-                        "action": "sync",
-                        "trigger": "dashboard",
-                        "ok": False,
-                        "error": {
-                            "code": "sync_failed",
-                            "message": f"{type(exc).__name__}: {exc}",
-                        },
-                    }
-
-            names = list(service.registry)
-            max_workers = max(1, min(len(names), 6))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(_run_sync, names))
-            return {
-                "repo": "all",
-                "action": "sync_all",
-                "trigger": "dashboard",
-                "ok": all(bool(item.get("ok")) for item in results),
-                "results": results,
-            }
-
+    @router.post("/api/repositories/{repo}/initialize")
+    async def initialize_repository(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         return await run_mutation(
             request,
-            action="repository.sync_all",
-            target="/api/repositories/sync-all",
-            call=run,
+            action="repository.initialize_layout",
+            target=f"/api/repositories/{repo}/initialize",
+            call=lambda: service.initialize_layout(repo, trigger="dashboard"),
         )
 
+    @router.post("/api/repositories/{repo}/pull")
+    async def pull_repository(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.pull_production",
+            target=f"/api/repositories/{repo}/pull",
+            call=lambda: service.pull_production(repo, trigger="dashboard"),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/codex-review")
+    async def codex_review(request: Request, repo: str, number: int) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        try:
+            body = await _body(request)
+            expected = _head_sha(body)
+        except RepositorySyncError as exc:
+            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
+        return await run_mutation(
+            request,
+            action="repository.codex_review",
+            target=f"/api/repositories/{repo}/pulls/{number}/codex-review",
+            call=lambda: service.request_codex_review(
+                repo, number, expected_head_sha=expected, trigger="dashboard"
+            ),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/ready")
+    async def mark_ready(request: Request, repo: str, number: int) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.mark_ready",
+            target=f"/api/repositories/{repo}/pulls/{number}/ready",
+            call=lambda: service.change_draft_state(repo, number, ready=True),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/draft")
+    async def mark_draft(request: Request, repo: str, number: int) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.mark_draft",
+            target=f"/api/repositories/{repo}/pulls/{number}/draft",
+            call=lambda: service.change_draft_state(repo, number, ready=False),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/merge-and-pull")
+    async def merge_and_pull(request: Request, repo: str, number: int) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        try:
+            body = await _body(request)
+            expected = _head_sha(body)
+        except RepositorySyncError as exc:
+            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
+        return await run_mutation(
+            request,
+            action="repository.merge_and_pull",
+            target=f"/api/repositories/{repo}/pulls/{number}/merge-and-pull",
+            call=lambda: service.merge_and_pull(
+                repo, number, expected_head_sha=expected, trigger="dashboard"
+            ),
+        )
+
+    # Backward-compatible routes. They use the new production-only semantics;
+    # there is no automatic commit, stash, rebase, push, or deployment copy.
     @router.post("/api/repositories/{repo}/sync")
-    async def sync_repository(request: Request, repo: str) -> Response:
-        rid = request.state.request_id
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", rid)
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-        if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "JSON object required", rid)
-        try:
-            message = _clean_message(body.get("commit_message"))
-        except ValueError as exc:
-            return _json_error(400, "invalid_body", str(exc), rid)
-        auto_commit = _bool(body.get("auto_commit"), True)
+    async def legacy_sync(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         return await run_mutation(
             request,
-            action="repository.sync",
+            action="repository.pull_production",
             target=f"/api/repositories/{repo}/sync",
-            call=lambda: service.safe_sync(
-                repo,
-                auto_commit=auto_commit,
-                commit_message=message,
-                trigger="dashboard",
+            call=lambda: service.pull_production(repo, trigger="dashboard:legacy-sync"),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/rebase-merge")
+    async def legacy_merge(request: Request, repo: str, number: int) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        try:
+            body = await _body(request)
+            expected = _head_sha(body)
+        except RepositorySyncError as exc:
+            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
+        return await run_mutation(
+            request,
+            action="repository.merge_and_pull",
+            target=f"/api/repositories/{repo}/pulls/{number}/rebase-merge",
+            call=lambda: service.merge_and_pull(
+                repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
             ),
         )
 
     @router.post("/api/repositories/{repo}/commit")
-    async def commit_repository(request: Request, repo: str) -> Response:
-        rid = request.state.request_id
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", rid)
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-        if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "JSON object required", rid)
-        try:
-            message = _clean_message(body.get("message"))
-        except ValueError as exc:
-            return _json_error(400, "invalid_body", str(exc), rid)
+    async def retired_commit(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         return await run_mutation(
             request,
-            action="repository.commit",
+            action="repository.commit_retired",
             target=f"/api/repositories/{repo}/commit",
-            call=lambda: service.commit_local(repo, message=message, trigger="dashboard"),
+            call=lambda: service.commit_local(repo),
         )
 
     @router.post("/api/repositories/{repo}/upstream-sync")
-    async def upstream_sync(request: Request, repo: str) -> Response:
-        rid = request.state.request_id
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", rid)
-        return _json_error(
-            409,
-            "upstream_disabled",
-            "upstream synchronization is disabled; only the configured fork origin may be pulled or pushed",
-            rid,
-        )
-
-    @router.post("/api/repositories/{repo}/pulls/{number}/rebase-merge")
-    async def rebase_merge_pull(request: Request, repo: str, number: int) -> Response:
-        rid = request.state.request_id
-        if repo not in service.registry:
-            return _json_error(404, "repo_unknown", "unknown repository", rid)
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-        if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "JSON object required", rid)
-        head_sha = body.get("expected_head_sha")
-        if head_sha is not None:
-            head_sha = str(head_sha).strip()
-            if len(head_sha) < 7 or len(head_sha) > 64:
-                return _json_error(400, "invalid_body", "invalid expected_head_sha", rid)
-        auto_commit = _bool(body.get("auto_commit"), True)
+    async def retired_upstream(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
         return await run_mutation(
             request,
-            action="repository.rebase_merge_pr",
-            target=f"/api/repositories/{repo}/pulls/{int(number)}/rebase-merge",
-            call=lambda: service.merge_pull_request_rebase(
-                repo,
-                int(number),
-                expected_head_sha=head_sha,
-                trigger="dashboard",
-                pull_after=True,
-                auto_commit=auto_commit,
-            ),
+            action="repository.upstream_retired",
+            target=f"/api/repositories/{repo}/upstream-sync",
+            call=lambda: service.sync_upstream(repo),
         )
 
     return router
