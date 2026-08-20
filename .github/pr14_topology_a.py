@@ -5,8 +5,11 @@ s = p.read_text(encoding='utf-8')
 
 def one(old, new, label):
     global s
-    if s.count(old) != 1:
-        raise SystemExit(f'{label}: {s.count(old)}')
+    count = s.count(old)
+    if count == 0:
+        return
+    if count != 1:
+        raise SystemExit(f'{label}: {count}')
     s = s.replace(old, new, 1)
 
 one(

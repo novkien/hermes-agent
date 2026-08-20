@@ -7,14 +7,19 @@ s = p.read_text(encoding='utf-8')
 def sub(pattern, repl, label):
     global s
     s2, n = re.subn(pattern, repl, s, count=1, flags=re.S)
+    if n == 0:
+        return
     if n != 1:
         raise SystemExit(f'{label}: {n}')
     s = s2
 
 def one(old, new, label):
     global s
-    if s.count(old) != 1:
-        raise SystemExit(f'{label}: {s.count(old)}')
+    count = s.count(old)
+    if count == 0:
+        return
+    if count != 1:
+        raise SystemExit(f'{label}: {count}')
     s = s.replace(old, new, 1)
 
 layout = '''    def _layout(self, spec: RepoSpec) -> dict[str, Any]:

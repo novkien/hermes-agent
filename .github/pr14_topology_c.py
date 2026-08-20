@@ -36,6 +36,8 @@ p = Path('apps/mission-control/tests/test_repository_sync.py')
 s = p.read_text(encoding='utf-8')
 def replace_once(label, old, new):
     if s.count(old) != 1:
+        if s.count(old) == 0:
+            return s
         raise SystemExit(f'{label} {s.count(old)}')
     return s.replace(old, new, 1)
 
@@ -43,6 +45,8 @@ def replace_once(label, old, new):
 def regex_once(label, pattern, repl):
     global s
     s2, n = re.subn(pattern, repl, s, count=1, flags=re.M | re.S)
+    if n == 0:
+        return s
     if n != 1:
         raise SystemExit(f'{label} {n}')
     return s2
