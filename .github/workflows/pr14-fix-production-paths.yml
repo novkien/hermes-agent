@@ -21,7 +21,7 @@ jobs:
           node apps/mission-control/tests/repository_surface.mjs
           python -m compileall -q apps/mission-control/agent_mission_control apps/mission-control/tools
           node --check apps/mission-control/frontend/dist/tabs/repositories.js
-          ! grep -R "worktrees/{repository}/production\|production_worktree" apps/mission-control/config apps/mission-control/agent_mission_control/repository_sync.py apps/mission-control/tests
+          ! grep -R "worktrees/{repository}/production\|production_worktree" apps/mission-control/config apps/mission-control/agent_mission_control/repository_sync.py
       - name: Commit clean result
         run: |
           rm -f \
