@@ -1,15 +1,16 @@
 """Owner-only repository control for AgentOS Mission Control.
 
-The registry is the single source of truth. Every managed repository uses one
-Git common directory and one live production worktree on its declared host:
+The registry is the single source of truth. Every managed repository keeps Git
+metadata in one common directory on its own host and operates directly on the
+canonical live source path consumed by Hermes or the service:
 
     <HERMES_HOME>/repos/<repo>.git
-    <HERMES_HOME>/worktrees/<repo>/production
+    <HERMES_HOME>/<repo-specific-live-path>
 
-There is no staging checkout, deployment copy, automatic stash, automatic
-commit, production push, or implicit PR batch merge. A pull request merge is a
-single owner-selected rebase merge followed by a clean fast-forward of that
-repository's production worktree.
+There is no staging checkout, generic production-worktree layer, deployment
+copy, automatic stash, automatic commit, production push, or implicit PR batch
+merge. A pull request merge is a single owner-selected rebase merge followed by
+a clean fast-forward of the canonical live source tree.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ class RepoSpec:
     git_dir: str
     work_tree: str
     origin_url: str
+    scope_paths: tuple[str, ...] = ()
     upstream_repo: str | None = None
     private: bool = True
 
@@ -145,6 +147,41 @@ def _join_home(home: str, template: str, repository: str) -> str:
     return f"{home.rstrip('/')}/{relative}"
 
 
+def _live_path(home: str, value: Any, *, repository: str) -> str:
+    relative = str(value or "").strip()
+    if not relative:
+        raise RepositorySyncError("registry_invalid", f"repository {repository} has no work_tree")
+    if relative in {".", "./"}:
+        return home.rstrip("/")
+    if relative == "~":
+        relative = ""
+    elif relative.startswith("~/"):
+        relative = relative[2:]
+    elif relative.startswith("$HOME/"):
+        relative = relative[6:]
+    path = PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise RepositorySyncError("registry_invalid", f"unsafe work_tree for {repository}: {relative!r}")
+    if not str(path):
+        return home.rstrip("/")
+    return f"{home.rstrip('/')}/{str(path).lstrip('/')}"
+
+
+def _scope_paths(value: Any, *, repository: str) -> tuple[str, ...]:
+    if value in (None, []):
+        return ()
+    if not isinstance(value, list):
+        raise RepositorySyncError("registry_invalid", f"repository {repository} paths must be a list")
+    rows: list[str] = []
+    for raw in value:
+        item = str(raw or "").strip().strip("/")
+        path = PurePosixPath(item)
+        if not item or path.is_absolute() or ".." in path.parts or item == ".":
+            raise RepositorySyncError("registry_invalid", f"unsafe scoped path for {repository}: {raw!r}")
+        rows.append(str(path))
+    return tuple(dict.fromkeys(rows))
+
+
 def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSpec]:
     source = Path(path).expanduser() if path is not None else _registry_path()
     payload = _load_yaml(source)
@@ -160,9 +197,6 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
         )
 
     git_template = str(layout.get("git_dir") or "repos/{repository}.git")
-    worktree_template = str(
-        layout.get("production_worktree") or "worktrees/{repository}/production"
-    )
     hosts: dict[str, HostSpec] = {}
     for raw_name, raw_spec in hosts_raw.items():
         name = _clean_name(raw_name, field="host name")
@@ -193,6 +227,8 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
             raise RepositorySyncError("registry_invalid", f"unknown host {host_name!r} for {name}")
         host = hosts[host_name]
         visibility = str(raw_spec.get("visibility") or "private").strip().lower()
+        work_tree = _live_path(host.hermes_home, raw_spec.get("work_tree"), repository=name)
+        scope_paths = _scope_paths(raw_spec.get("paths"), repository=name)
         upstream = str(raw_spec.get("upstream") or "").strip() or None
         if upstream:
             upstream = _clean_repo(upstream)
@@ -210,8 +246,9 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
             ssh_target=host.ssh_target,
             hermes_home=host.hermes_home,
             git_dir=_join_home(host.hermes_home, git_template, name),
-            work_tree=_join_home(host.hermes_home, worktree_template, name),
+            work_tree=work_tree,
             origin_url=origin_url,
+            scope_paths=scope_paths,
             upstream_repo=upstream,
             private=visibility != "public",
         )
@@ -734,7 +771,14 @@ class GitRunner:
             raise RepositorySyncError("mkdir_failed", result.stderr or "mkdir failed")
 
     def git(self, spec: RepoSpec, *args: str, timeout: int | None = None) -> CommandResult:
-        return self.host(spec, "git", "-C", self.work_tree(spec), *args, timeout=timeout)
+        return self.host(
+            spec,
+            "git",
+            f"--git-dir={self.git_dir(spec)}",
+            f"--work-tree={self.work_tree(spec)}",
+            *args,
+            timeout=timeout,
+        )
 
     def git_common(self, spec: RepoSpec, *args: str, timeout: int | None = None) -> CommandResult:
         return self.host(spec, "git", f"--git-dir={self.git_dir(spec)}", *args, timeout=timeout)
@@ -800,17 +844,18 @@ class RepositorySyncService:
         work_tree = self.runner.work_tree(spec)
         git_exists = self.runner.exists(spec, git_dir, directory=True)
         work_exists = self.runner.exists(spec, work_tree, directory=True)
-        linked = False
-        if work_exists:
-            check = self.runner.git(spec, "rev-parse", "--is-inside-work-tree")
-            linked = check.returncode == 0 and check.stdout == "true"
+        bound = False
+        if git_exists and work_exists:
+            check = self.runner.git(spec, "rev-parse", "--verify", "HEAD")
+            bound = check.returncode == 0 and bool(check.stdout)
         return {
-            "ready": bool(git_exists and work_exists and linked),
+            "ready": bool(git_exists and work_exists and bound),
             "git_dir": git_dir,
             "work_tree": work_tree,
             "git_dir_exists": git_exists,
             "work_tree_exists": work_exists,
-            "linked_worktree": linked,
+            "bound_source": bound,
+            "scope_paths": list(spec.scope_paths),
         }
 
     def _event_base(self, spec: RepoSpec, action: str, trigger: str) -> dict[str, Any]:
@@ -830,6 +875,42 @@ class RepositorySyncService:
         self.store.append(event)
         return event
 
+    def _scope_args(self, spec: RepoSpec) -> tuple[str, ...]:
+        return ("--", *spec.scope_paths) if spec.scope_paths else ()
+
+    def _tracked_status(self, spec: RepoSpec) -> str:
+        return self._run_ok(spec, "status", "--porcelain=v1", "-uno", *self._scope_args(spec))
+
+    def _conflict_files(self, spec: RepoSpec) -> list[str]:
+        result = self.runner.git(spec, "diff", "--name-only", "--diff-filter=U", *self._scope_args(spec))
+        if result.returncode != 0:
+            return []
+        return [row for row in result.stdout.splitlines() if row.strip()]
+
+    def _apply_scope(self, spec: RepoSpec) -> None:
+        if not spec.scope_paths:
+            return
+        listed = self.runner.git(spec, "ls-files", "-z")
+        if listed.returncode != 0:
+            raise RepositorySyncError("scope_list_failed", listed.stderr or "could not list repository files")
+        files = [row for row in listed.stdout.split("\0") if row]
+        if files:
+            for start in range(0, len(files), 200):
+                chunk = files[start:start + 200]
+                reset = self.runner.git(spec, "update-index", "--no-skip-worktree", "--", *chunk)
+                if reset.returncode != 0:
+                    raise RepositorySyncError("scope_index_failed", reset.stderr or "could not reset scope bits")
+        prefixes = tuple(path.rstrip("/") + "/" for path in spec.scope_paths)
+        outside = [
+            row for row in files
+            if row not in spec.scope_paths and not any(row.startswith(prefix) for prefix in prefixes)
+        ]
+        for start in range(0, len(outside), 200):
+            chunk = outside[start:start + 200]
+            marked = self.runner.git(spec, "update-index", "--skip-worktree", "--", *chunk)
+            if marked.returncode != 0:
+                raise RepositorySyncError("scope_index_failed", marked.stderr or "could not apply source scope")
+
     def initialize_layout(
         self, name: str, *, trigger: str = "dashboard", wait_seconds: float = 0.0
     ) -> dict[str, Any]:
@@ -840,20 +921,19 @@ class RepositorySyncService:
                 layout = self._layout(spec)
                 if layout["ready"]:
                     return self._finish_event(event, ok=True, status="noop", layout=layout)
-                if layout["work_tree_exists"] and not layout["linked_worktree"]:
-                    raise RepositorySyncError(
-                        "worktree_path_occupied",
-                        "canonical production worktree exists but is not the registered Git worktree",
-                        details=layout,
-                    )
+                work_existed = layout["work_tree_exists"]
                 self.runner.mkdir(spec, str(Path(layout["git_dir"]).parent))
-                self.runner.mkdir(spec, str(Path(layout["work_tree"]).parent))
+                self.runner.mkdir(spec, layout["work_tree"])
                 if not layout["git_dir_exists"]:
                     init = self.runner.host(spec, "git", "init", "--bare", layout["git_dir"])
                     if init.returncode != 0:
-                        raise RepositorySyncError(
-                            "git_init_failed", init.stderr or init.stdout or "git init --bare failed"
-                        )
+                        raise RepositorySyncError("git_init_failed", init.stderr or init.stdout or "git init --bare failed")
+
+                for key, value in (("core.bare", "false"), ("core.worktree", layout["work_tree"])):
+                    cfg = self.runner.git_common(spec, "config", key, value)
+                    if cfg.returncode != 0:
+                        raise RepositorySyncError("git_config_failed", cfg.stderr or f"failed to set {key}")
+
                 remote = self.runner.git_common(spec, "remote", "get-url", "origin")
                 if remote.returncode != 0:
                     add = self.runner.git_common(spec, "remote", "add", "origin", spec.origin_url)
@@ -861,56 +941,48 @@ class RepositorySyncService:
                         raise RepositorySyncError("remote_add_failed", add.stderr or "remote add failed")
                 elif remote.stdout.strip() != spec.origin_url:
                     raise RepositorySyncError(
-                        "origin_mismatch", "canonical Git common directory has an unexpected origin",
+                        "origin_mismatch", "canonical Git directory has an unexpected origin",
                         details={"expected": spec.origin_url, "actual": remote.stdout.strip()},
                     )
                 configured = self.runner.git_common(
                     spec, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"
                 )
                 if configured.returncode != 0:
-                    raise RepositorySyncError(
-                        "remote_config_failed",
-                        configured.stderr or configured.stdout or "remote fetch configuration failed",
-                    )
+                    raise RepositorySyncError("remote_config_failed", configured.stderr or "remote fetch configuration failed")
                 fetched = self.runner.git_common(spec, "fetch", "--prune", "origin", spec.branch)
                 if fetched.returncode != 0:
                     raise RepositorySyncError("fetch_failed", fetched.stderr or fetched.stdout or "fetch failed")
-                if not layout["work_tree_exists"]:
-                    local_branch = self.runner.git_common(
-                        spec, "rev-parse", "--verify", f"refs/heads/{spec.branch}"
+
+                remote_ref = self._origin_ref(spec)
+                remote_sha = self.runner.git_common(spec, "rev-parse", "--verify", remote_ref)
+                if remote_sha.returncode != 0:
+                    raise RepositorySyncError("remote_branch_missing", remote_sha.stderr or "remote branch missing")
+                local = self.runner.git_common(spec, "rev-parse", "--verify", f"refs/heads/{spec.branch}")
+                if local.returncode == 0 and local.stdout != remote_sha.stdout:
+                    raise RepositorySyncError(
+                        "production_branch_diverged", "canonical Git directory contains a different branch tip",
+                        details={"branch": spec.branch, "local_sha": local.stdout, "remote_sha": remote_sha.stdout},
                     )
-                    if local_branch.returncode == 0:
-                        remote_branch = self.runner.git_common(
-                            spec, "rev-parse", "--verify", self._origin_ref(spec)
-                        )
-                        if remote_branch.returncode != 0 or local_branch.stdout != remote_branch.stdout:
-                            raise RepositorySyncError(
-                                "production_branch_diverged",
-                                "canonical Git directory contains a non-production branch tip",
-                                details={
-                                    "branch": spec.branch,
-                                    "local_sha": local_branch.stdout,
-                                    "remote_sha": remote_branch.stdout,
-                                },
-                            )
-                        worktree_args = (
-                            "worktree", "add", layout["work_tree"], spec.branch
-                        )
-                    else:
-                        worktree_args = (
-                            "worktree", "add", "-b", spec.branch, layout["work_tree"],
-                            self._origin_ref(spec),
-                        )
-                    added = self.runner.git_common(
-                        spec, *worktree_args, timeout=max(self.timeout, 180)
-                    )
-                    if added.returncode != 0:
-                        raise RepositorySyncError(
-                            "worktree_add_failed", added.stderr or added.stdout or "worktree add failed"
-                        )
+                if local.returncode != 0:
+                    updated = self.runner.git_common(spec, "update-ref", f"refs/heads/{spec.branch}", remote_ref)
+                    if updated.returncode != 0:
+                        raise RepositorySyncError("branch_init_failed", updated.stderr or "branch init failed")
+                head = self.runner.git_common(spec, "symbolic-ref", "HEAD", f"refs/heads/{spec.branch}")
+                if head.returncode != 0:
+                    raise RepositorySyncError("head_config_failed", head.stderr or "HEAD configuration failed")
+
+                loaded = self.runner.git(spec, "read-tree", f"refs/heads/{spec.branch}")
+                if loaded.returncode != 0:
+                    raise RepositorySyncError("index_init_failed", loaded.stderr or loaded.stdout or "read-tree failed")
+                self._apply_scope(spec)
+                if not work_existed:
+                    checkout = self.runner.git(spec, "checkout-index", "-a")
+                    if checkout.returncode != 0:
+                        raise RepositorySyncError("live_source_init_failed", checkout.stderr or checkout.stdout or "checkout-index failed")
+
                 after = self._layout(spec)
                 if not after["ready"]:
-                    raise RepositorySyncError("layout_unverified", "canonical layout was not verified", details=after)
+                    raise RepositorySyncError("layout_unverified", "canonical repository layout was not verified", details=after)
                 return self._finish_event(event, ok=True, status="ok", layout=after)
         except RepositorySyncError as exc:
             return self._finish_event(
@@ -946,7 +1018,7 @@ class RepositorySyncService:
                 "working_tree": self._dirty_summary(""), "conflict_files": [],
                 "error": {
                     "code": "layout_missing",
-                    "message": "canonical production checkout is not initialized",
+                    "message": "canonical live source is not initialized",
                     "details": layout,
                 },
             })
@@ -967,11 +1039,8 @@ class RepositorySyncService:
                 ).split()
                 ahead = int(counts[0]) if counts else 0
                 behind = int(counts[1]) if len(counts) > 1 else 0
-                dirty = self._dirty_summary(
-                    self._run_ok(spec, "status", "--porcelain=v1", "-uall")
-                )
-                conflict_text = self._run_ok(spec, "diff", "--name-only", "--diff-filter=U")
-                conflicts = [row for row in conflict_text.splitlines() if row.strip()]
+                dirty = self._dirty_summary(self._tracked_status(spec))
+                conflicts = self._conflict_files(spec)
                 last = self._run_ok(spec, "log", "-1", "--format=%cI%x00%s").split("\x00", 1)
                 actual_origin = self._run_ok(spec, "config", "--get", "remote.origin.url")
                 if conflicts:
@@ -1064,7 +1133,7 @@ class RepositorySyncService:
             )
         if (status.get("working_tree") or {}).get("dirty"):
             raise RepositorySyncError(
-                "production_dirty", "production worktree has local changes; pull refused",
+                "production_dirty", "live source has local tracked changes; pull refused",
                 details={"working_tree": status.get("working_tree")},
             )
         if int(status.get("ahead") or 0) > 0:

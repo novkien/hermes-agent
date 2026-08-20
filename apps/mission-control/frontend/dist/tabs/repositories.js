@@ -94,7 +94,7 @@ function operationMessage(operation) {
         : 'Production already matched the remote branch.';
     }
     if (operation.action === 'codex_review') return 'Codex review requested for the current PR head.';
-    if (operation.action === 'initialize_layout') return 'Canonical Git directory and production worktree are ready.';
+    if (operation.action === 'initialize_layout') return 'Canonical Git directory and live source are ready.';
     return 'Repository operation completed.';
   }
   if (operation.partial_success) {
@@ -313,7 +313,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function mergeAndPull(repo, pull) {
-    const workTree = repo.layout?.work_tree || repo.path || 'canonical production worktree';
+    const workTree = repo.layout?.work_tree || repo.path || 'canonical live source';
     const confirmed = window.confirm(
       `Rebase-merge PR #${pull.number} into ${repo.branch}, then fast-forward production on ${repo.host}:\n\n${workTree}\n\nContinue?`,
     );
@@ -369,12 +369,12 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
           class: 'repo-card-state-note',
           text: repo.layout?.ready
             ? `${repo.ahead || 0} ahead · ${repo.behind || 0} behind`
-            : 'Canonical checkout not initialized',
+            : 'Canonical live source not initialized',
         }),
       ]),
       el('div', { class: 'repo-card-facts' }, [
         el('div', { class: 'repo-fact' }, [
-          el('span', { text: 'Production' }),
+          el('span', { text: 'Live source' }),
           el('code', { text: repo.layout?.work_tree || '—' }),
         ]),
         el('div', { class: 'repo-fact' }, [
@@ -455,7 +455,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     ]));
     metricsHost.append(el('div', { class: 'repo-metrics' }, [
       metric('Repositories', stats.repositories, 'from repositories.yaml'),
-      metric('Production ready', stats.ready, 'canonical worktrees'),
+      metric('Live source ready', stats.ready, 'canonical live trees'),
       metric('Open PRs', stats.pulls, 'GitHub live state'),
       metric('Attention', stats.attention, 'layout / drift / conflict'),
     ]));
@@ -554,7 +554,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         kv('Branch', repo.branch, { mono: true }),
         kv('Origin', repo.origin_actual || repo.origin_url, { mono: true }),
         kv('Git dir', repo.layout?.git_dir, { mono: true }),
-        kv('Production', repo.layout?.work_tree, { mono: true }),
+        kv('Live source', repo.layout?.work_tree, { mono: true }),
         kv('Local SHA', shortSha(repo.local_sha), { mono: true }),
         kv('Remote SHA', shortSha(repo.remote_sha), { mono: true }),
         kv('Working tree', repo.working_tree?.dirty ? 'DIRTY' : 'Clean', {
@@ -562,7 +562,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         }),
         el('div', { class: 'repo-side-footer-actions' }, [
           !repo.layout?.ready
-            ? button('Initialize production layout', () => initialize(repo), { primary: true })
+            ? button('Initialize repository layout', () => initialize(repo), { primary: true })
             : button('Pull production', () => pullProduction(repo), { primary: true }),
         ]),
       ]),

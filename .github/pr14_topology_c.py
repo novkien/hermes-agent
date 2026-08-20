@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 # Frontend wording only; behavior already calls direct pull APIs.
 p = Path('apps/mission-control/frontend/dist/tabs/repositories.js')
@@ -33,12 +34,28 @@ p.write_text(s, encoding='utf-8')
 # Focused Python tests.
 p = Path('apps/mission-control/tests/test_repository_sync.py')
 s = p.read_text(encoding='utf-8')
-old = '''        for name, spec in registry.items():
+def replace_once(label, old, new):
+    if s.count(old) != 1:
+        raise SystemExit(f'{label} {s.count(old)}')
+    return s.replace(old, new, 1)
+
+
+def regex_once(label, pattern, repl):
+    global s
+    s2, n = re.subn(pattern, repl, s, count=1, flags=re.M | re.S)
+    if n != 1:
+        raise SystemExit(f'{label} {n}')
+    return s2
+
+
+s = replace_once(
+    "registry test block mismatch",
+'''        for name, spec in registry.items():
             self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")
             self.assertEqual(spec.work_tree, f"~/.hermes/worktrees/{name}/production")
             self.assertNotIn("/tmp/", spec.work_tree)
-            self.assertNotIn("deployment", spec.work_tree)'''
-new = '''        expected_live = {
+            self.assertNotIn("deployment", spec.work_tree)''',
+'''        expected_live = {
             "hermes-agent": "~/.hermes/hermes-agent",
             "hermes-skills": "~/.hermes",
             "hermes-plugins": "~/.hermes/plugins",
@@ -51,21 +68,19 @@ new = '''        expected_live = {
             self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")
             self.assertEqual(spec.work_tree, expected_live[name])
             self.assertNotIn("/worktrees/", spec.work_tree)
-        self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))'''
-if s.count(old) != 1:
-    raise SystemExit('registry test block mismatch')
-s = s.replace(old, new, 1)
-s = s.replace('self.work_tree = self.hermes_home / "worktrees" / "demo" / "production"', 'self.work_tree = self.hermes_home / "demo"', 1)
-old = '''    def test_initialize_creates_one_common_dir_and_one_production_worktree(self):
-        result = self.service.initialize_layout("demo")
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(self.git_dir.is_dir())
-        self.assertTrue(self.work_tree.is_dir())
-        self.assertTrue((self.work_tree / ".git").is_file())
-        self.assertEqual(git(self.work_tree, "rev-parse", "--git-common-dir"), str(self.git_dir))
-        self.assertEqual(git(self.work_tree, "branch", "--show-current"), "main")
-        self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")'''
-new = '''    def test_initialize_creates_one_common_dir_and_direct_live_source(self):
+        self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))''',
+)
+
+s = replace_once(
+    "demo work tree default mismatch",
+    'self.work_tree = self.hermes_home / "worktrees" / "demo" / "production"',
+    'self.work_tree = self.hermes_home / "demo"',
+)
+
+pattern = r'''    def test_initialize_creates_one_common_dir_and_one_production_worktree\(self\):
+.*?
+    def test_pull_fast_forwards_the_live_production_worktree\(self\):'''
+replacement = '''    def test_initialize_creates_one_common_dir_and_direct_live_source(self):
         result = self.service.initialize_layout("demo")
         self.assertTrue(result["ok"], result)
         self.assertTrue(self.git_dir.is_dir())
@@ -73,9 +88,14 @@ new = '''    def test_initialize_creates_one_common_dir_and_direct_live_source(s
         self.assertFalse((self.work_tree / ".git").exists())
         self.assertEqual(self.service.runner.git_dir(self.spec), str(self.git_dir))
         self.assertEqual(self.service.runner.git(self.spec, "branch", "--show-current").stdout, "main")
-        self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")'''
-if s.count(old) != 1:
-    raise SystemExit('initialize test block mismatch')
-s = s.replace(old, new, 1)
-s = s.replace('work_tree="/tmp/.hermes/worktrees/demo/production"', 'work_tree="/tmp/.hermes/demo"')
+        self.assertEqual((self.work_tree / "base.txt").read_text(), "base\\n")
+
+    def test_pull_fast_forwards_the_live_production_worktree(self):'''
+s = regex_once("initialize test block mismatch", pattern, replacement)
+
+s = s.replace(
+    'work_tree="/tmp/.hermes/worktrees/demo/production"',
+    'work_tree="/tmp/.hermes/demo"',
+)
+
 p.write_text(s, encoding='utf-8')

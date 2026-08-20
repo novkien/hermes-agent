@@ -46,13 +46,16 @@ for (const name of [
   assert.match(registry, new RegExp(`^  ${name}:`, 'm'));
 }
 assert.match(registry, /git_dir: repos\/\{repository\}\.git/);
-assert.match(registry, /production_worktree: worktrees\/\{repository\}\/production/);
-assert.match(registry, /llama-proxy:[\s\S]*host: jarvis-pi/);
+assert.doesNotMatch(registry, /production_worktree|worktrees\/\{repository\}\/production/);
+assert.match(registry, /hermes-skills:[\s\S]*work_tree: \.\n[\s\S]*paths:[\s\S]*- skills[\s\S]*- workspace\/skills-pack/);
+assert.match(registry, /hermes-plugins:[\s\S]*work_tree: plugins/);
+assert.match(registry, /agents:[\s\S]*work_tree: profiles/);
+assert.match(registry, /llama-proxy:[\s\S]*host: jarvis-pi[\s\S]*work_tree: llama-proxy/);
 
 assert.match(tab, /Review with Codex/);
 assert.match(tab, /Merge & Pull/);
 assert.match(tab, /Pull production/);
-assert.match(tab, /Initialize production layout/);
+assert.match(tab, /Initialize repository layout/);
 assert.match(tab, /Codex/);
 assert.match(tab, /Selected PR evidence/);
 assert.match(tab, /Partial success/);
@@ -63,6 +66,20 @@ assert.doesNotMatch(tab, /Sync all/);
 assert.doesNotMatch(tab, /Safe sync/);
 
 assert.match(servicePy, /git merge --ff-only/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /--git-dir=/);
+assert.match(servicePy, /--work-tree=/);
 assert.match(servicePy, /production_dirty/);
 assert.match(servicePy, /partial_success/);
 assert.match(servicePy, /@codex review/);
@@ -71,6 +88,13 @@ assert.doesNotMatch(servicePy, /git add -A/);
 assert.doesNotMatch(servicePy, /shutil\.copy/);
 assert.doesNotMatch(servicePy, /deployment_root/);
 assert.doesNotMatch(servicePy, /path_candidates/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
 
 assert.match(css, /\.repo-grid/);
 assert.match(css, /\.repo-pr-control/);

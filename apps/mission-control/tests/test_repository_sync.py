@@ -75,11 +75,20 @@ class RepositoryRegistryTests(unittest.TestCase):
         self.assertEqual(registry["llama-proxy"].host, "jarvis-pi")
         self.assertEqual(registry["llama-proxy"].ssh_target, "jarvis-pi")
         self.assertEqual(registry["godot-mcp"].branch, "main")
+        expected_live = {
+            "hermes-agent": "~/.hermes/hermes-agent",
+            "hermes-skills": "~/.hermes",
+            "hermes-plugins": "~/.hermes/plugins",
+            "agents": "~/.hermes/profiles",
+            "llama-proxy": "~/.hermes/llama-proxy",
+            "9router": "~/.hermes/9router",
+            "godot-mcp": "~/.hermes/godot-mcp",
+        }
         for name, spec in registry.items():
             self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")
-            self.assertEqual(spec.work_tree, f"~/.hermes/worktrees/{name}/production")
-            self.assertNotIn("/tmp/", spec.work_tree)
-            self.assertNotIn("deployment", spec.work_tree)
+            self.assertEqual(spec.work_tree, expected_live[name])
+            self.assertNotIn("/worktrees/", spec.work_tree)
+        self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))
 
     def test_dirty_summary_is_compact_and_deterministic(self):
         summary = RepositorySyncService._dirty_summary(
@@ -100,7 +109,7 @@ class RepositoryProductionTests(unittest.TestCase):
         self.writer = root / "writer"
         self.hermes_home = root / ".hermes"
         self.git_dir = self.hermes_home / "repos" / "demo.git"
-        self.work_tree = self.hermes_home / "worktrees" / "demo" / "production"
+        self.work_tree = self.hermes_home / "demo"
         self.state = self.hermes_home / "state" / "repository-control"
 
         subprocess.run(["git", "init", "--bare", str(self.origin)], check=True, capture_output=True)
@@ -150,14 +159,14 @@ class RepositoryProductionTests(unittest.TestCase):
         git(self.writer, "push", "origin", "main")
         return git(self.writer, "rev-parse", "HEAD")
 
-    def test_initialize_creates_one_common_dir_and_one_production_worktree(self):
+    def test_initialize_creates_one_common_dir_and_direct_live_source(self):
         result = self.service.initialize_layout("demo")
         self.assertTrue(result["ok"], result)
         self.assertTrue(self.git_dir.is_dir())
         self.assertTrue(self.work_tree.is_dir())
-        self.assertTrue((self.work_tree / ".git").is_file())
-        self.assertEqual(git(self.work_tree, "rev-parse", "--git-common-dir"), str(self.git_dir))
-        self.assertEqual(git(self.work_tree, "branch", "--show-current"), "main")
+        self.assertFalse((self.work_tree / ".git").exists())
+        self.assertEqual(self.service.runner.git_dir(self.spec), str(self.git_dir))
+        self.assertEqual(self.service.runner.git(self.spec, "branch", "--show-current").stdout, "main")
         self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")
 
     def test_pull_fast_forwards_the_live_production_worktree(self):
@@ -166,7 +175,7 @@ class RepositoryProductionTests(unittest.TestCase):
         result = self.service.pull_production("demo")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["production"]["after_sha"], remote)
-        self.assertEqual(git(self.work_tree, "rev-parse", "HEAD"), remote)
+        self.assertEqual(self.service.runner.git(self.spec, "rev-parse", "HEAD").stdout, remote)
         self.assertTrue((self.work_tree / "remote.txt").exists())
 
     def test_pull_refuses_dirty_production_without_stash_or_commit(self):
@@ -176,7 +185,7 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "production_dirty")
         self.assertEqual((self.work_tree / "base.txt").read_text(), "dirty\n")
-        self.assertEqual(git(self.work_tree, "stash", "list"), "")
+        self.assertEqual(self.service.runner.git(self.spec, "stash", "list").stdout, "")
 
     def test_merge_and_pull_blocks_known_dirty_production_before_github_merge(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
@@ -213,7 +222,10 @@ class RepositoryProductionTests(unittest.TestCase):
         result = self.service.sync("demo", auto_commit=True, commit_message="ignored")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["production"]["after_sha"], remote)
-        self.assertEqual(git(self.work_tree, "log", "-1", "--format=%s"), "remote update")
+        self.assertEqual(
+            self.service.runner.git(self.spec, "log", "-1", "--format=%s").stdout,
+            "remote update",
+        )
 
 
 class CodexStateTests(unittest.TestCase):
@@ -243,7 +255,7 @@ class CodexStateTests(unittest.TestCase):
             name="demo", repo_full_name="example/demo", branch="main", host="local",
             transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
             git_dir="/tmp/.hermes/repos/demo.git",
-            work_tree="/tmp/.hermes/worktrees/demo/production",
+            work_tree="/tmp/.hermes/demo",
             origin_url="git@example.invalid:example/demo.git",
         )
         state = self.Client()._codex_state(
@@ -267,7 +279,7 @@ class CodexStateTests(unittest.TestCase):
             name="demo", repo_full_name="example/demo", branch="main", host="local",
             transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
             git_dir="/tmp/.hermes/repos/demo.git",
-            work_tree="/tmp/.hermes/worktrees/demo/production",
+            work_tree="/tmp/.hermes/demo",
             origin_url="git@example.invalid:example/demo.git",
         )
         state = self.ReRequestedClient()._codex_state(
