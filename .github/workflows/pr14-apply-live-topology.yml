@@ -1,7 +1,8 @@
 name: Apply PR14 live topology
 on:
-  push:
-    branches: [owner/repository-control-plane]
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize, ready_for_review]
 permissions:
   contents: write
 concurrency:
