@@ -1,0 +1,66 @@
+name: Mission Control
+
+on:
+  pull_request:
+    paths:
+      - "apps/mission-control/**"
+      - ".github/workflows/mission-control.yml"
+  push:
+    branches: [master]
+    paths:
+      - "apps/mission-control/**"
+      - ".github/workflows/mission-control.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mission-control-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-tests:
+    name: Python and Node contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run Mission Control contract suites
+        working-directory: apps/mission-control
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+        run: |
+          uv run --project "$GITHUB_WORKSPACE" --no-sync python tests/test_runtime_contracts.py
+          uv run --project "$GITHUB_WORKSPACE" --no-sync python tests/test_static_repair_surface.py
+          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/frontend_contracts.mjs
+          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/skills_surface.mjs
+          uv run --project "$GITHUB_WORKSPACE" --no-sync node tests/repository_surface.mjs
+
+      - name: Compile backend
+        working-directory: apps/mission-control
+        run: uv run --project "$GITHUB_WORKSPACE" --no-sync python -m compileall -q agent_mission_control
+
+      - name: Check backend lint and formatting
+        working-directory: apps/mission-control
+        run: |
+          uv run --project "$GITHUB_WORKSPACE" --no-sync ruff check agent_mission_control tests
+          uv run --project "$GITHUB_WORKSPACE" --no-sync ruff format --check agent_mission_control tests

@@ -36,6 +36,10 @@ jobs:
           }
           const checks = [];
           for (const pkg of pkgs) {
+            // Desktop is not a supported deployment surface for this host.
+            if (pkg.location === "apps/desktop" || pkg.location.startsWith("apps/desktop/")) {
+              continue;
+            }
             const scripts = pkg.scripts || {};
             const subs = Object.keys(scripts).filter(s => /^check:.+$/.test(s));
             if (subs.length > 0) {
