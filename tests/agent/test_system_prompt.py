@@ -206,7 +206,13 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:5])
+    assert agent._cached_system_prompt_static == "\n\n".join((
+        ARTIFACT_FILESYSTEM_CONTRACT,
+        "IDENTITY",
+        "HELP",
+        "STEER",
+        "CODING_STABLE",
+    ))
 
 
 class TestTelegramRichMessagesHint:
