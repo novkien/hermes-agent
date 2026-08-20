@@ -497,8 +497,7 @@ def _compute_tool_definitions(
     # callers: unrestricted/default callers retain the legacy profile gate.
     schema_toolsets = None
     if enabled_toolsets is not None:
-        kanban_names = set(resolve_toolset("kanban"))
-        schema_toolsets = {"kanban"} if tools_to_include & kanban_names else set()
+        schema_toolsets = {"kanban"} if "kanban" in effective_enabled_toolsets else set()
     schema_toolsets_token = set_active_schema_toolsets(schema_toolsets)
     try:
         # Ask the registry for schemas (only returns tools whose check_fn passes)
