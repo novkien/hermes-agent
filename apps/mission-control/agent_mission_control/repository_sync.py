@@ -1094,13 +1094,18 @@ class RepositorySyncService:
                 return self.status(name, fetch=fetch, include_github=include_github)
             except Exception as exc:  # noqa: BLE001
                 spec = self.spec(name)
+                try:
+                    git_dir = self.runner.git_dir(spec)
+                    work_tree = self.runner.work_tree(spec)
+                except Exception:  # noqa: BLE001 — an unreachable host must not break the list
+                    git_dir, work_tree = spec.git_dir, spec.work_tree
                 return {
                     "name": name, "repo_full_name": spec.repo_full_name,
                     "branch": spec.branch, "host": spec.host, "state": "error",
                     "ok": False, "error": {"code": "status_failed", "message": str(exc)},
                     "layout": {
-                        "git_dir": self.runner.git_dir(spec),
-                        "work_tree": self.runner.work_tree(spec),
+                        "git_dir": git_dir,
+                        "work_tree": work_tree,
                         "ready": False,
                     },
                 }

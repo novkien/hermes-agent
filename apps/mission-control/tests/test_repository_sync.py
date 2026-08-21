@@ -228,6 +228,59 @@ class RepositoryProductionTests(unittest.TestCase):
         )
 
 
+class UnreachableHostRunner(RepositoryGitRunner):
+    """Simulate an SSH host whose HOME lookup fails (offline machine)."""
+
+    def _host_process(self, spec, argv, *, timeout=None):
+        if spec.transport == "ssh":
+            raise RepositorySyncError("ssh_unreachable", f"could not reach {spec.ssh_target}")
+        return super()._host_process(spec, argv, timeout=timeout)
+
+
+class StatusAllContainmentTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="repository-control-")
+        root = Path(self.tmp.name)
+        self.hermes_home = root / ".hermes"
+        self.state = self.hermes_home / "state" / "repository-control"
+        local = RepoSpec(
+            name="good", repo_full_name="example/good", branch="main", host="local-test",
+            transport="local", ssh_target=None, hermes_home=str(self.hermes_home),
+            git_dir=str(self.hermes_home / "repos" / "good.git"),
+            work_tree=str(self.hermes_home / "good"),
+            origin_url="file:///nonexistent.git", private=True,
+        )
+        bad = RepoSpec(
+            name="bad", repo_full_name="example/bad", branch="main", host="far-host",
+            transport="ssh", ssh_target="far@host.invalid", hermes_home="~/.hermes",
+            git_dir="~/.hermes/repos/bad.git", work_tree="/home/far/bad",
+            origin_url="git@example.invalid:example/bad.git", private=True,
+        )
+        self.service = RepositorySyncService(
+            {"good": local, "bad": bad},
+            runner=UnreachableHostRunner(timeout=30),
+            store=OperationStore(self.state),
+            github=OfflineGithub(),
+            timeout=30,
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_unreachable_host_degrades_to_error_row_instead_of_breaking_list(self):
+        rows = self.service.status_all(fetch=False, include_github=False)
+        by_name = {row["name"]: row for row in rows}
+        self.assertEqual(set(by_name), {"good", "bad"})
+        bad_row = by_name["bad"]
+        self.assertFalse(bad_row["ok"])
+        self.assertEqual(bad_row["state"], "error")
+        self.assertIn("far@host.invalid", bad_row["error"]["message"])
+        # Layout paths fall back to registry spec values when the host cannot resolve them.
+        self.assertEqual(bad_row["layout"]["git_dir"], "~/.hermes/repos/bad.git")
+        self.assertEqual(bad_row["layout"]["work_tree"], "/home/far/bad")
+        self.assertFalse(bad_row["layout"]["ready"])
+
+
 class CodexStateTests(unittest.TestCase):
     class Client(GitHubRestClient):
         def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
