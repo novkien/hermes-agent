@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from pathlib import Path
 import subprocess
@@ -16,6 +17,7 @@ if str(APP_ROOT) not in sys.path:
 
 from agent_mission_control.repository_runner import RepositoryGitRunner  # noqa: E402
 from agent_mission_control.repository_sync import (  # noqa: E402
+    CommandResult,
     GitHubRestClient,
     OperationStore,
     RepoSpec,
@@ -23,6 +25,12 @@ from agent_mission_control.repository_sync import (  # noqa: E402
     RepositorySyncService,
     default_repository_registry,
 )
+
+
+class CapturingSshRunner(RepositoryGitRunner):
+    def _run_process(self, argv, *, timeout=None):
+        self.last_argv = argv
+        return CommandResult(argv, 0, "", "", 0)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -74,6 +82,11 @@ class RepositoryRegistryTests(unittest.TestCase):
         )
         self.assertEqual(registry["llama-proxy"].host, "jarvis-pi")
         self.assertEqual(registry["llama-proxy"].ssh_target, "jarvis-pi")
+        for spec in registry.values():
+            self.assertEqual(
+                spec.origin_url,
+                f"https://github.com/{spec.repo_full_name}.git",
+            )
         self.assertEqual(registry["godot-mcp"].branch, "main")
         expected_live = {
             "hermes-agent": "~/.hermes/hermes-agent",
@@ -89,6 +102,15 @@ class RepositoryRegistryTests(unittest.TestCase):
             self.assertEqual(spec.work_tree, expected_live[name])
             self.assertNotIn("/worktrees/", spec.work_tree)
         self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))
+
+    def test_ssh_runner_avoids_login_profile_output(self):
+        spec = default_repository_registry()["9router"]
+        runner = CapturingSshRunner()
+
+        runner.host(spec, "git", "status", "--short")
+
+        self.assertEqual(runner.last_argv[-3:-1], ["bash", "-c"])
+        self.assertNotIn("-lc", runner.last_argv)
 
     def test_dirty_summary_is_compact_and_deterministic(self):
         summary = RepositorySyncService._dirty_summary(
@@ -168,6 +190,68 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertEqual(self.service.runner.git_dir(self.spec), str(self.git_dir))
         self.assertEqual(self.service.runner.git(self.spec, "branch", "--show-current").stdout, "main")
         self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")
+
+    def test_initialize_repairs_origin_left_by_failed_partial_layout(self):
+        subprocess.run(
+            ["git", "init", "--bare", str(self.git_dir)],
+            check=True,
+            capture_output=True,
+        )
+        git(
+            self.git_dir,
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:example/demo.git",
+        )
+
+        result = self.service.initialize_layout("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            git(self.git_dir, "remote", "get-url", "origin"),
+            str(self.origin),
+        )
+        self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")
+
+    def test_initialize_seeds_common_dir_from_existing_live_checkout(self):
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth=1",
+                f"file://{self.origin}",
+                str(self.work_tree),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        self.assertEqual(git(self.work_tree, "rev-parse", "--is-shallow-repository"), "true")
+        offline_spec = dataclasses.replace(
+            self.spec,
+            origin_url="file:///repository-not-reachable-during-layout-init.git",
+        )
+        service = RepositorySyncService(
+            {"demo": offline_spec},
+            runner=RepositoryGitRunner(timeout=30),
+            store=OperationStore(self.state),
+            github=OfflineGithub(),
+            timeout=30,
+        )
+
+        result = service.initialize_layout("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            service.runner.git_common(
+                offline_spec, "rev-parse", "refs/remotes/origin/main"
+            ).stdout,
+            git(self.work_tree, "rev-parse", "main"),
+        )
+        self.assertEqual(
+            service.runner.git_common(offline_spec, "remote", "get-url", "origin").stdout,
+            offline_spec.origin_url,
+        )
 
     def test_pull_fast_forwards_the_live_production_worktree(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])

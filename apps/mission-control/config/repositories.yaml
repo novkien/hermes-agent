@@ -1,5 +1,8 @@
 version: 1
 
+# GitHub origins default to HTTPS. SSH here selects the managed host where Git
+# runs; it does not require that host to have a separate GitHub SSH key.
+
 layout:
   git_dir: repos/{repository}.git
 

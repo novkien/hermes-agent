@@ -111,8 +111,15 @@ def generate_systemd_unit(
             ctx.hermes_root / "skills",
             ctx.hermes_root / "workspace" / "skills-pack",
             ctx.hermes_root.parent / "agents",
-            ctx.hermes_root / "repos" / "hermes-skills.git",
+            # The whole common Git directory: repository control keeps every
+            # managed repository's bare git dir under <HERMES_HOME>/repos and
+            # must be able to create a new one during initialize_layout.
+            ctx.hermes_root / "repos",
         )
+        # ReadWritePaths entries must exist at unit-apply time or the service
+        # fails with status 226 (NAMESPACE); optional host-specific paths are
+        # only whitelisted where they actually exist.
+        if path.exists()
     )
     identity = ""
     wanted_by = "default.target"

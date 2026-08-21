@@ -31,6 +31,10 @@ class RepositoryGitRunner(GitRunner):
             )
         command = " ".join(shlex.quote(str(part)) for part in argv)
         return self._run_process(
-            ["ssh", *_SSH_ARGS, spec.ssh_target, "bash", "-lc", shlex.quote(command)],
+            # A login shell sources host profile scripts. Raspberry Pi OS can
+            # print first-boot/rfkill notices there, contaminating stdout from
+            # machine-readable Git commands (for example an epoch becomes
+            # "Wi-Fi ... <epoch>"). Exact commands do not need a login shell.
+            ["ssh", *_SSH_ARGS, spec.ssh_target, "bash", "-c", shlex.quote(command)],
             timeout=timeout,
         )

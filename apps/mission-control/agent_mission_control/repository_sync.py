@@ -34,6 +34,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 GITHUB_API_VERSION = "2022-11-28"
 DEFAULT_TIMEOUT_SECONDS = 90
+INITIALIZE_FETCH_TIMEOUT_SECONDS = 300
 _CODEX_LOGIN = "chatgpt-codex-connector"
 _CODEX_REVIEW_RE = re.compile(r"Reviewed commit:\*{0,2}\s*`([0-9a-fA-F]{7,64})`")
 _FAILED_CONCLUSIONS = {
@@ -234,8 +235,13 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
         upstream = str(raw_spec.get("upstream") or "").strip() or None
         if upstream:
             upstream = _clean_repo(upstream)
+        # Repository operations can run on SSH-managed hosts that have HTTPS
+        # credentials (or a public repository) but no GitHub SSH key.  Keep
+        # host transport and GitHub transport independent: HTTPS is the
+        # portable default, while an explicit origin_url can still opt into
+        # SSH or another Git transport.
         origin_url = str(
-            raw_spec.get("origin_url") or f"git@github.com:{repo_full_name}.git"
+            raw_spec.get("origin_url") or f"https://github.com/{repo_full_name}.git"
         ).strip()
         if not origin_url or any(ch in origin_url for ch in "\r\n\x00"):
             raise RepositorySyncError("registry_invalid", f"invalid origin URL for {name}")
@@ -924,6 +930,18 @@ class RepositorySyncService:
                 if layout["ready"]:
                     return self._finish_event(event, ok=True, status="noop", layout=layout)
                 work_existed = layout["work_tree_exists"]
+                existing_worktree = None
+                if work_existed:
+                    candidate = self.runner.host(
+                        spec,
+                        "git",
+                        "-C",
+                        layout["work_tree"],
+                        "rev-parse",
+                        "--is-inside-work-tree",
+                    )
+                    if candidate.returncode == 0 and candidate.stdout.strip() == "true":
+                        existing_worktree = layout["work_tree"]
                 self.runner.mkdir(spec, str(Path(layout["git_dir"]).parent))
                 self.runner.mkdir(spec, layout["work_tree"])
                 if not layout["git_dir_exists"]:
@@ -942,20 +960,81 @@ class RepositorySyncService:
                     if add.returncode != 0:
                         raise RepositorySyncError("remote_add_failed", add.stderr or "remote add failed")
                 elif remote.stdout.strip() != spec.origin_url:
-                    raise RepositorySyncError(
-                        "origin_mismatch", "canonical Git directory has an unexpected origin",
-                        details={"expected": spec.origin_url, "actual": remote.stdout.strip()},
+                    # A failed earlier initialization can leave a bare Git
+                    # directory with only the old origin configured.  The
+                    # registry is authoritative, and this branch is reached
+                    # only while the layout is still unbound, so repair that
+                    # partial state and let the normal fetch/verification path
+                    # complete it.
+                    changed = self.runner.git_common(
+                        spec, "remote", "set-url", "origin", spec.origin_url
                     )
+                    if changed.returncode != 0:
+                        raise RepositorySyncError(
+                            "remote_update_failed",
+                            changed.stderr or "remote set-url failed",
+                            details={
+                                "expected": spec.origin_url,
+                                "actual": remote.stdout.strip(),
+                            },
+                        )
                 configured = self.runner.git_common(
                     spec, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"
                 )
                 if configured.returncode != 0:
                     raise RepositorySyncError("remote_config_failed", configured.stderr or "remote fetch configuration failed")
-                fetched = self.runner.git_common(spec, "fetch", "--prune", "origin", spec.branch)
+                remote_ref = self._origin_ref(spec)
+                if existing_worktree:
+                    # Existing live checkouts already contain the complete
+                    # object graph. Seed the new common directory locally so
+                    # Initialize remains a layout operation instead of a
+                    # full-history network download. The following status
+                    # refresh fetches origin and reports any real drift.
+                    shallow = self.runner.host(
+                        spec,
+                        "git",
+                        "-C",
+                        existing_worktree,
+                        "rev-parse",
+                        "--absolute-git-dir",
+                    )
+                    shallow_path = f'{shallow.stdout.rstrip("/")}/shallow'
+                    if (
+                        shallow.returncode == 0
+                        and shallow.stdout
+                        and self.runner.exists(spec, shallow_path)
+                    ):
+                        copied = self.runner.host(
+                            spec,
+                            "cp",
+                            "--",
+                            shallow_path,
+                            f'{layout["git_dir"]}/shallow',
+                        )
+                        if copied.returncode != 0:
+                            raise RepositorySyncError(
+                                "shallow_state_copy_failed",
+                                copied.stderr or "could not preserve shallow boundary",
+                            )
+                    fetched = self.runner.git_common(
+                        spec,
+                        "fetch",
+                        "--no-tags",
+                        existing_worktree,
+                        f"+refs/heads/{spec.branch}:{remote_ref}",
+                    )
+                else:
+                    fetched = self.runner.git_common(
+                        spec,
+                        "fetch",
+                        "--prune",
+                        "origin",
+                        spec.branch,
+                        timeout=max(self.timeout, INITIALIZE_FETCH_TIMEOUT_SECONDS),
+                    )
                 if fetched.returncode != 0:
                     raise RepositorySyncError("fetch_failed", fetched.stderr or fetched.stdout or "fetch failed")
 
-                remote_ref = self._origin_ref(spec)
                 remote_sha = self.runner.git_common(spec, "rev-parse", "--verify", remote_ref)
                 if remote_sha.returncode != 0:
                     raise RepositorySyncError("remote_branch_missing", remote_sha.stderr or "remote branch missing")
