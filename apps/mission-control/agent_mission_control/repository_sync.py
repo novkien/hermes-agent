@@ -8,9 +8,10 @@ canonical live source path consumed by Hermes or the service:
     <HERMES_HOME>/<repo-specific-live-path>
 
 There is no staging checkout, generic production-worktree layer, deployment
-copy, automatic stash, automatic commit, production push, or implicit PR batch
-merge. A pull request merge is a single owner-selected rebase merge followed by
-a clean fast-forward of the canonical live source tree.
+copy, automatic commit, production push, or implicit PR batch merge. A pull
+request merge is a single owner-selected rebase merge followed by a clean
+fast-forward of the canonical live source tree. ``merge_and_pull`` may
+temporarily stash and restore local work around that operation.
 """
 
 from __future__ import annotations
@@ -889,6 +890,204 @@ class RepositorySyncService:
     def _tracked_status(self, spec: RepoSpec) -> str:
         return self._run_ok(spec, "status", "--porcelain=v1", "-uno", *self._scope_args(spec))
 
+    def _working_status(self, spec: RepoSpec) -> str:
+        """Return tracked and untracked local work for merge preservation."""
+        return self._run_ok(
+            spec,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            *self._scope_args(spec),
+        )
+
+    def _stash_local_changes(
+        self, spec: RepoSpec, *, message: str
+    ) -> dict[str, Any] | None:
+        """Temporarily stash local work, including untracked files.
+
+        This is deliberately limited to the merge-and-pull transaction. A
+        normal production pull remains fail-closed when local work exists.
+        The stash SHA is retained in the operation receipt so a failed restore
+        can be recovered without guessing which pre-existing stash was used.
+        """
+        before = self._dirty_summary(self._working_status(spec))
+        if not before["dirty"]:
+            return None
+        pushed = self.runner.git(
+            spec,
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            message,
+            *self._scope_args(spec),
+        )
+        if pushed.returncode != 0:
+            raise RepositorySyncError(
+                "local_stash_failed",
+                pushed.stderr or pushed.stdout or "could not stash local changes",
+                details={"working_tree": before},
+            )
+        stash_sha = self._run_ok(spec, "rev-parse", "--verify", "refs/stash")
+        stash_shas = [stash_sha]
+        after = self._dirty_summary(self._working_status(spec))
+        if after["dirty"]:
+            # Git deliberately does not recurse into some directories that
+            # look like broken/nested worktrees when using -u. Stage only the
+            # residual paths and store them in a supplemental stash. This
+            # keeps the primary stash's original staged/unstaged semantics
+            # while still preserving every local file.
+            staged = self.runner.git(spec, "add", "-A", *self._scope_args(spec))
+            if staged.returncode != 0:
+                raise RepositorySyncError(
+                    "local_stash_failed",
+                    staged.stderr or staged.stdout or "could not stage residual local changes",
+                    details={
+                        "working_tree_before": before,
+                        "working_tree_after": after,
+                        "stash_sha": stash_sha,
+                    },
+                )
+            supplemental = self.runner.git(
+                spec,
+                "stash",
+                "push",
+                "--staged",
+                "--message",
+                f"{message} residual",
+            )
+            if supplemental.returncode != 0:
+                raise RepositorySyncError(
+                    "local_stash_failed",
+                    supplemental.stderr or supplemental.stdout or "could not stash residual local changes",
+                    details={
+                        "working_tree_before": before,
+                        "working_tree_after": after,
+                        "stash_sha": stash_sha,
+                    },
+                )
+            supplemental_sha = self._run_ok(spec, "rev-parse", "--verify", "refs/stash")
+            stash_shas.append(supplemental_sha)
+            after = self._dirty_summary(self._working_status(spec))
+            if after["dirty"]:
+                raise RepositorySyncError(
+                    "local_stash_incomplete",
+                    "local changes remained after staging them for merge-and-pull",
+                    details={
+                        "working_tree_before": before,
+                        "working_tree_after": after,
+                        "stash_shas": stash_shas,
+                    },
+                )
+        return {
+            "stashed": True,
+            "restored": False,
+            "stash_sha": stash_sha,
+            "stash_shas": stash_shas,
+            "working_tree_before": before,
+        }
+
+    def _restore_local_changes(
+        self, spec: RepoSpec, snapshot: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if snapshot is None:
+            return None
+        stash_shas = list(snapshot.get("stash_shas") or [snapshot["stash_sha"]])
+        stash_list = self._run_ok(spec, "stash", "list", "--format=%H").splitlines()
+        refs: dict[str, str] = {}
+        for sha in stash_shas:
+            try:
+                index = stash_list.index(sha)
+            except ValueError as exc:
+                raise RepositorySyncError(
+                    "local_stash_moved",
+                    "a merge-and-pull stash is no longer available",
+                    details={"stash_sha": sha, "available_stashes": stash_list[:10]},
+                ) from exc
+            refs[sha] = f"stash@{{{index}}}"
+
+        # The supplemental residual stash is newer than the primary stash.
+        # Apply the older primary stash first, then the residual files, and
+        # only drop either stash after both applications succeed.
+        for sha in stash_shas:
+            stash_ref = refs[sha]
+            restore_args = ["stash", "apply"]
+            if sha == stash_shas[0]:
+                restore_args.append("--index")
+            restore_args.append(stash_ref)
+            restored = self.runner.git(spec, *restore_args)
+            if restored.returncode != 0:
+                current = self._dirty_summary(self._working_status(spec))
+                conflicts = self._conflict_files(spec)
+                code = "local_restore_conflict" if conflicts else "local_restore_failed"
+                raise RepositorySyncError(
+                    code,
+                    restored.stderr or restored.stdout or "could not restore local changes",
+                    details={
+                        "stash_sha": sha,
+                        "stash_shas": stash_shas,
+                        "working_tree": current,
+                        "conflict_files": conflicts,
+                    },
+                )
+            if sha != stash_shas[0]:
+                # ``stash push --staged`` is used only for residual paths that
+                # survived the primary -u stash.  Applying that stash makes
+                # newly-added paths staged on some Git versions, even without
+                # ``--index``.  Return just those paths to their preflight
+                # untracked/unstaged state; never reset the primary stash's
+                # index because its staged changes are part of the contract.
+                residual_paths = self._run_ok(
+                    spec,
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    f"{sha}^2",
+                ).splitlines()
+                if residual_paths:
+                    unstaged = self.runner.git(
+                        spec,
+                        "reset",
+                        "--mixed",
+                        "HEAD",
+                        "--",
+                        *residual_paths,
+                    )
+                    if unstaged.returncode != 0:
+                        raise RepositorySyncError(
+                            "local_restore_failed",
+                            unstaged.stderr or unstaged.stdout or "could not restore residual index state",
+                            details={
+                                "stash_sha": sha,
+                                "stash_shas": stash_shas,
+                                "residual_paths": residual_paths[:100],
+                            },
+                        )
+
+        # Drop only the stashes created by this transaction. Resolve the
+        # current top ref each time because dropping one changes stash indexes.
+        for _sha in reversed(stash_shas):
+            current_stashes = self._run_ok(spec, "stash", "list", "--format=%H").splitlines()
+            try:
+                index = current_stashes.index(_sha)
+            except ValueError as exc:
+                raise RepositorySyncError(
+                    "local_stash_drop_failed",
+                    "restored local work but could not locate its stash for cleanup",
+                    details={"stash_sha": _sha, "available_stashes": current_stashes[:10]},
+                ) from exc
+            dropped = self.runner.git(spec, "stash", "drop", f"stash@{{{index}}}")
+            if dropped.returncode != 0:
+                raise RepositorySyncError(
+                    "local_stash_drop_failed",
+                    dropped.stderr or dropped.stdout or "could not drop restored stash",
+                    details={"stash_sha": _sha, "stash_ref": f"stash@{{{index}}}"},
+                )
+        snapshot["restored"] = True
+        snapshot["working_tree_after"] = self._dirty_summary(self._working_status(spec))
+        return snapshot
+
     def _conflict_files(self, spec: RepoSpec) -> list[str]:
         result = self.runner.git(spec, "diff", "--name-only", "--diff-filter=U", *self._scope_args(spec))
         if result.returncode != 0:
@@ -1192,7 +1391,9 @@ class RepositorySyncService:
         with ThreadPoolExecutor(max_workers=max(1, min(len(names), 6))) as executor:
             return list(executor.map(one, names))
 
-    def _production_preflight(self, spec: RepoSpec, *, fetch: bool) -> dict[str, Any]:
+    def _production_preflight(
+        self, spec: RepoSpec, *, fetch: bool, allow_dirty: bool = False
+    ) -> dict[str, Any]:
         status = self.status(
             spec.name, fetch=fetch, include_github=False, include_last_operation=False
         )
@@ -1217,7 +1418,7 @@ class RepositorySyncService:
                 "preexisting_conflict", "production contains unresolved conflicts",
                 details={"conflict_files": status.get("conflict_files")},
             )
-        if (status.get("working_tree") or {}).get("dirty"):
+        if not allow_dirty and (status.get("working_tree") or {}).get("dirty"):
             raise RepositorySyncError(
                 "production_dirty", "live source has local tracked changes; pull refused",
                 details={"working_tree": status.get("working_tree")},
@@ -1316,23 +1517,46 @@ class RepositorySyncService:
         event = self._event_base(spec, "merge_and_pull", trigger)
         event["pull_number"] = int(number)
         github_phase: dict[str, Any] | None = None
+        local_snapshot: dict[str, Any] | None = None
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
                 # Refuse known production drift before mutating GitHub. This avoids
                 # an avoidable partial success while still reporting a real partial
-                # result if the host becomes unavailable after the merge.
-                self._production_preflight(spec, fetch=True)
+                # result if the host becomes unavailable after the merge. Local
+                # work is handled transactionally below; local commits are still
+                # refused by the preflight because they cannot be fast-forwarded.
+                self._production_preflight(spec, fetch=True, allow_dirty=True)
                 pull = self.github.pull_detail(spec, int(number))
                 if pull.get("draft"):
                     raise RepositorySyncError(
                         "pull_is_draft", "draft pull request must be marked ready before merge"
                     )
+                local_snapshot = self._stash_local_changes(
+                    spec,
+                    message=(
+                        f"mission-control merge-and-pull {spec.name} "
+                        f"{number} {event['started_at']}"
+                    ),
+                )
                 github_phase = self.github.merge_pr_rebase(
                     spec, int(number), expected_head_sha=expected_head_sha
                 )
                 try:
                     production = self._pull_production_locked(spec)
                 except RepositorySyncError as exc:
+                    restore_error: RepositorySyncError | None = None
+                    if local_snapshot is not None:
+                        try:
+                            self._restore_local_changes(spec, local_snapshot)
+                        except RepositorySyncError as restore_exc:
+                            restore_error = restore_exc
+                    details = dict(exc.details)
+                    if restore_error is not None:
+                        details["local_restore"] = {
+                            "code": restore_error.code,
+                            "message": str(restore_error),
+                            "details": restore_error.details,
+                        }
                     return self._finish_event(
                         event,
                         ok=False,
@@ -1340,15 +1564,49 @@ class RepositorySyncService:
                         partial_success=True,
                         completed_phase="github_merge",
                         github=github_phase,
+                        local_changes=local_snapshot,
+                        error={"code": exc.code, "message": str(exc), "details": details},
+                    )
+                try:
+                    self._restore_local_changes(spec, local_snapshot)
+                except RepositorySyncError as exc:
+                    return self._finish_event(
+                        event,
+                        ok=False,
+                        status="partial_success",
+                        partial_success=True,
+                        completed_phase="production_pull",
+                        github=github_phase,
+                        production=production,
+                        local_changes=local_snapshot,
                         error={"code": exc.code, "message": str(exc), "details": exc.details},
                     )
                 return self._finish_event(
-                    event, ok=True, status="ok", github=github_phase, production=production
+                    event,
+                    ok=True,
+                    status="ok",
+                    github=github_phase,
+                    production=production,
+                    local_changes=local_snapshot,
                 )
         except RepositorySyncError as exc:
+            restore_error: RepositorySyncError | None = None
+            if local_snapshot is not None and not local_snapshot.get("restored"):
+                try:
+                    self._restore_local_changes(spec, local_snapshot)
+                except RepositorySyncError as restore_exc:
+                    restore_error = restore_exc
+            details = dict(exc.details)
+            if restore_error is not None:
+                details["local_restore"] = {
+                    "code": restore_error.code,
+                    "message": str(restore_error),
+                    "details": restore_error.details,
+                }
             return self._finish_event(
                 event, ok=False, status="error", github=github_phase,
-                error={"code": exc.code, "message": str(exc), "details": exc.details},
+                local_changes=local_snapshot,
+                error={"code": exc.code, "message": str(exc), "details": details},
             )
 
     # Compatibility surface for existing CLI/callers. These operations now use

@@ -66,6 +66,23 @@ Mutable dashboard data is stored outside the Git checkout:
 The default bind is loopback. LAN/Tailnet exposure requires explicit environment
 configuration, including `BIND_HOST=0.0.0.0` and an `ALLOWED_CIDRS` allowlist.
 
+## Repository merge-and-pull
+
+The Repositories tab's "Merge & Pull" action targets only the configured fork
+origin. If the live work tree has tracked or untracked local work, Mission
+Control temporarily stores it with `git stash push --include-untracked`,
+performs the GitHub rebase merge and the origin fast-forward, then restores the
+stash with `--index` so staged changes remain staged. Git can leave files inside
+broken or nested worktree directories outside the first `--include-untracked`
+stash; in that case the residual paths are staged and captured in a supplemental
+stash, then both stashes are restored and cleaned up as one transaction. Local
+commits are still refused because they cannot be fast-forwarded safely.
+
+If restoring local work conflicts with the pulled origin, the operation is
+reported as `partial_success` with `local_restore_conflict`; the stash is kept
+and its SHA is included in the operation receipt for recovery. A normal
+"Pull production" action remains fail-closed when local work is present.
+
 ## Deployment boundary
 
 This source integration does not prove that Mission Control was deployed on the Hermes

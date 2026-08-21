@@ -271,17 +271,128 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertEqual((self.work_tree / "base.txt").read_text(), "dirty\n")
         self.assertEqual(self.service.runner.git(self.spec, "stash", "list").stdout, "")
 
-    def test_merge_and_pull_blocks_known_dirty_production_before_github_merge(self):
+    def test_merge_and_pull_stashes_and_restores_local_work(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
-        (self.work_tree / "base.txt").write_text("dirty\n", encoding="utf-8")
+        (self.work_tree / "staged.txt").write_text("staged\n", encoding="utf-8")
+        self.assertEqual(
+            self.service.runner.git(self.spec, "add", "staged.txt").returncode,
+            0,
+        )
+        (self.work_tree / "unstaged.txt").write_text("unstaged\n", encoding="utf-8")
+        (self.work_tree / "untracked.txt").write_text("untracked\n", encoding="utf-8")
         github = MergeGithub()
         self.service.github = github
         result = self.service.merge_and_pull(
             "demo", 7, expected_head_sha="abc1234"
         )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(github.merge_calls, [(7, "abc1234")])
+        self.assertEqual(result["local_changes"]["stashed"], True)
+        self.assertEqual(result["local_changes"]["restored"], True)
+        self.assertEqual(
+            self.service.runner.git(self.spec, "diff", "--cached", "--name-only").stdout,
+            "staged.txt",
+        )
+        self.assertEqual((self.work_tree / "staged.txt").read_text(), "staged\n")
+        self.assertEqual((self.work_tree / "unstaged.txt").read_text(), "unstaged\n")
+        self.assertEqual((self.work_tree / "untracked.txt").read_text(), "untracked\n")
+        self.assertEqual(self.service.runner.git(self.spec, "stash", "list").stdout, "")
+
+    def test_merge_and_pull_stashes_broken_nested_worktree_residual(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        nested = self.work_tree / ".claude" / "worktrees" / "broken"
+        nested.mkdir(parents=True)
+        (nested / ".git").write_text(
+            "gitdir: /nonexistent/repository/worktree\n", encoding="utf-8"
+        )
+        (nested / "initial.txt").write_text("initial nested work\n", encoding="utf-8")
+        class ResidualRunner(RepositoryGitRunner):
+            def __init__(self):
+                super().__init__(timeout=30)
+                self.reintroduced = False
+
+            def git(self, spec, *args, timeout=None):
+                result = super().git(spec, *args, timeout=timeout)
+                if (
+                    not self.reintroduced
+                    and args[:2] == ("stash", "push")
+                    and "--include-untracked" in args
+                ):
+                    nested.mkdir(parents=True, exist_ok=True)
+                    (nested / ".git").write_text(
+                        "gitdir: /nonexistent/repository/worktree\n", encoding="utf-8"
+                    )
+                    (nested / "generated.txt").write_text(
+                        "nested local work\n", encoding="utf-8"
+                    )
+                    self.reintroduced = True
+                return result
+
+        service = RepositorySyncService(
+            {"demo": self.spec},
+            runner=ResidualRunner(),
+            store=self.service.store,
+            github=MergeGithub(),
+            timeout=30,
+        )
+
+        result = service.merge_and_pull(
+            "demo", 7, expected_head_sha="abc1234"
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["local_changes"]["stash_shas"]), 2)
+        self.assertTrue(result["local_changes"]["restored"])
+        self.assertEqual((nested / "initial.txt").read_text(), "initial nested work\n")
+        self.assertEqual((nested / "generated.txt").read_text(), "nested local work\n")
+        self.assertIn(
+            "?? .claude/worktrees/broken/generated.txt",
+            service.runner.git(
+                self.spec, "status", "--porcelain=v1", "--untracked-files=all"
+            ).stdout,
+        )
+        self.assertEqual(service.runner.git(self.spec, "stash", "list").stdout, "")
+
+    def test_merge_and_pull_restores_local_work_when_github_merge_fails(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        (self.work_tree / "base.txt").write_text("dirty\n", encoding="utf-8")
+
+        class FailingGithub(MergeGithub):
+            def merge_pr_rebase(self, *_args, **_kwargs):
+                raise RepositorySyncError("github_merge_failed", "merge rejected")
+
+        github = FailingGithub()
+        self.service.github = github
+        result = self.service.merge_and_pull(
+            "demo", 7, expected_head_sha="abc1234"
+        )
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "production_dirty")
-        self.assertEqual(github.merge_calls, [])
+        self.assertEqual(result["error"]["code"], "github_merge_failed")
+        self.assertTrue(result["local_changes"]["restored"])
+        self.assertEqual((self.work_tree / "base.txt").read_text(), "dirty\n")
+        self.assertEqual(self.service.runner.git(self.spec, "stash", "list").stdout, "")
+
+    def test_merge_and_pull_keeps_stash_when_origin_pull_conflicts_on_restore(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        (self.work_tree / "base.txt").write_text("local change\n", encoding="utf-8")
+
+        def push_conflicting_origin_change():
+            self.push("base.txt", "origin change\n", "origin conflicting update")
+
+        github = MergeGithub(callback=push_conflicting_origin_change)
+        self.service.github = github
+        result = self.service.merge_and_pull(
+            "demo", 7, expected_head_sha="abc1234"
+        )
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["partial_success"])
+        self.assertEqual(result["completed_phase"], "production_pull")
+        self.assertEqual(result["error"]["code"], "local_restore_conflict")
+        self.assertFalse(result["local_changes"]["restored"])
+        self.assertIn("base.txt", result["error"]["details"]["conflict_files"])
+        self.assertIn("mission-control merge-and-pull", self.service.runner.git(
+            self.spec, "stash", "list"
+        ).stdout)
 
     def test_merge_and_pull_reports_partial_success_if_host_drifts_after_merge(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
