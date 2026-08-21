@@ -14,11 +14,14 @@ configuration.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
 QUERY_TIMEOUT_SECONDS = 2.0
 MAX_ROWS = 200
+READ_ATTEMPTS = 3
+READ_RETRY_DELAY_SECONDS = (0.05, 0.15)
 
 _BINDINGS_SQL = """
 SELECT chat_id, task_id, room_slot, origin_session_key, origin_chat_id,
@@ -63,26 +66,22 @@ def _connect(path: Path) -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=1")
+    # A writer may briefly hold the WAL/read lock while the session-injector
+    # plugin commits a binding transition. Respect the same bounded wait as
+    # sqlite3.connect() instead of failing the monitoring overlay immediately.
+    conn.execute(f"PRAGMA busy_timeout={int(QUERY_TIMEOUT_SECONDS * 1000)}")
     return conn
 
 
-def read_live_occupancy(db_path: str | Path) -> dict[str, Any]:
-    """Return {live_occupancy, reservations, occupancy_source}.
+def _retryable_error(exc: sqlite3.Error) -> bool:
+    detail = str(exc).lower()
+    return any(
+        marker in detail
+        for marker in ("locked", "busy", "snapshot", "interrupted")
+    )
 
-    Never raises: the caller merges this into a response that must still be
-    useful when the plugin's database is busy or absent.
-    """
-    path = Path(db_path)
-    empty: dict[str, Any] = {
-        "live_occupancy": [],
-        "reservations": [],
-        "recent_bindings": [],
-        "occupancy_available": False,
-    }
-    if not path.is_file():
-        empty["occupancy_note"] = "session-injector state database not found"
-        return empty
 
+def _read_live_occupancy_once(path: Path) -> dict[str, Any]:
     conn = None
     try:
         conn = _connect(path)
@@ -106,9 +105,6 @@ def read_live_occupancy(db_path: str | Path) -> dict[str, Any]:
             recent.sort(key=lambda r: r.get("room_slot") or 0)
         except sqlite3.Error:
             recent = []
-    except sqlite3.Error as exc:
-        empty["occupancy_note"] = f"occupancy unavailable: {type(exc).__name__}"
-        return empty
     finally:
         if conn is not None:
             try:
@@ -122,3 +118,35 @@ def read_live_occupancy(db_path: str | Path) -> dict[str, Any]:
         "recent_bindings": recent,
         "occupancy_available": True,
     }
+
+
+def read_live_occupancy(db_path: str | Path) -> dict[str, Any]:
+    """Return {live_occupancy, reservations, occupancy_source}.
+
+    Never raises: the caller merges this into a response that must still be
+    useful when the plugin's database is busy or absent.
+    """
+    path = Path(db_path)
+    empty: dict[str, Any] = {
+        "live_occupancy": [],
+        "reservations": [],
+        "recent_bindings": [],
+        "occupancy_available": False,
+    }
+    if not path.is_file():
+        empty["occupancy_note"] = "session-injector state database not found"
+        return empty
+
+    last_error: sqlite3.Error | None = None
+    for attempt in range(READ_ATTEMPTS):
+        try:
+            return _read_live_occupancy_once(path)
+        except sqlite3.Error as exc:
+            last_error = exc
+            if not _retryable_error(exc) or attempt + 1 >= READ_ATTEMPTS:
+                break
+            time.sleep(READ_RETRY_DELAY_SECONDS[attempt])
+
+    detail = str(last_error).strip() if last_error else "unknown SQLite error"
+    empty["occupancy_note"] = f"occupancy unavailable: {detail}"
+    return empty

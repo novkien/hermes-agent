@@ -1,4 +1,4 @@
-"""Owner-only repository registry, PR review, merge, and production-pull routes."""
+"""Owner-only repository registry, bidirectional sync, and PR routes."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def build_repository_router(core: Any) -> APIRouter:
                     if read_only
                     else [
                         "initialize_layout",
-                        "pull_production",
+                        "sync",
                         "codex_review",
                         "mark_ready",
                         "mark_draft",
@@ -223,9 +223,21 @@ def build_repository_router(core: Any) -> APIRouter:
             return invalid
         return await run_mutation(
             request,
-            action="repository.pull_production",
+            action="repository.sync",
             target=f"/api/repositories/{repo}/pull",
-            call=lambda: service.pull_production(repo, trigger="dashboard"),
+            call=lambda: service.sync(repo, trigger="dashboard:legacy-pull"),
+        )
+
+    @router.post("/api/repositories/{repo}/sync")
+    async def sync_repository(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.sync",
+            target=f"/api/repositories/{repo}/sync",
+            call=lambda: service.sync(repo, trigger="dashboard"),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/codex-review")
@@ -288,20 +300,6 @@ def build_repository_router(core: Any) -> APIRouter:
             call=lambda: service.merge_and_pull(
                 repo, number, expected_head_sha=expected, trigger="dashboard"
             ),
-        )
-
-    # Backward-compatible routes. They use the new production-only semantics;
-    # there is no automatic commit, stash, rebase, push, or deployment copy.
-    @router.post("/api/repositories/{repo}/sync")
-    async def legacy_sync(request: Request, repo: str) -> Response:
-        invalid = known(repo, request.state.request_id)
-        if invalid:
-            return invalid
-        return await run_mutation(
-            request,
-            action="repository.pull_production",
-            target=f"/api/repositories/{repo}/sync",
-            call=lambda: service.pull_production(repo, trigger="dashboard:legacy-sync"),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/rebase-merge")

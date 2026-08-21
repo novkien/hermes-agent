@@ -32,6 +32,10 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function appendPresent(parent, ...children) {
+  parent.append(...children.filter((child) => child !== null && child !== undefined));
+}
+
 function cacheKey(profile) {
   return `repository-control:${String(profile || 'default')}`;
 }
@@ -88,10 +92,10 @@ function operationMessage(operation) {
     if (operation.action === 'merge_and_pull') {
       return `PR #${operation.pull_number} merged and production advanced to ${shortSha(operation.production?.after_sha)}.`;
     }
-    if (operation.action === 'pull_production') {
-      return operation.production?.changed
-        ? `Production advanced to ${shortSha(operation.production?.after_sha)}.`
-        : 'Production already matched the remote branch.';
+    if (operation.action === 'sync') {
+      const pushed = operation.push?.changed ? 'local commits pushed' : 'no local commits to push';
+      const pulled = operation.merge?.changed ? 'origin changes pulled' : 'no origin changes to pull';
+      return `Sync complete: ${pushed}; ${pulled}; tracked working tree clean.`;
     }
     if (operation.action === 'codex_review') return 'Codex review requested for the current PR head.';
     if (operation.action === 'initialize_layout') return 'Canonical Git directory and live source are ready.';
@@ -290,10 +294,10 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     );
   }
 
-  function pullProduction(repo) {
+  function syncRepository(repo) {
     return runAction(
-      repo, `pull:${repo.name}`,
-      `/api/repositories/${encodeURIComponent(repo.name)}/pull`,
+      repo, `sync:${repo.name}`,
+      `/api/repositories/${encodeURIComponent(repo.name)}/sync`,
     );
   }
 
@@ -348,7 +352,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         renderSide();
       },
     });
-    card.append(
+    appendPresent(card,
       el('div', { class: 'repo-card-head' }, [
         el('div', { class: 'repo-card-title-wrap' }, [
           el('div', { class: 'repo-card-title', text: repo.repo_full_name || repo.name }),
@@ -399,7 +403,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('div', { class: 'repo-card-actions' }, [
           !repo.layout?.ready
             ? button(pending ? 'Initializing…' : 'Initialize', () => initialize(repo), { primary: true, disabled: pending })
-            : button(pending ? 'Pulling…' : 'Pull production', () => pullProduction(repo), { disabled: pending }),
+            : button(pending ? 'Syncing…' : 'Sync', () => syncRepository(repo), { disabled: pending }),
         ]),
       ]),
     );
@@ -541,7 +545,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     }
     const pull = selectedPull();
     const repoOps = operations.filter((row) => row.repo === repo.name).slice(0, 12);
-    inspectorHost.append(
+    appendPresent(inspectorHost,
       el('div', { class: 'repo-side-head' }, [
         el('div', { class: 'repo-side-name', text: repo.repo_full_name || repo.name }),
         el('div', { class: 'repo-side-status' }, [
@@ -563,7 +567,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('div', { class: 'repo-side-footer-actions' }, [
           !repo.layout?.ready
             ? button('Initialize repository layout', () => initialize(repo), { primary: true })
-            : button('Pull production', () => pullProduction(repo), { primary: true }),
+            : button('Sync', () => syncRepository(repo), { primary: true }),
         ]),
       ]),
       section('Pull requests', (repo.pull_requests || []).length

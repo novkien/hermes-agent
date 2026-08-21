@@ -81,7 +81,10 @@ commits are still refused because they cannot be fast-forwarded safely.
 If restoring local work conflicts with the pulled origin, the operation is
 reported as `partial_success` with `local_restore_conflict`; the stash is kept
 and its SHA is included in the operation receipt for recovery. A normal
-"Pull production" action remains fail-closed when local work is present.
+The repository card exposes a bidirectional "Sync" action. It commits tracked
+working-tree changes, leaves untracked files alone, pushes local commits to the
+configured origin, and fast-forwards or merges origin commits into the live
+source before verifying a clean, equal local/origin state.
 
 ## Deployment boundary
 

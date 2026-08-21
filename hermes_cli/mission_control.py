@@ -110,6 +110,9 @@ def generate_systemd_unit(
             ctx.hermes_root / "hermes-plugins",
             ctx.hermes_root / "skills",
             ctx.hermes_root / "workspace" / "skills-pack",
+            # SQLite WAL readers may need to create the transient -shm sidecar
+            # even when the database itself is opened with mode=ro.
+            ctx.hermes_root / "workspace" / "state",
             ctx.hermes_root.parent / "agents",
             # The whole common Git directory: repository control keeps every
             # managed repository's bare git dir under <HERMES_HOME>/repos and

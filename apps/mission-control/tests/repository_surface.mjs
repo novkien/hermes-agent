@@ -56,7 +56,8 @@ assert.match(registry, /godot-mcp:[\s\S]*host: workstation[\s\S]*work_tree: \/ho
 
 assert.match(tab, /Review with Codex/);
 assert.match(tab, /Merge & Pull/);
-assert.match(tab, /Pull production/);
+assert.match(tab, /Sync/);
+assert.doesNotMatch(tab, /Pull production/);
 assert.match(tab, /Initialize repository layout/);
 assert.match(tab, /Codex/);
 assert.match(tab, /Selected PR evidence/);
@@ -71,6 +72,9 @@ assert.doesNotMatch(tab, /Sync all/);
 assert.doesNotMatch(tab, /Safe sync/);
 
 assert.match(servicePy, /git merge --ff-only/);
+assert.match(servicePy, /["']push["']/);
+assert.match(servicePy, /["']commit["']/);
+assert.match(servicePy, /untracked_ignored/);
 assert.match(servicePy, /--git-dir=/);
 assert.match(servicePy, /--work-tree=/);
 assert.match(servicePy, /production_dirty/);

@@ -411,16 +411,78 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "production_dirty")
         self.assertEqual(github.merge_calls, [(7, "abc1234")])
 
-    def test_legacy_sync_uses_production_pull_semantics(self):
+    def test_sync_commits_tracked_changes_pushes_and_ignores_untracked(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
-        remote = self.push("remote.txt", "remote\n", "remote update")
-        result = self.service.sync("demo", auto_commit=True, commit_message="ignored")
+        self.service.runner.git_common(
+            self.spec, "config", "user.email", "repo-control-test@example.invalid"
+        )
+        self.service.runner.git_common(
+            self.spec, "config", "user.name", "Repository Control Test"
+        )
+        (self.work_tree / "base.txt").write_text("tracked sync\n", encoding="utf-8")
+        (self.work_tree / "untracked.txt").write_text("leave me\n", encoding="utf-8")
+
+        result = self.service.sync("demo", commit_message="sync tracked work")
+
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["production"]["after_sha"], remote)
+        self.assertTrue(result["local_commit"]["committed"])
+        self.assertTrue(result["push"]["changed"])
+        self.assertTrue(result["untracked_ignored"])
+        self.assertEqual(result["after"]["ahead"], 0)
+        self.assertEqual(result["after"]["behind"], 0)
+        self.assertFalse(result["after"]["working_tree"]["dirty"])
+        self.assertTrue((self.work_tree / "untracked.txt").exists())
         self.assertEqual(
             self.service.runner.git(self.spec, "log", "-1", "--format=%s").stdout,
-            "remote update",
+            "sync tracked work",
         )
+
+    def test_sync_does_not_count_or_remove_untracked_only_work(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        (self.work_tree / "untracked.txt").write_text("leave me\n", encoding="utf-8")
+
+        result = self.service.sync("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["local_commit"]["committed"])
+        self.assertFalse(result["push"]["changed"])
+        self.assertFalse(result["after"]["working_tree"]["dirty"])
+        self.assertTrue((self.work_tree / "untracked.txt").exists())
+
+    def test_sync_pulls_origin_when_local_is_behind(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        remote = self.push("remote.txt", "remote\n", "remote update")
+
+        result = self.service.sync("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["merge"]["changed"])
+        self.assertFalse(result["push"]["changed"])
+        self.assertEqual(result["after"]["local_sha"], remote)
+        self.assertTrue((self.work_tree / "remote.txt").exists())
+
+    def test_sync_merges_origin_then_pushes_local_commits(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        self.service.runner.git_common(
+            self.spec, "config", "user.email", "repo-control-test@example.invalid"
+        )
+        self.service.runner.git_common(
+            self.spec, "config", "user.name", "Repository Control Test"
+        )
+        (self.work_tree / "local.txt").write_text("local\n", encoding="utf-8")
+        self.service.runner.git(self.spec, "add", "local.txt")
+        self.service.runner.git(self.spec, "commit", "-m", "local commit")
+        self.push("remote.txt", "remote\n", "remote commit")
+
+        result = self.service.sync("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["merge"]["changed"])
+        self.assertTrue(result["push"]["changed"])
+        self.assertEqual(result["after"]["ahead"], 0)
+        self.assertEqual(result["after"]["behind"], 0)
+        self.assertTrue((self.work_tree / "local.txt").exists())
+        self.assertTrue((self.work_tree / "remote.txt").exists())
 
 
 class UnreachableHostRunner(RepositoryGitRunner):

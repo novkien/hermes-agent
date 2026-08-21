@@ -8,10 +8,12 @@ canonical live source path consumed by Hermes or the service:
     <HERMES_HOME>/<repo-specific-live-path>
 
 There is no staging checkout, generic production-worktree layer, deployment
-copy, automatic commit, production push, or implicit PR batch merge. A pull
-request merge is a single owner-selected rebase merge followed by a clean
-fast-forward of the canonical live source tree. ``merge_and_pull`` may
-temporarily stash and restore local work around that operation.
+copy, or implicit PR batch merge. The owner-facing sync operation commits only
+tracked local work, pushes local commits, and integrates origin commits into
+the canonical live source tree. A pull request merge is a single owner-selected
+rebase merge followed by a clean fast-forward of that source tree.
+``merge_and_pull`` may temporarily stash and restore local work around that
+operation.
 """
 
 from __future__ import annotations
@@ -1609,14 +1611,185 @@ class RepositorySyncService:
                 error={"code": exc.code, "message": str(exc), "details": details},
             )
 
-    # Compatibility surface for existing CLI/callers. These operations now use
-    # the production-only semantics above and never stash/commit/push/copy.
+    def _commit_tracked_changes(
+        self, spec: RepoSpec, *, message: str
+    ) -> dict[str, Any]:
+        """Commit tracked work while deliberately leaving untracked files alone."""
+        before = self._dirty_summary(self._tracked_status(spec))
+        if not before["dirty"]:
+            return {
+                "committed": False,
+                "working_tree_before": before,
+                "untracked_ignored": True,
+            }
+
+        staged = self.runner.git(spec, "add", "-u", *self._scope_args(spec))
+        if staged.returncode != 0:
+            raise RepositorySyncError(
+                "local_commit_failed",
+                staged.stderr or staged.stdout or "could not stage tracked local changes",
+                details={"working_tree": before},
+            )
+        committed = self.runner.git(
+            spec, "commit", "--message", message, *self._scope_args(spec)
+        )
+        if committed.returncode != 0:
+            raise RepositorySyncError(
+                "local_commit_failed",
+                committed.stderr or committed.stdout or "could not commit tracked local changes",
+                details={"working_tree": before},
+            )
+        sha = self._run_ok(spec, "rev-parse", "HEAD")
+        return {
+            "committed": True,
+            "sha": sha,
+            "message": message,
+            "working_tree_before": before,
+            "untracked_ignored": True,
+        }
+
+    def _sync_identity_preflight(
+        self, spec: RepoSpec, *, fetch: bool
+    ) -> dict[str, Any]:
+        status = self.status(
+            spec.name, fetch=fetch, include_github=False, include_last_operation=False
+        )
+        if not status.get("ok"):
+            error = status.get("error") or {}
+            raise RepositorySyncError(
+                str(error.get("code") or "status_failed"),
+                str(error.get("message") or "repository status failed"),
+                details=error.get("details") or {},
+            )
+        if status.get("origin_actual") != spec.origin_url:
+            raise RepositorySyncError(
+                "origin_mismatch", "repository origin does not match the registry",
+                details={"expected": spec.origin_url, "actual": status.get("origin_actual")},
+            )
+        if status.get("current_branch") != spec.branch:
+            raise RepositorySyncError(
+                "wrong_branch",
+                f"repository is on {status.get('current_branch')!r}; expected {spec.branch!r}",
+            )
+        if status.get("conflict_files"):
+            raise RepositorySyncError(
+                "preexisting_conflict", "repository contains unresolved conflicts",
+                details={"conflict_files": status.get("conflict_files")},
+            )
+        return status
+
+    def _sync_locked(
+        self, spec: RepoSpec, *, commit_message: str | None
+    ) -> dict[str, Any]:
+        before = self._sync_identity_preflight(spec, fetch=True)
+        local_commit = self._commit_tracked_changes(
+            spec,
+            message=(
+                commit_message or f"sync: save tracked changes for {spec.name}"
+            ),
+        )
+
+        # Refresh after the local commit so a remote update that arrived while
+        # committing is included in the same sync transaction.
+        refreshed = self._sync_identity_preflight(spec, fetch=True)
+        merge: dict[str, Any] = {"changed": False}
+        if refreshed.get("ahead") and refreshed.get("behind"):
+            merged = self.runner.git(
+                spec, "merge", "--no-edit", self._origin_ref(spec),
+                timeout=max(self.timeout, 180),
+            )
+            if merged.returncode != 0:
+                conflicts = self._conflict_files(spec)
+                aborted = self.runner.git(spec, "merge", "--abort")
+                code = "sync_conflict" if conflicts else "sync_merge_failed"
+                details = {
+                    "conflict_files": conflicts,
+                    "abort_returncode": aborted.returncode,
+                }
+                raise RepositorySyncError(
+                    code,
+                    merged.stderr or merged.stdout or "could not merge origin into local commits",
+                    details=details,
+                )
+            merge = {
+                "changed": True,
+                "sha": self._run_ok(spec, "rev-parse", "HEAD"),
+            }
+        elif refreshed.get("behind"):
+            merged = self.runner.git(
+                spec, "merge", "--ff-only", self._origin_ref(spec),
+                timeout=max(self.timeout, 180),
+            )
+            if merged.returncode != 0:
+                raise RepositorySyncError(
+                    "sync_pull_failed",
+                    merged.stderr or merged.stdout or "could not fast-forward from origin",
+                    details={"returncode": merged.returncode},
+                )
+            merge = {
+                "changed": True,
+                "sha": self._run_ok(spec, "rev-parse", "HEAD"),
+            }
+
+        current = self._sync_identity_preflight(spec, fetch=False)
+        pushed = False
+        if current.get("ahead"):
+            pushed_result = self.runner.git(
+                spec,
+                "push",
+                "origin",
+                f"HEAD:refs/heads/{spec.branch}",
+                timeout=max(self.timeout, 180),
+            )
+            if pushed_result.returncode != 0:
+                raise RepositorySyncError(
+                    "sync_push_failed",
+                    pushed_result.stderr or pushed_result.stdout or "could not push local commits to origin",
+                    details={"returncode": pushed_result.returncode},
+                )
+            pushed = True
+
+        after = self._sync_identity_preflight(spec, fetch=True)
+        if (
+            after.get("ahead")
+            or after.get("behind")
+            or (after.get("working_tree") or {}).get("dirty")
+        ):
+            raise RepositorySyncError(
+                "sync_unverified",
+                "sync completed but local and origin state is not clean and equal",
+                details={"before": before, "after": after},
+            )
+        return {
+            "before": before,
+            "after": after,
+            "local_commit": local_commit,
+            "merge": merge,
+            "push": {"changed": pushed},
+            "untracked_ignored": True,
+        }
+
+    # The dashboard/CLI sync surface is intentionally bidirectional. The
+    # older pull_production helper remains private-in-practice for the PR
+    # merge transaction, which must still fast-forward a clean live source.
     def sync(
         self, name: str, *, auto_commit: bool = False, commit_message: str | None = None,
         trigger: str = "manual", wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
-        del auto_commit, commit_message
-        return self.pull_production(name, trigger=trigger, wait_seconds=wait_seconds)
+        del auto_commit
+        spec = self.spec(name)
+        event = self._event_base(spec, "sync", trigger)
+        try:
+            with self.store.lock(name, wait_seconds=wait_seconds):
+                result = self._sync_locked(spec, commit_message=commit_message)
+                return self._finish_event(event, ok=True, status="ok", **result)
+        except RepositorySyncError as exc:
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                error={"code": exc.code, "message": str(exc), "details": exc.details},
+            )
 
     def safe_sync(self, name: str, **kwargs: Any) -> dict[str, Any]:
         return self.sync(name, **kwargs)
@@ -1667,5 +1840,5 @@ class RepositorySyncService:
         script = _repo_root() / "apps" / "mission-control" / "tools" / "repo_sync.py"
         return {
             "status": f"/usr/bin/python3 {script} --all --status --json",
-            "pull": f"/usr/bin/python3 {script} --repo <repo> --sync --json",
+            "sync": f"/usr/bin/python3 {script} --repo <repo> --sync --json",
         }

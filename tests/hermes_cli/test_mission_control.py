@@ -12,6 +12,17 @@ def _context(tmp_path: Path) -> mission_control.MissionControlUnitContext:
     (app_root / "agent_mission_control").mkdir(parents=True)
     (app_root / "agent_mission_control" / "main.py").write_text("app = None\n")
     hermes_root = tmp_path / ".hermes"
+    for path in (
+        hermes_root / "mission-control",
+        hermes_root / "hermes-agent",
+        hermes_root / "hermes-plugins",
+        hermes_root / "skills",
+        hermes_root / "workspace" / "skills-pack",
+        hermes_root / "workspace" / "state",
+        hermes_root.parent / "agents",
+        hermes_root / "repos",
+    ):
+        path.mkdir(parents=True, exist_ok=True)
     return mission_control.MissionControlUnitContext(
         python_path=tmp_path / ".venv" / "bin" / "python",
         app_root=app_root,
@@ -49,8 +60,9 @@ def test_generated_unit_is_independent(monkeypatch, tmp_path: Path) -> None:
         f"{tmp_path / '.hermes' / 'hermes-plugins'} "
         f"{tmp_path / '.hermes' / 'skills'} "
         f"{tmp_path / '.hermes' / 'workspace' / 'skills-pack'} "
+        f"{tmp_path / '.hermes' / 'workspace' / 'state'} "
         f"{tmp_path / 'agents'} "
-        f"{tmp_path / '.hermes' / 'repos' / 'hermes-skills.git'}"
+        f"{tmp_path / '.hermes' / 'repos'}"
     ) in unit
 
 
