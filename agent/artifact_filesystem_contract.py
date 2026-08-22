@@ -10,19 +10,21 @@ Treat every file write as a lifecycle decision, not merely a pathname choice.
 5. Follow the project's declared build, distribution, generated-output, and cache directories. Do not reorganize a project without explicit authority.
 6. Put scratch files, downloads, debug dumps, intermediate data, generated patches, ad hoc repros, and disposable builds in a task-scoped temporary namespace, never loose in a workspace, project, repository, or system root.
 7. Namespace non-trivial temporary and retained work by scope plus task or run ID. Do not mix independent runs in one directory.
-8. Use `artifacts/` for retained machine-readable evidence, logs, manifests, collected data, checksums, and reproducibility bundles; use `reports/` for human-readable reports; use `exports/` for final consumer deliverables.
+8. Use `artifacts/` for retained machine-readable evidence, logs, manifests, collected data, and reproducibility bundles; use `reports/` for human-readable reports; use `exports/` for final consumer deliverables.
 9. Use `state/` only for mutable data required by a component to continue operating. Use `cache/` only for data that can be regenerated.
 10. Respect exact workflow destinations for remote canonical content. A remote path is not canonical merely because a tool returned it.
 11. Never infer a canonical project, repository, source tree, build root, or live runtime root from `~/.hermes/workspace/remote-data/**`, a remote/network mount, a storage-host path, or a generic memory/infrastructure inventory. Such locations are storage or transport surfaces unless the owner, exact task, active workflow, or nearest project contract explicitly names that exact remote location as canonical.
 12. A remembered workspace inventory is not project-location authority. When project placement is unresolved, use the active domain/project placement contract or preserve the result in task-scoped temporary storage instead of selecting a storage path by convention.
-13. Stage disposable work first, verify the intended output, then promote only verified material to its canonical destination.
-14. Preserve original inputs unless overwrite is explicitly authorized. Never convert an edit request into destructive replacement by default.
-15. Clean disposable temporary material after successful promotion. If residue must remain, report its exact path and retention reason.
-16. Move uncertain untracked workspace material to dated `trash/` when reversible disposal is required. Use repository/project semantics for tracked files; never move tracked source into Hermes trash.
-17. Do not change ignore files merely to hide files created by the current task. Add shared ignore rules only when they are a genuine project convention.
-18. Multi-file consumer deliverables require a containing directory and a concise manifest or README unless the active workflow defines another package contract.
-19. At completion, return exact retained paths, artifact classes, canonical project mutations, cleanup status, and any intentional residue. Never claim a file, upload, promotion, or cleanup without direct evidence.
-20. If no authoritative permanent destination exists, keep the result in the task-scoped temporary namespace and report that unresolved destination instead of inventing one."""
+13. Do not compute or request SHA, checksum, digest, or content hash merely to re-identify a local file, plan, report, evidence artifact, or runtime copy. Exact path/name plus the workflow's recorded version/generation and direct file/tool readback are sufficient. Hashing is allowed only when the owner explicitly requests it or an external security/signature/release protocol requires it.
+14. Never add a hash field, re-hash gate, or checksum tool call solely to prove that a file at an already authoritative path is still the same file. Do not spend an agent turn on checksum ceremony.
+15. Stage disposable work first, verify the intended output, then promote only verified material to its canonical destination.
+16. Preserve original inputs unless overwrite is explicitly authorized. Never convert an edit request into destructive replacement by default.
+17. Clean disposable temporary material after successful promotion. If residue must remain, report its exact path and retention reason.
+18. Move uncertain untracked workspace material to dated `trash/` when reversible disposal is required. Use repository/project semantics for tracked files; never move tracked source into Hermes trash.
+19. Do not change ignore files merely to hide files created by the current task. Add shared ignore rules only when they are a genuine project convention.
+20. Multi-file consumer deliverables require a containing directory and a concise manifest or README unless the active workflow defines another package contract.
+21. At completion, return exact retained paths, artifact classes, canonical project mutations, cleanup status, and any intentional residue. Never claim a file, upload, promotion, or cleanup without direct evidence.
+22. If no authoritative permanent destination exists, keep the result in the task-scoped temporary namespace and report that unresolved destination instead of inventing one."""
 
 
 __all__ = ["ARTIFACT_FILESYSTEM_CONTRACT"]
