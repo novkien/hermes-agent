@@ -18,6 +18,12 @@ def test_artifact_filesystem_contract_rejects_remote_storage_as_inferred_project
     assert "A remembered workspace inventory is not project-location authority" in ARTIFACT_FILESYSTEM_CONTRACT
 
 
+def test_artifact_filesystem_contract_rejects_checksum_identity_ceremony() -> None:
+    assert "Do not compute or request SHA" in ARTIFACT_FILESYSTEM_CONTRACT
+    assert "Do not spend an agent turn on checksum ceremony" in ARTIFACT_FILESYSTEM_CONTRACT
+    assert "Exact path/name" in ARTIFACT_FILESYSTEM_CONTRACT
+
+
 def test_system_prompt_injects_contract_before_active_skill() -> None:
     source = Path("agent/system_prompt.py").read_text(encoding="utf-8")
     contract_append = "stable_parts.append(ARTIFACT_FILESYSTEM_CONTRACT)"
