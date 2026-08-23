@@ -6353,6 +6353,82 @@ def block_task(
     return True
 
 
+def block_task_and_terminate(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    reason: Optional[str] = None,
+    kind: Optional[str] = None,
+    expected_run_id: Optional[int] = None,
+    signal_fn=None,
+) -> bool:
+    """Block a task from an operator surface and stop its live worker.
+
+    ``block_task`` is also called by the worker's own ``kanban_block`` tool.
+    That path must remain a passive terminal handoff: the worker is already
+    executing the tool and should be allowed to return its result cleanly.
+    Human/operator surfaces are different: changing a live task to
+    ``blocked`` must cancel the dispatcher-owned worker, otherwise the DB
+    clears ``worker_pid`` and the worker becomes invisible to every running
+    task reaper.
+
+    The block transaction commits first so the audit event is durable before
+    the process is signalled. A second event records whether termination was
+    observed, including the failure case where a worker survives SIGTERM and
+    SIGKILL.
+    """
+    row = conn.execute(
+        "SELECT status, worker_pid, claim_lock, current_run_id "
+        "FROM tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    if row is None:
+        return False
+
+    # Capture ownership before block_task clears it. Only a genuinely running
+    # task with a PID is eligible; a stale/malformed claim is left for the
+    # existing recovery paths rather than signalling an unowned PID.
+    pid = row["worker_pid"] if row["status"] == "running" else None
+    claim_lock = row["claim_lock"] if pid else None
+    run_id = row["current_run_id"] if pid else None
+
+    if not block_task(
+        conn,
+        task_id,
+        reason=reason,
+        kind=kind,
+        expected_run_id=expected_run_id,
+    ):
+        return False
+
+    if not pid:
+        return True
+
+    termination = _terminate_reclaimed_worker(
+        pid,
+        claim_lock,
+        signal_fn=signal_fn,
+    )
+    event_kind = (
+        "worker_terminated"
+        if termination.get("terminated")
+        else "worker_termination_failed"
+    )
+    with write_txn(conn):
+        _append_event(
+            conn,
+            task_id,
+            event_kind,
+            {
+                "worker_pid": int(pid),
+                "claim_lock": claim_lock,
+                "termination": termination,
+            },
+            run_id=run_id,
+        )
+    return True
+
+
 
 def redact_review_value(value: Any) -> Any:
     """Redact secrets at the domain boundary for durable review handoffs."""
