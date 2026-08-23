@@ -674,10 +674,10 @@ READ_PATH_MUTATIONS = {
     "/api/model": ("set", "set_moa"),
     "/api/config": ("save_section",),
     # Owner repository control plane (repository_routes.py). The read envelope
-    # advertises these so the Repositories tab gates its Initialize / Sync /
-    # Codex / draft / merge controls on the same list the BFF enforces.
+    # advertises these so the Repositories tab gates its Hermes Sync and
+    # GitHub-only PR controls on the same list the BFF enforces.
     "/api/repositories": ("initialize_layout", "sync", "codex_review",
-                          "mark_ready", "mark_draft", "merge_and_pull"),
+                          "mark_ready", "mark_draft", "merge_pr"),
 }
 
 ROOM_SLOT_SEAT_ROLES = ("ceo", "coder", "research", "system")

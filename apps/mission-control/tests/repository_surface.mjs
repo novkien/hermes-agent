@@ -35,18 +35,21 @@ for (const path of [
   '/api/repositories/{repo}/pulls/{number}/codex-review',
   '/api/repositories/{repo}/pulls/{number}/ready',
   '/api/repositories/{repo}/pulls/{number}/draft',
-  '/api/repositories/{repo}/pulls/{number}/merge-and-pull',
+  '/api/repositories/{repo}/pulls/{number}/merge',
 ]) {
   assert.ok(routesPy.includes(path), `missing repository API path: ${path}`);
 }
 
 for (const name of [
-  'hermes-agent', 'hermes-skills', 'hermes-plugins', 'agents',
+  'hermes', 'hermes-agent', 'hermes-skills', 'hermes-plugins', 'agents',
   'llama-proxy', '9router', 'godot-mcp',
 ]) {
   assert.match(registry, new RegExp(`^  ${name}:`, 'm'));
 }
 assert.match(registry, /git_dir: repos\/\{repository\}\.git/);
+assert.match(registry, /hermes:[\s\S]*git_dir: \.git[\s\S]*local_mode: superproject[\s\S]*sync_script: scripts\/sync\.sh/);
+assert.equal((registry.match(/local_mode: superproject/g) || []).length, 1);
+assert.equal((registry.match(/local_mode: remote_only/g) || []).length, 7);
 assert.doesNotMatch(registry, /production_worktree|worktrees\/\{repository\}\/production/);
 assert.match(registry, /hermes-skills:[\s\S]*work_tree: \.\n[\s\S]*paths:[\s\S]*- skills[\s\S]*- workspace\/skills-pack/);
 assert.match(registry, /hermes-plugins:[\s\S]*work_tree: plugins/);
@@ -56,13 +59,15 @@ assert.match(registry, /9router:[\s\S]*host: jarvis-pi[\s\S]*work_tree: \/home\/
 assert.match(registry, /godot-mcp:[\s\S]*host: workstation[\s\S]*work_tree: \/home\/novkien\/godot-mcp/);
 
 assert.match(tab, /Review with Codex/);
-assert.match(tab, /Merge & Pull/);
-assert.match(tab, /Sync/);
+assert.match(tab, /Merge PR/);
+assert.doesNotMatch(tab, /Merge & Pull/);
+assert.match(tab, /Sync Hermes/);
+assert.match(tab, /repo\.capabilities\?\.sync_local/);
+assert.match(tab, /This changes GitHub only/);
 assert.doesNotMatch(tab, /Pull production/);
 assert.match(tab, /Initialize repository layout/);
 assert.match(tab, /Codex/);
 assert.match(tab, /Selected PR evidence/);
-assert.match(tab, /Partial success/);
 assert.match(tab, /REPOSITORY_CACHE_TTL_MS = 60_000/);
 assert.match(tab, /function appendPresent\(parent, \.\.\.children\)/);
 assert.match(tab, /appendPresent\(card,/);
@@ -78,6 +83,9 @@ assert.match(servicePy, /["']commit["']/);
 assert.match(servicePy, /untracked_ignored/);
 assert.match(servicePy, /--git-dir=/);
 assert.match(servicePy, /--work-tree=/);
+assert.match(servicePy, /def _sync_superproject_locked/);
+assert.match(servicePy, /def merge_pr/);
+assert.match(servicePy, /local sync is available only on the Hermes superproject card/);
 assert.match(servicePy, /production_dirty/);
 assert.match(servicePy, /partial_success/);
 assert.match(servicePy, /"stash"[\s\S]*"push"/);

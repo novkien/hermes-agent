@@ -1,4 +1,4 @@
-"""Owner-only repository registry, bidirectional sync, and PR routes."""
+"""Owner-only repository registry, Hermes sync, and GitHub PR routes."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ REPOSITORY_MUTATIONS: tuple[str, ...] = (
     "codex_review",
     "mark_ready",
     "mark_draft",
-    "merge_and_pull",
+    "merge_pr",
 )
 
 
@@ -299,17 +299,33 @@ def build_repository_router(core: Any) -> APIRouter:
             call=lambda _parsed: service.change_draft_state(repo, number, ready=False),
         )
 
-    @router.post("/api/repositories/{repo}/pulls/{number}/merge-and-pull")
-    async def merge_and_pull(request: Request, repo: str, number: int) -> Response:
+    @router.post("/api/repositories/{repo}/pulls/{number}/merge")
+    async def merge_pr(request: Request, repo: str, number: int) -> Response:
         invalid = known(repo, request.state.request_id)
         if invalid:
             return invalid
         return await run_mutation(
             request,
-            action="repository.merge_and_pull",
-            target=f"/api/repositories/{repo}/pulls/{number}/merge-and-pull",
-            call=lambda expected: service.merge_and_pull(
+            action="repository.merge_pr",
+            target=f"/api/repositories/{repo}/pulls/{number}/merge",
+            call=lambda expected: service.merge_pr(
                 repo, number, expected_head_sha=expected, trigger="dashboard"
+            ),
+            parse_body=lambda: _parse_expected_head(request),
+        )
+
+    @router.post("/api/repositories/{repo}/pulls/{number}/merge-and-pull")
+    async def legacy_merge_and_pull(request: Request, repo: str, number: int) -> Response:
+        """Compatibility route: merge GitHub only; never pull a local child repo."""
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.merge_pr",
+            target=f"/api/repositories/{repo}/pulls/{number}/merge-and-pull",
+            call=lambda expected: service.merge_pr(
+                repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
             ),
             parse_body=lambda: _parse_expected_head(request),
         )
@@ -321,9 +337,9 @@ def build_repository_router(core: Any) -> APIRouter:
             return invalid
         return await run_mutation(
             request,
-            action="repository.merge_and_pull",
+            action="repository.merge_pr",
             target=f"/api/repositories/{repo}/pulls/{number}/rebase-merge",
-            call=lambda expected: service.merge_and_pull(
+            call=lambda expected: service.merge_pr(
                 repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
             ),
             parse_body=lambda: _parse_expected_head(request),

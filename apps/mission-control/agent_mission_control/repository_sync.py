@@ -1,19 +1,15 @@
 """Owner-only repository control for AgentOS Mission Control.
 
-The registry is the single source of truth. Every managed repository keeps Git
-metadata in one common directory on its own host and operates directly on the
-canonical live source path consumed by Hermes or the service:
+The registry is the single source of truth. A canonical-mode entry may keep a
+separate common Git directory for compatibility, but deployed configuration
+marks only the root Hermes superproject as locally managed. Every other entry
+is remote-only.
 
-    <HERMES_HOME>/repos/<repo>.git
-    <HERMES_HOME>/<repo-specific-live-path>
-
-There is no staging checkout, generic production-worktree layer, deployment
-copy, or implicit PR batch merge. The owner-facing sync operation commits only
-tracked local work, pushes local commits, and integrates origin commits into
-the canonical live source tree. A pull request merge is a single owner-selected
-rebase merge followed by a clean fast-forward of that source tree.
-``merge_and_pull`` may temporarily stash and restore local work around that
-operation.
+The registry explicitly distinguishes the one locally managed Hermes
+superproject from remote-only GitHub repositories. Remote-only cards never
+inspect or mutate a local worktree. Their PR controls act on GitHub only. The
+Hermes card delegates local convergence to the superproject's checked-in sync
+script, which owns submodule checkout and layout verification.
 """
 
 from __future__ import annotations
@@ -66,6 +62,8 @@ class RepoSpec:
     git_dir: str
     work_tree: str
     origin_url: str
+    local_mode: str = "canonical"
+    sync_script: str | None = None
     scope_paths: tuple[str, ...] = ()
     upstream_repo: str | None = None
     private: bool = True
@@ -234,6 +232,20 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
         host = hosts[host_name]
         visibility = str(raw_spec.get("visibility") or "private").strip().lower()
         work_tree = _live_path(host.hermes_home, raw_spec.get("work_tree"), repository=name)
+        local_mode = str(raw_spec.get("local_mode") or "canonical").strip().lower()
+        if local_mode not in {"canonical", "superproject", "remote_only"}:
+            raise RepositorySyncError(
+                "registry_invalid", f"unsupported local_mode for {name}: {local_mode!r}"
+            )
+        sync_script = None
+        if raw_spec.get("sync_script") is not None:
+            sync_script = _live_path(
+                host.hermes_home, raw_spec.get("sync_script"), repository=name
+            )
+        if local_mode == "superproject" and not sync_script:
+            raise RepositorySyncError(
+                "registry_invalid", f"superproject repository {name} has no sync_script"
+            )
         scope_paths = _scope_paths(raw_spec.get("paths"), repository=name)
         upstream = str(raw_spec.get("upstream") or "").strip() or None
         if upstream:
@@ -256,9 +268,13 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
             transport=host.transport,
             ssh_target=host.ssh_target,
             hermes_home=host.hermes_home,
-            git_dir=_join_home(host.hermes_home, git_template, name),
+            git_dir=_join_home(
+                host.hermes_home, str(raw_spec.get("git_dir") or git_template), name
+            ),
             work_tree=work_tree,
             origin_url=origin_url,
+            local_mode=local_mode,
+            sync_script=sync_script,
             scope_paths=scope_paths,
             upstream_repo=upstream,
             private=visibility != "public",
@@ -851,6 +867,17 @@ class RepositorySyncService:
         return result.stdout
 
     def _layout(self, spec: RepoSpec) -> dict[str, Any]:
+        if spec.local_mode == "remote_only":
+            return {
+                "ready": False,
+                "managed": False,
+                "git_dir": None,
+                "work_tree": None,
+                "git_dir_exists": False,
+                "work_tree_exists": False,
+                "bound_source": False,
+                "scope_paths": [],
+            }
         git_dir = self.runner.git_dir(spec)
         work_tree = self.runner.work_tree(spec)
         git_exists = self.runner.exists(spec, git_dir, directory=True)
@@ -861,6 +888,7 @@ class RepositorySyncService:
             bound = check.returncode == 0 and bool(check.stdout)
         return {
             "ready": bool(git_exists and work_exists and bound),
+            "managed": True,
             "git_dir": git_dir,
             "work_tree": work_tree,
             "git_dir_exists": git_exists,
@@ -1125,6 +1153,19 @@ class RepositorySyncService:
     ) -> dict[str, Any]:
         spec = self.spec(name)
         event = self._event_base(spec, "initialize_layout", trigger)
+        if spec.local_mode != "canonical":
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                error={
+                    "code": "local_layout_unmanaged",
+                    "message": (
+                        "local layout initialization is unavailable for this repository"
+                    ),
+                    "details": {"local_mode": spec.local_mode},
+                },
+            )
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
                 layout = self._layout(spec)
@@ -1290,10 +1331,24 @@ class RepositorySyncService:
             "fork": spec.is_fork, "upstream_repo": spec.upstream_repo,
             "origin_url": spec.origin_url, "layout": layout,
             "path": layout["work_tree"], "git_dir": layout["git_dir"],
+            "local_mode": spec.local_mode,
+            "capabilities": {
+                "merge_pr": True,
+                "sync_local": spec.local_mode != "remote_only",
+                "initialize_local": spec.local_mode == "canonical",
+            },
         }
         if include_last_operation:
             base["last_operation"] = self.store.last(name)
-        if not layout["ready"]:
+        if spec.local_mode == "remote_only":
+            base.update({
+                "ok": True, "state": "remote_only", "current_branch": None,
+                "local_sha": None, "remote_sha": None, "ahead": 0, "behind": 0,
+                "working_tree": self._dirty_summary(""), "conflict_files": [],
+                "last_commit_at": None, "last_commit_subject": None,
+                "origin_actual": spec.origin_url,
+            })
+        elif not layout["ready"]:
             base.update({
                 "ok": False, "state": "layout_missing", "current_branch": None,
                 "local_sha": None, "remote_sha": None, "ahead": 0, "behind": 0,
@@ -1375,6 +1430,10 @@ class RepositorySyncService:
             except Exception as exc:  # noqa: BLE001
                 spec = self.spec(name)
                 try:
+                    if spec.local_mode == "remote_only":
+                        raise RepositorySyncError(
+                            "remote_only", "local repository status is intentionally disabled"
+                        )
                     git_dir = self.runner.git_dir(spec)
                     work_tree = self.runner.work_tree(spec)
                 except Exception:  # noqa: BLE001 — an unreachable host must not break the list
@@ -1769,9 +1828,57 @@ class RepositorySyncService:
             "untracked_ignored": True,
         }
 
-    # The dashboard/CLI sync surface is intentionally bidirectional. The
-    # older pull_production helper remains private-in-practice for the PR
-    # merge transaction, which must still fast-forward a clean live source.
+    def _sync_superproject_locked(self, spec: RepoSpec) -> dict[str, Any]:
+        if not spec.sync_script:
+            raise RepositorySyncError(
+                "sync_script_missing", "superproject sync script is not configured"
+            )
+        before = self.status(
+            spec.name, fetch=False, include_github=False, include_last_operation=False
+        )
+        if not before.get("ok"):
+            error = before.get("error") or {}
+            raise RepositorySyncError(
+                str(error.get("code") or "status_failed"),
+                str(error.get("message") or "superproject status failed"),
+                details=error.get("details") or {},
+            )
+        result = self.runner.host(
+            spec, self.runner.materialize_path(spec, spec.sync_script),
+            timeout=max(self.timeout, 300),
+        )
+        if result.returncode != 0:
+            raise RepositorySyncError(
+                "superproject_sync_failed",
+                result.stderr or result.stdout or "Hermes superproject sync failed",
+                details={"returncode": result.returncode, "stdout": result.stdout},
+            )
+        after = self.status(
+            spec.name, fetch=False, include_github=False, include_last_operation=False
+        )
+        if (
+            not after.get("ok")
+            or after.get("ahead")
+            or after.get("behind")
+            or (after.get("working_tree") or {}).get("dirty")
+        ):
+            raise RepositorySyncError(
+                "superproject_sync_unverified",
+                "Hermes sync finished but the superproject is not clean and equal to origin",
+                details={"before": before, "after": after, "stdout": result.stdout},
+            )
+        return {
+            "before": before,
+            "after": after,
+            "sync_script": spec.sync_script,
+            "script": {
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "duration_ms": result.duration_ms,
+            },
+        }
+
     def sync(
         self, name: str, *, auto_commit: bool = False, commit_message: str | None = None,
         trigger: str = "manual", wait_seconds: float = 0.0,
@@ -1780,8 +1887,18 @@ class RepositorySyncService:
         spec = self.spec(name)
         event = self._event_base(spec, "sync", trigger)
         try:
+            if spec.local_mode == "remote_only":
+                raise RepositorySyncError(
+                    "remote_only",
+                    "local sync is available only on the Hermes superproject card",
+                    details={"local_mode": spec.local_mode},
+                )
             with self.store.lock(name, wait_seconds=wait_seconds):
-                result = self._sync_locked(spec, commit_message=commit_message)
+                result = (
+                    self._sync_superproject_locked(spec)
+                    if spec.local_mode == "superproject"
+                    else self._sync_locked(spec, commit_message=commit_message)
+                )
                 return self._finish_event(event, ok=True, status="ok", **result)
         except RepositorySyncError as exc:
             return self._finish_event(
@@ -1810,23 +1927,37 @@ class RepositorySyncService:
         self, name: str, number: int, *, expected_head_sha: str | None = None,
         trigger: str = "manual", pull_after: bool = True, auto_commit: bool = False,
     ) -> dict[str, Any]:
-        del auto_commit
-        if not pull_after:
-            spec = self.spec(name)
-            event = self._event_base(spec, "rebase_merge_pr", trigger)
-            try:
+        del auto_commit, pull_after
+        return self.merge_pr(
+            name, int(number), expected_head_sha=expected_head_sha, trigger=trigger
+        )
+
+    def merge_pr(
+        self, name: str, number: int, *, expected_head_sha: str | None = None,
+        trigger: str = "manual", wait_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Rebase-merge one GitHub PR without reading or mutating local Git."""
+        spec = self.spec(name)
+        event = self._event_base(spec, "merge_pr", trigger)
+        event["pull_number"] = int(number)
+        try:
+            with self.store.lock(name, wait_seconds=wait_seconds):
+                pull = self.github.pull_detail(spec, int(number))
+                if pull.get("draft"):
+                    raise RepositorySyncError(
+                        "pull_is_draft", "draft pull request must be marked ready before merge"
+                    )
                 github = self.github.merge_pr_rebase(
                     spec, int(number), expected_head_sha=expected_head_sha
                 )
-                return self._finish_event(event, ok=True, status="ok", github=github)
-            except RepositorySyncError as exc:
                 return self._finish_event(
-                    event, ok=False, status="error",
-                    error={"code": exc.code, "message": str(exc), "details": exc.details},
+                    event, ok=True, status="ok", github=github, local_mutation=False
                 )
-        return self.merge_and_pull(
-            name, int(number), expected_head_sha=expected_head_sha, trigger=trigger
-        )
+        except RepositorySyncError as exc:
+            return self._finish_event(
+                event, ok=False, status="error", local_mutation=False,
+                error={"code": exc.code, "message": str(exc), "details": exc.details},
+            )
 
     def sync_upstream(self, name: str, **_: Any) -> dict[str, Any]:
         spec = self.spec(name)

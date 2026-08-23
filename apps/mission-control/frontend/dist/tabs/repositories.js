@@ -17,6 +17,7 @@ const REPOSITORY_CACHE_TTL_MS = 60_000;
 const REPOSITORIES_CACHE = new Map();
 const REPO_TONES = Object.freeze({
   synced: 'ok', layout_missing: 'warn', behind: 'warn', dirty: 'warn',
+  remote_only: 'info',
   ahead: 'danger', diverged: 'danger', conflict: 'danger',
   origin_mismatch: 'danger', wrong_branch: 'danger',
   error: 'danger',
@@ -31,7 +32,7 @@ const CODEX_TONES = Object.freeze({
 // action buttons on it instead of guessing from the route table.
 const REPOSITORY_MUTATIONS = Object.freeze([
   'initialize_layout', 'sync', 'codex_review',
-  'mark_ready', 'mark_draft', 'merge_and_pull',
+  'mark_ready', 'mark_draft', 'merge_pr',
 ]);
 
 function clone(value) {
@@ -119,13 +120,11 @@ function operationFailure(operation) {
 function operationMessage(operation) {
   if (!operation) return null;
   if (operation.ok) {
-    if (operation.action === 'merge_and_pull') {
-      return `PR #${operation.pull_number} merged and production advanced to ${shortSha(operation.production?.after_sha)}.`;
+    if (operation.action === 'merge_pr') {
+      return `PR #${operation.pull_number} merged on GitHub. Local source was not changed.`;
     }
     if (operation.action === 'sync') {
-      const pushed = operation.push?.changed ? 'local commits pushed' : 'no local commits to push';
-      const pulled = operation.merge?.changed ? 'origin changes pulled' : 'no origin changes to pull';
-      return `Sync complete: ${pushed}; ${pulled}; tracked working tree clean.`;
+      return `Hermes superproject sync complete at ${shortSha(operation.after?.local_sha)}; submodule pins and layout verified.`;
     }
     if (operation.action === 'codex_review') return 'Codex review requested for the current PR head.';
     if (operation.action === 'initialize_layout') return 'Canonical Git directory and live source are ready.';
@@ -376,25 +375,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
 
   function syncRepository(repo) {
     if (!canMutate('sync')) return;
-    // Sync is bidirectional: it can commit tracked local work, merge a
-    // diverged origin, and push to the shared branch. Say so before doing it;
-    // a clean fast-forward stays confirm-free.
-    const effects = [];
-    if ((repo.ahead || 0) > 0 && (repo.behind || 0) > 0) {
-      effects.push(`local history diverged from origin — syncing creates a merge commit on ${repo.branch}`);
-    }
-    if (repo.working_tree?.dirty) {
-      effects.push(`${repo.working_tree.entries} tracked local change(s) will be committed`);
-    }
-    if ((repo.ahead || 0) > 0) {
-      effects.push(`${repo.ahead} local commit(s) will be pushed to ${repo.repo_full_name || repo.name}`);
-    }
-    if (effects.length) {
-      const confirmed = window.confirm(
-        `Sync ${repo.repo_full_name || repo.name} (${repo.host}):\n\n- ${effects.join('\n- ')}\n\nContinue?`,
-      );
-      if (!confirmed) return;
-    }
+    if (!repo.capabilities?.sync_local) return;
     return runAction(
       repo, `sync:${repo.name}`,
       `/api/repositories/${encodeURIComponent(repo.name)}/sync`,
@@ -418,28 +399,24 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     );
   }
 
-  function mergeAndPull(repo, pull) {
-    if (!canMutate('merge_and_pull')) return;
-    const workTree = repo.layout?.work_tree || repo.path || 'canonical live source';
+  function mergePr(repo, pull) {
+    if (!canMutate('merge_pr')) return;
     // CI and Codex state sit right next to this button; an owner can still
     // override them, but the confirmation must show what is being overridden.
     const evidence = [
       `CI: ${checkSummary(pull)}`,
       `Codex: ${codexSummary(pull)}`,
     ];
-    if (repo.working_tree?.dirty) {
-      evidence.push('Production working tree has local changes — they will be stashed and restored.');
-    }
     if (pull.mergeable !== true) {
       evidence.push('GitHub has not confirmed the PR as mergeable yet.');
     }
     const confirmed = window.confirm(
-      `Rebase-merge PR #${pull.number} into ${repo.branch}, then fast-forward production on ${repo.host}:\n\n${workTree}\n\n${evidence.join('\n')}\n\nContinue?`,
+      `Rebase-merge PR #${pull.number} into ${repo.repo_full_name || repo.name}:${repo.branch}.\n\n${evidence.join('\n')}\n\nThis changes GitHub only. To update Jarvis, merge the matching gitlink PR in novkien/hermes and use Sync on the Hermes card.\n\nContinue?`,
     );
     if (!confirmed) return;
     return runAction(
       repo, `merge:${repo.name}:${pull.number}`,
-      `/api/repositories/${encodeURIComponent(repo.name)}/pulls/${pull.number}/merge-and-pull`,
+      `/api/repositories/${encodeURIComponent(repo.name)}/pulls/${pull.number}/merge`,
       { expected_head_sha: pull.head_sha },
     );
   }
@@ -486,23 +463,25 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         statusChip(REPO_TONES[repo.state] || 'idle', label(repo.state)),
         el('span', {
           class: 'repo-card-state-note',
-          text: repo.layout?.ready
+          text: repo.local_mode === 'remote_only'
+            ? 'GitHub PR control only · no local Git retained'
+            : repo.layout?.ready
             ? `${repo.ahead || 0} ahead · ${repo.behind || 0} behind`
             : 'Canonical live source not initialized',
         }),
       ]),
       el('div', { class: 'repo-card-facts' }, [
         el('div', { class: 'repo-fact' }, [
-          el('span', { text: 'Live source' }),
-          el('code', { text: repo.layout?.work_tree || '—' }),
+          el('span', { text: 'Local behavior' }),
+          el('code', { text: repo.local_mode === 'superproject' ? 'Hermes superproject sync' : 'Remote only' }),
         ]),
         el('div', { class: 'repo-fact' }, [
-          el('span', { text: 'Git common dir' }),
-          el('code', { text: repo.layout?.git_dir || '—' }),
+          el('span', { text: 'Local source' }),
+          el('code', { text: repo.layout?.work_tree || 'Not retained locally' }),
         ]),
         el('div', { class: 'repo-fact' }, [
-          el('span', { text: 'Local / remote' }),
-          el('code', { text: `${shortSha(repo.local_sha)} / ${shortSha(repo.remote_sha)}` }),
+          el('span', { text: 'Git action' }),
+          el('code', { text: repo.local_mode === 'remote_only' ? 'PR merge on GitHub' : `${shortSha(repo.local_sha)} / ${shortSha(repo.remote_sha)}` }),
         ]),
         el('div', { class: 'repo-fact' }, [
           el('span', { text: 'Pull requests' }),
@@ -516,15 +495,15 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       el('div', { class: 'repo-card-foot' }, [
         el('span', { class: 'repo-pr-summary', text: `${fmtWhen(repo.last_commit_at)} · ${repo.last_commit_subject || 'No commit data'}` }),
         el('div', { class: 'repo-card-actions' }, [
-          !repo.layout?.ready
+          repo.capabilities?.initialize_local && !repo.layout?.ready
             ? button(pending ? 'Initializing…' : 'Initialize', () => initialize(repo), {
               primary: true, disabled: pending || !canMutate('initialize_layout'),
               title: mutationGateTitle('initialize_layout', 'Initialize'),
             })
-            : button(pending ? 'Syncing…' : 'Sync', () => syncRepository(repo), {
+            : repo.capabilities?.sync_local ? button(pending ? 'Syncing…' : 'Sync Hermes', () => syncRepository(repo), {
               disabled: pending || !canMutate('sync'),
-              title: mutationGateTitle('sync', 'Sync'),
-            }),
+              title: mutationGateTitle('sync', 'Sync Hermes superproject'),
+            }) : el('span', { class: 'repo-pr-summary', text: 'No local sync' }),
         ]),
       ]),
     );
@@ -570,7 +549,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('h1', { class: 'repo-title', text: 'Repository Control' }),
         el('p', {
           class: 'repo-subtitle',
-          text: 'Owner control for registry repositories: PR checks, Codex review, rebase merge, and direct production fast-forward.',
+          text: 'GitHub PR control for every repo; local convergence only through the Hermes superproject.',
         }),
       ]),
       el('div', { class: 'repo-monitor-state' }, [
@@ -667,11 +646,11 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
             disabled: busy || !canMutate('mark_draft'),
             title: mutationGateTitle('mark_draft', 'Convert to draft'),
           }),
-        button('Merge & Pull', () => mergeAndPull(repo, pull), {
+        button('Merge PR', () => mergePr(repo, pull), {
           primary: true,
-          disabled: busy || pull.draft || pull.mergeable === false || !repo.layout?.ready
-            || !canMutate('merge_and_pull'),
-          title: mutationGateTitle('merge_and_pull', 'Merge & Pull'),
+          disabled: busy || pull.draft || pull.mergeable === false
+            || !canMutate('merge_pr'),
+          title: mutationGateTitle('merge_pr', 'Merge PR on GitHub only'),
         }),
       ]),
     ]);
@@ -693,32 +672,38 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('div', { class: 'repo-side-name', text: repo.repo_full_name || repo.name }),
         el('div', { class: 'repo-side-status' }, [
           statusChip(REPO_TONES[repo.state] || 'idle', label(repo.state)),
-          statusChip(repo.layout?.ready ? 'ok' : 'warn', repo.layout?.ready ? 'production ready' : 'layout missing'),
+          statusChip(
+            repo.local_mode === 'remote_only' ? 'info' : repo.layout?.ready ? 'ok' : 'warn',
+            repo.local_mode === 'remote_only'
+              ? 'GitHub only'
+              : repo.layout?.ready ? 'superproject ready' : 'layout missing',
+          ),
         ]),
       ]),
-      section('Canonical layout', [
+      section(repo.local_mode === 'remote_only' ? 'Repository scope' : 'Hermes superproject', [
         kv('Host', repo.host),
         kv('Branch', repo.branch, { mono: true }),
         kv('Origin', repo.origin_actual || repo.origin_url, { mono: true }),
-        kv('Git dir', repo.layout?.git_dir, { mono: true }),
-        kv('Live source', repo.layout?.work_tree, { mono: true }),
-        kv('Local SHA', shortSha(repo.local_sha), { mono: true }),
-        kv('Remote SHA', shortSha(repo.remote_sha), { mono: true }),
-        kv('Working tree', repo.working_tree?.dirty ? 'DIRTY' : 'Clean', {
+        kv('Local mode', repo.local_mode === 'remote_only' ? 'No local Git; PR actions only' : 'Superproject sync', { mono: true }),
+        repo.local_mode !== 'remote_only' ? kv('Git dir', repo.layout?.git_dir, { mono: true }) : null,
+        repo.local_mode !== 'remote_only' ? kv('Live source', repo.layout?.work_tree, { mono: true }) : null,
+        repo.local_mode !== 'remote_only' ? kv('Local SHA', shortSha(repo.local_sha), { mono: true }) : null,
+        repo.local_mode !== 'remote_only' ? kv('Remote SHA', shortSha(repo.remote_sha), { mono: true }) : null,
+        repo.local_mode !== 'remote_only' ? kv('Working tree', repo.working_tree?.dirty ? 'DIRTY' : 'Clean', {
           tone: repo.working_tree?.dirty ? 'is-danger' : 'is-ok',
-        }),
+        }) : null,
         el('div', { class: 'repo-side-footer-actions' }, [
-          !repo.layout?.ready
+          repo.capabilities?.initialize_local && !repo.layout?.ready
             ? button('Initialize repository layout', () => initialize(repo), {
               primary: true,
               disabled: !canMutate('initialize_layout'),
               title: mutationGateTitle('initialize_layout', 'Initialize repository layout'),
             })
-            : button('Sync', () => syncRepository(repo), {
+            : repo.capabilities?.sync_local ? button('Sync Hermes', () => syncRepository(repo), {
               primary: true,
               disabled: !canMutate('sync'),
-              title: mutationGateTitle('sync', 'Sync'),
-            }),
+              title: mutationGateTitle('sync', 'Sync Hermes superproject'),
+            }) : el('span', { class: 'repo-side-empty', text: 'Local sync is intentionally unavailable for this card.' }),
         ]),
       ]),
       section('Pull requests', (repo.pull_requests || []).length
