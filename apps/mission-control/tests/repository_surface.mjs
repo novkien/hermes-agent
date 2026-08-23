@@ -18,6 +18,7 @@ const css = readFileSync(join(DIST, 'repositories.css'), 'utf8');
 const appPy = readFileSync(join(APP, 'app.py'), 'utf8');
 const routesPy = readFileSync(join(APP, 'repository_routes.py'), 'utf8');
 const servicePy = readFileSync(join(APP, 'repository_sync.py'), 'utf8');
+const coreRoutesPy = readFileSync(join(APP, 'routes.py'), 'utf8');
 const registry = readFileSync(join(CONFIG, 'repositories.yaml'), 'utf8');
 
 assert.match(routeRegistry, /repositories:\s*route\('repositories', 'Repositories'/);
@@ -89,6 +90,18 @@ assert.doesNotMatch(servicePy, /shutil\.copy/);
 assert.doesNotMatch(servicePy, /deployment_root/);
 assert.doesNotMatch(servicePy, /path_candidates/);
 assert.doesNotMatch(servicePy, /worktrees\/<repo>|worktrees\/\{repository\}\/production/);
+
+// Repair round: live-resync refresh, distinct partial-success receipts,
+// capability gating, exact busy-key matching, guard-before-body parsing.
+assert.match(tab, /resyncResource\('repositories', profile, \{ force: true \}\)/);
+assert.match(tab, /completed_phase === 'production_pull'/);
+assert.match(tab, /function canMutate\(/);
+assert.match(tab, /function keyMatches\(/);
+assert.match(tab, /function unionProjectedRows\(/);
+assert.doesNotMatch(tab, /mergeProjectedRows/);
+assert.match(routesPy, /REPOSITORY_MUTATIONS/);
+assert.match(routesPy, /parse_body=lambda: _parse_expected_head\(request\)/);
+assert.match(coreRoutesPy, /"\/api\/repositories": \("initialize_layout", "sync", "codex_review",/);
 
 assert.match(css, /\.repo-grid/);
 assert.match(css, /\.repo-pr-control/);

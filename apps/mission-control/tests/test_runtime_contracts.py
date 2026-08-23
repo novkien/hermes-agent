@@ -26,6 +26,7 @@ from agent_mission_control.data_backend import (  # noqa: E402
     DataBackendError,
 )
 from agent_mission_control.routes import (  # noqa: E402
+    ApiError,
     CONFIG_WRITE_ALLOW_TREE,
     GATEWAY_READ_PATHS,
     MUTATION_ALLOWLIST,
@@ -2266,7 +2267,166 @@ async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> Non
     assert len(required) >= 25 and {"health", "capabilities", "room_binding"} <= required
 
 
+def test_repository_surface_advertises_owner_mutations() -> None:
+    """The Repositories tab gates its buttons on meta.mutations_supported, so
+    the READ_PATH_MUTATIONS entry and the write envelope's vocabulary must be
+    the exact same list (repository_routes.REPOSITORY_MUTATIONS)."""
+    from agent_mission_control.repository_routes import REPOSITORY_MUTATIONS
+
+    advertised = READ_PATH_MUTATIONS.get("/api/repositories")
+    assert advertised, "/api/repositories must advertise its owner mutations"
+    assert tuple(advertised) == REPOSITORY_MUTATIONS
+
+
+async def test_repository_mutations_guard_before_body_and_audit() -> None:
+    """Owner repository writes follow the documented chain: session/CSRF/
+    Origin guard first, then body parsing (400 without touching the ledger),
+    then audit pending BEFORE the git/GitHub call and audit completion after.
+    The GET read advertises the same mutation vocabulary with read_only=False,
+    matching every other mutation-capable read surface."""
+    from unittest.mock import patch
+
+    from agent_mission_control.repository_routes import (
+        REPOSITORY_MUTATIONS,
+        build_repository_router,
+    )
+    import agent_mission_control.repository_routes as repository_routes_module
+
+    order: list[str] = []
+    service_calls: list[dict] = []
+
+    class _AuditStore:
+        def append_audit(self, **kw):
+            order.append(f"audit:{kw['result']}")
+
+        def recent(self, repo=None, limit=30):
+            return []
+
+    class _FakeService:
+        registry = {"repo-a": object()}
+        store = _AuditStore()
+
+        def merge_and_pull(self, name, number, *, expected_head_sha=None, trigger=""):
+            service_calls.append({"expected": expected_head_sha})
+            order.append("upstream:merge_and_pull")
+            return {"ok": True, "repo": name}
+
+        def status_all(self, *, fetch=True, include_github=True):
+            return []
+
+        def automation_commands(self):
+            return {}
+
+    class _Bus:
+        async def safe_publish(self, event_type, *_args, **_kw):
+            order.append(f"publish:{event_type}")
+
+    def _envelope(data, *, source_id, profile_id, freshness, request_id,
+                  read_only=True, mutations_supported=None):
+        return {
+            "data": data,
+            "meta": {
+                "source_id": source_id, "profile_id": profile_id,
+                "freshness": freshness, "read_only": read_only,
+                "mutations_supported": list(mutations_supported or []),
+                "request_id": request_id,
+            },
+        }
+
+    core = type("Core", (), {})()
+    guard_calls: list[int] = []
+    core._guard_mutation = lambda request: (guard_calls.append(1), {"id": "sess"})[1]
+    core._request_profile = lambda request: "default"
+    core._envelope = _envelope
+    core.store = _AuditStore()
+    core.event_bus = _Bus()
+    core._record_audit_result = lambda rid, status, result: order.append(f"result:{result}")
+
+    with patch.object(repository_routes_module, "RepositorySyncService", lambda **_kw: _FakeService()), \
+         patch.object(repository_routes_module, "RepositoryGitRunner", lambda: object()):
+        router = build_repository_router(core)
+
+    def endpoint_for(path: str, method: str):
+        for route in router.routes:
+            if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+                return route.endpoint
+        raise AssertionError(f"missing {method} {path}")
+
+    merge_path = "/api/repositories/{repo}/pulls/{number}/merge-and-pull"
+    merge = endpoint_for(merge_path, "POST")
+
+    def post_request(body: bytes):
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "POST",
+            "scheme": "http",
+            "path": "/api/repositories/repo-a/pulls/5/merge-and-pull",
+            "raw_path": b"/api/repositories/repo-a/pulls/5/merge-and-pull",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver", 80),
+            "state": {},
+        })
+        request.state.request_id = "rid-repo"
+        request._body = body
+        return request
+
+    # 1. The guard runs before anything else — even a malformed body cannot
+    #    skip past session/CSRF validation to a 400 of its own choosing.
+    core._guard_mutation = lambda request: (_ for _ in ()).throw(
+        ApiError(403, "csrf_missing", "CSRF token missing"))
+    try:
+        await merge(post_request(b"{not-json"), "repo-a", 5)
+        raise AssertionError("guard did not reject the request")
+    except ApiError as exc:
+        assert exc.status == 403 and exc.code == "csrf_missing"
+    assert service_calls == [] and order == [], \
+        f"a rejected request must leave no ledger row and no upstream call: {order}"
+
+    # 2. Guard passes, body is valid JSON but not an object: 400 before any
+    #    audit write or upstream call. (Malformed JSON stays a lenient {},
+    #    matching the long-standing _body() behaviour.)
+    core._guard_mutation = lambda request: (guard_calls.append(1), {"id": "sess"})[1]
+    response = await merge(post_request(b'["not-an-object"]'), "repo-a", 5)
+    assert response.status_code == 400
+    payload = response_json(response)
+    assert payload["error"]["code"] == "invalid_body"
+    assert order == [] and service_calls == [], \
+        "invalid body must precede both the pending audit write and the upstream"
+
+    # 3. Valid request: audit pending BEFORE the call, completion + publish
+    #    after; the parsed expected_head_sha reaches the service untouched.
+    sha = "abcdef0123456"
+    response = await merge(
+        post_request(json.dumps({"expected_head_sha": sha}).encode("utf-8")),
+        "repo-a", 5,
+    )
+    assert response.status_code == 200
+    body = response_json(response)
+    assert body["data"]["ok"] is True
+    assert body["meta"]["mutations_supported"] == list(REPOSITORY_MUTATIONS)
+    assert body["meta"]["read_only"] is False
+    assert order == [
+        "audit:pending",
+        "upstream:merge_and_pull",
+        "result:ok",
+        "publish:repository.changed",
+    ], f"mutation chain out of order: {order}"
+    assert service_calls == [{"expected": sha}]
+
+    # 4. The read advertises exactly what the writes accept, read_only=False
+    #    per the house convention for mutation-capable reads.
+    get_listing = endpoint_for("/api/repositories", "GET")
+    request = make_request("refresh=0&github=0")
+    read_response = await get_listing(request)
+    read_body = response_json(read_response)
+    assert read_body["meta"]["mutations_supported"] == list(REPOSITORY_MUTATIONS)
+    assert read_body["meta"]["read_only"] is False
+
+
 async def main() -> None:
+    test_repository_surface_advertises_owner_mutations()
+    await test_repository_mutations_guard_before_body_and_audit()
     await test_kanban_worker_context_uses_canonical_seed_only()
     from core_contract_cases import run_all as run_core_contract_cases
 

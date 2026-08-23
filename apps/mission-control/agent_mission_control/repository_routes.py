@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
@@ -53,6 +53,24 @@ def _head_sha(body: dict[str, Any]) -> str | None:
     return text
 
 
+async def _parse_expected_head(request: Request) -> str | None:
+    return _head_sha(await _body(request))
+
+
+# The one owner-mutation vocabulary for this surface. It feeds the write
+# envelope's meta.mutations_supported and must stay equal to the
+# READ_PATH_MUTATIONS["/api/repositories"] entry in routes.py so the SPA's
+# action gating and the BFF's capability contract cannot drift.
+REPOSITORY_MUTATIONS: tuple[str, ...] = (
+    "initialize_layout",
+    "sync",
+    "codex_review",
+    "mark_ready",
+    "mark_draft",
+    "merge_and_pull",
+)
+
+
 def build_repository_router(core: Any) -> APIRouter:
     """Compose the registry-driven owner repository control plane."""
 
@@ -60,7 +78,11 @@ def build_repository_router(core: Any) -> APIRouter:
     service = RepositorySyncService(runner=RepositoryGitRunner())
     core.repository_service = service
 
-    def envelope(data: Any, request: Request, *, read_only: bool) -> JSONResponse:
+    def envelope(data: Any, request: Request) -> JSONResponse:
+        # House convention (routes.proxy_dashboard_read): every envelope on a
+        # mutation-capable surface advertises the write vocabulary with
+        # read_only=False — including reads — so the SPA gates its controls on
+        # what this BFF actually accepts instead of guessing.
         return JSONResponse(
             core._envelope(  # noqa: SLF001
                 data,
@@ -68,19 +90,8 @@ def build_repository_router(core: Any) -> APIRouter:
                 profile_id=core._request_profile(request),  # noqa: SLF001
                 freshness="live",
                 request_id=request.state.request_id,
-                read_only=read_only,
-                mutations_supported=(
-                    []
-                    if read_only
-                    else [
-                        "initialize_layout",
-                        "sync",
-                        "codex_review",
-                        "mark_ready",
-                        "mark_draft",
-                        "merge_and_pull",
-                    ]
-                ),
+                read_only=False,
+                mutations_supported=list(REPOSITORY_MUTATIONS),
             )
         )
 
@@ -89,10 +100,21 @@ def build_repository_router(core: Any) -> APIRouter:
         *,
         action: str,
         target: str,
-        call: Callable[[], dict[str, Any]],
+        call: Callable[[Any], dict[str, Any]],
+        parse_body: Callable[[], Awaitable[Any]] | None = None,
     ) -> Response:
         rid = request.state.request_id
         core._guard_mutation(request)  # noqa: SLF001
+        # Body parsing runs after the guard and before the audit write, so a
+        # malformed request is rejected in the documented chain order — it can
+        # never reach the ledger or the upstream call ahead of the session,
+        # CSRF and Origin/Host checks.
+        parsed: Any = None
+        if parse_body is not None:
+            try:
+                parsed = await parse_body()
+            except RepositorySyncError as exc:
+                return _json_error(400, exc.code, str(exc), rid, details=exc.details)
         profile_id = core._request_profile(request)  # noqa: SLF001
         try:
             core.store.append_audit(
@@ -113,7 +135,7 @@ def build_repository_router(core: Any) -> APIRouter:
             )
 
         try:
-            result = await asyncio.to_thread(call)
+            result = await asyncio.to_thread(call, parsed)
         except RepositorySyncError as exc:
             core._record_audit_result(rid, 409, f"error:{exc.code}")  # noqa: SLF001
             return _json_error(409, exc.code, str(exc), rid, details=exc.details)
@@ -146,7 +168,7 @@ def build_repository_router(core: Any) -> APIRouter:
         )
         # Operational errors and partial success need the full phase receipt in
         # the browser, so they remain a successful HTTP envelope.
-        return envelope(result, request, read_only=False)
+        return envelope(result, request)
 
     def known(repo: str, rid: str) -> JSONResponse | None:
         if repo in service.registry:
@@ -171,7 +193,6 @@ def build_repository_router(core: Any) -> APIRouter:
                 "recent_operations": service.store.recent(limit=50),
             },
             request,
-            read_only=True,
         )
 
     @router.get("/api/repositories/{repo}")
@@ -190,7 +211,6 @@ def build_repository_router(core: Any) -> APIRouter:
                 "automation": service.automation_commands(),
             },
             request,
-            read_only=True,
         )
 
     @router.get("/api/repositories/{repo}/operations")
@@ -202,7 +222,7 @@ def build_repository_router(core: Any) -> APIRouter:
             limit = max(1, min(int(request.query_params.get("limit", "100")), 200))
         except ValueError:
             return _json_error(400, "invalid_query", "limit must be an integer", request.state.request_id)
-        return envelope({"operations": service.store.recent(repo, limit)}, request, read_only=True)
+        return envelope({"operations": service.store.recent(repo, limit)}, request)
 
     @router.post("/api/repositories/{repo}/initialize")
     async def initialize_repository(request: Request, repo: str) -> Response:
@@ -213,7 +233,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.initialize_layout",
             target=f"/api/repositories/{repo}/initialize",
-            call=lambda: service.initialize_layout(repo, trigger="dashboard"),
+            call=lambda _parsed: service.initialize_layout(repo, trigger="dashboard"),
         )
 
     @router.post("/api/repositories/{repo}/pull")
@@ -225,7 +245,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.sync",
             target=f"/api/repositories/{repo}/pull",
-            call=lambda: service.sync(repo, trigger="dashboard:legacy-pull"),
+            call=lambda _parsed: service.sync(repo, trigger="dashboard:legacy-pull"),
         )
 
     @router.post("/api/repositories/{repo}/sync")
@@ -237,7 +257,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.sync",
             target=f"/api/repositories/{repo}/sync",
-            call=lambda: service.sync(repo, trigger="dashboard"),
+            call=lambda _parsed: service.sync(repo, trigger="dashboard"),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/codex-review")
@@ -245,18 +265,14 @@ def build_repository_router(core: Any) -> APIRouter:
         invalid = known(repo, request.state.request_id)
         if invalid:
             return invalid
-        try:
-            body = await _body(request)
-            expected = _head_sha(body)
-        except RepositorySyncError as exc:
-            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
         return await run_mutation(
             request,
             action="repository.codex_review",
             target=f"/api/repositories/{repo}/pulls/{number}/codex-review",
-            call=lambda: service.request_codex_review(
+            call=lambda expected: service.request_codex_review(
                 repo, number, expected_head_sha=expected, trigger="dashboard"
             ),
+            parse_body=lambda: _parse_expected_head(request),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/ready")
@@ -268,7 +284,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.mark_ready",
             target=f"/api/repositories/{repo}/pulls/{number}/ready",
-            call=lambda: service.change_draft_state(repo, number, ready=True),
+            call=lambda _parsed: service.change_draft_state(repo, number, ready=True),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/draft")
@@ -280,7 +296,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.mark_draft",
             target=f"/api/repositories/{repo}/pulls/{number}/draft",
-            call=lambda: service.change_draft_state(repo, number, ready=False),
+            call=lambda _parsed: service.change_draft_state(repo, number, ready=False),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/merge-and-pull")
@@ -288,18 +304,14 @@ def build_repository_router(core: Any) -> APIRouter:
         invalid = known(repo, request.state.request_id)
         if invalid:
             return invalid
-        try:
-            body = await _body(request)
-            expected = _head_sha(body)
-        except RepositorySyncError as exc:
-            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
         return await run_mutation(
             request,
             action="repository.merge_and_pull",
             target=f"/api/repositories/{repo}/pulls/{number}/merge-and-pull",
-            call=lambda: service.merge_and_pull(
+            call=lambda expected: service.merge_and_pull(
                 repo, number, expected_head_sha=expected, trigger="dashboard"
             ),
+            parse_body=lambda: _parse_expected_head(request),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/rebase-merge")
@@ -307,18 +319,14 @@ def build_repository_router(core: Any) -> APIRouter:
         invalid = known(repo, request.state.request_id)
         if invalid:
             return invalid
-        try:
-            body = await _body(request)
-            expected = _head_sha(body)
-        except RepositorySyncError as exc:
-            return _json_error(400, exc.code, str(exc), request.state.request_id, details=exc.details)
         return await run_mutation(
             request,
             action="repository.merge_and_pull",
             target=f"/api/repositories/{repo}/pulls/{number}/rebase-merge",
-            call=lambda: service.merge_and_pull(
+            call=lambda expected: service.merge_and_pull(
                 repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
             ),
+            parse_body=lambda: _parse_expected_head(request),
         )
 
     @router.post("/api/repositories/{repo}/commit")
@@ -330,7 +338,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.commit_retired",
             target=f"/api/repositories/{repo}/commit",
-            call=lambda: service.commit_local(repo),
+            call=lambda _parsed: service.commit_local(repo),
         )
 
     @router.post("/api/repositories/{repo}/upstream-sync")
@@ -342,7 +350,7 @@ def build_repository_router(core: Any) -> APIRouter:
             request,
             action="repository.upstream_retired",
             target=f"/api/repositories/{repo}/upstream-sync",
-            call=lambda: service.sync_upstream(repo),
+            call=lambda _parsed: service.sync_upstream(repo),
         )
 
     return router

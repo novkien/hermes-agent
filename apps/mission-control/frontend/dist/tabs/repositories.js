@@ -1,7 +1,7 @@
 // AgentOS Repositories — owner repository control plane.
 
 import { el, clear, skeleton, unavailableState, statusChip } from '../ui.js';
-import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
+import { bindLiveResources, liveRows } from './_live.js';
 import { createKeyedReconciler } from '../pure/keyed-dom.js';
 
 export const ROUTE = 'repositories';
@@ -23,9 +23,16 @@ const REPO_TONES = Object.freeze({
 });
 const CHECK_TONES = Object.freeze({ passed: 'ok', pending: 'warn', failed: 'danger', none: 'idle' });
 const CODEX_TONES = Object.freeze({
-  reviewed: 'ok', requested: 'info', waiting: 'info', stale: 'warn',
+  reviewed: 'ok', requested: 'info', stale: 'warn',
   has_findings: 'danger', not_requested: 'idle',
 });
+// Mirrors repository_routes.REPOSITORY_MUTATIONS. The read envelope's
+// meta.mutations_supported is the honest capability signal; the tab gates its
+// action buttons on it instead of guessing from the route table.
+const REPOSITORY_MUTATIONS = Object.freeze([
+  'initialize_layout', 'sync', 'codex_review',
+  'mark_ready', 'mark_draft', 'merge_and_pull',
+]);
 
 function clone(value) {
   if (typeof structuredClone === 'function') return structuredClone(value);
@@ -34,6 +41,28 @@ function clone(value) {
 
 function appendPresent(parent, ...children) {
   parent.append(...children.filter((child) => child !== null && child !== undefined));
+}
+
+// Busy keys are `action:repo` or `action:repo:number`. Match whole segments:
+// a substring test would let `sync:hermes-agent` freeze a future `agent`
+// card, since ':agent' occurs inside ':hermes-agent'.
+function keyMatches(key, repoName, pullNumber = null) {
+  const parts = String(key).split(':');
+  if (parts.length < 2 || parts[1] !== repoName) return false;
+  if (pullNumber === null) return true;
+  return parts.length >= 3 && Number(parts[2]) === Number(pullNumber);
+}
+
+// Live projections are deliberately narrow (no layout, no pull requests), so
+// they overlay the full rows field-by-field — but a repo missing from the
+// projection must keep its full row instead of vanishing until the next load.
+function unionProjectedRows(current, projected) {
+  const merged = new Map();
+  for (const row of current || []) merged.set(String(row.name), row);
+  for (const row of projected || []) {
+    merged.set(String(row.name), { ...(merged.get(String(row.name)) || {}), ...row });
+  }
+  return [...merged.values()];
 }
 
 function cacheKey(profile) {
@@ -69,11 +98,12 @@ function label(value) {
   return String(value || 'unknown').replaceAll('_', ' ');
 }
 
-function button(text, onclick, { primary = false, danger = false, disabled = false } = {}) {
+function button(text, onclick, { primary = false, danger = false, disabled = false, title = '' } = {}) {
   return el('button', {
     class: `btn btn-sm${primary ? ' btn-primary' : ''}${danger ? ' btn-danger' : ''}`,
     type: 'button',
     disabled: disabled ? '' : undefined,
+    title: title || undefined,
     onclick,
   }, text);
 }
@@ -102,6 +132,12 @@ function operationMessage(operation) {
     return 'Repository operation completed.';
   }
   if (operation.partial_success) {
+    // The service emits two distinct partial shapes: the GitHub merge landed
+    // but the production pull failed, or both landed and only the stashed
+    // local work failed to restore. They need different guidance.
+    if (operation.completed_phase === 'production_pull') {
+      return `Merge and production pull succeeded, but restoring stashed local work failed: ${operation.error?.message || 'unknown error'}`;
+    }
     return `GitHub merge succeeded, but production pull failed: ${operation.error?.message || 'unknown error'}`;
   }
   return operation.error?.message || 'Repository operation failed.';
@@ -143,6 +179,10 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   let lastOperation = null;
   let inspectorHost = null;
   let unsubscribe = null;
+  // null = capability signal not seen yet (cache-only hydration); the tab
+  // stays permissive until the first meta arrives, then gates on the list.
+  let mutationsSupported = null;
+  let pendingLoadQueued = false;
   const active = new Set();
 
   const heroHost = el('div');
@@ -184,8 +224,15 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     };
   }
 
-  async function load({ refresh = true, background = false } = {}) {
-    if (refreshing) return;
+  function canMutate(action) {
+    return !Array.isArray(mutationsSupported) || mutationsSupported.includes(action);
+  }
+
+  function mutationGateTitle(action, label) {
+    return canMutate(action) ? label : `${label} — not advertised by meta.mutations_supported`;
+  }
+
+  async function performLoad({ refresh = true, background = false } = {}) {
     refreshing = true;
     if (!background) {
       loading = true;
@@ -197,6 +244,9 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         `/api/repositories?refresh=${refresh ? '1' : '0'}&github=1`, { profile },
       );
       const payload = response.data || {};
+      if (Array.isArray(response.meta?.mutations_supported)) {
+        mutationsSupported = response.meta.mutations_supported;
+      }
       loadError = null;
       repositories = Array.isArray(payload.repositories) ? payload.repositories : [];
       operations = Array.isArray(payload.recent_operations) ? payload.recent_operations : [];
@@ -225,6 +275,34 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     }
   }
 
+  async function load({ refresh = true, background = false } = {}) {
+    // A request arriving while one is in flight must not be dropped: the
+    // in-flight response predates whatever just changed. Queue exactly one
+    // follow-up pass (as a background refresh) instead of silently no-oping.
+    if (refreshing) {
+      pendingLoadQueued = true;
+      return;
+    }
+    do {
+      pendingLoadQueued = false;
+      await performLoad({ refresh, background });
+      background = true; // queued follow-ups never flash the loading skeleton
+    } while (pendingLoadQueued);
+  }
+
+  async function revalidate() {
+    // Manual refresh follows the live-route contract: force the shared
+    // resource resync first (cheap projected rows), then reload the full
+    // source of truth for layout and pull-request detail.
+    if (liveStore) {
+      try {
+        await liveStore.resyncResource('repositories', profile, { force: true });
+        applyLive();
+      } catch (_error) { /* the full load below remains the authority */ }
+    }
+    await load({ refresh: true });
+  }
+
   function hydrate() {
     const cached = readCache(profile);
     if (!cached) return false;
@@ -242,7 +320,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   function applyLive() {
     const live = liveRows(liveStore, 'repositories', profile);
     if (!live) return false;
-    repositories = mergeProjectedRows(repositories, live.rows, (repo) => repo.name);
+    repositories = unionProjectedRows(repositories, live.rows);
     if (!selectedName || !repositories.some((repo) => repo.name === selectedName)) {
       selectedName = repositories[0]?.name || null;
     }
@@ -274,6 +352,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       lastOperation = {
         ok: false,
         action: key,
+        request_id: error?.request_id || error?.payload?.request_id || null,
         error: {
           code: error?.payload?.error?.code || 'request_failed',
           message: error?.message || 'repository action failed',
@@ -288,6 +367,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function initialize(repo) {
+    if (!canMutate('initialize_layout')) return;
     return runAction(
       repo, `initialize:${repo.name}`,
       `/api/repositories/${encodeURIComponent(repo.name)}/initialize`,
@@ -295,6 +375,26 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function syncRepository(repo) {
+    if (!canMutate('sync')) return;
+    // Sync is bidirectional: it can commit tracked local work, merge a
+    // diverged origin, and push to the shared branch. Say so before doing it;
+    // a clean fast-forward stays confirm-free.
+    const effects = [];
+    if ((repo.ahead || 0) > 0 && (repo.behind || 0) > 0) {
+      effects.push(`local history diverged from origin — syncing creates a merge commit on ${repo.branch}`);
+    }
+    if (repo.working_tree?.dirty) {
+      effects.push(`${repo.working_tree.entries} tracked local change(s) will be committed`);
+    }
+    if ((repo.ahead || 0) > 0) {
+      effects.push(`${repo.ahead} local commit(s) will be pushed to ${repo.repo_full_name || repo.name}`);
+    }
+    if (effects.length) {
+      const confirmed = window.confirm(
+        `Sync ${repo.repo_full_name || repo.name} (${repo.host}):\n\n- ${effects.join('\n- ')}\n\nContinue?`,
+      );
+      if (!confirmed) return;
+    }
     return runAction(
       repo, `sync:${repo.name}`,
       `/api/repositories/${encodeURIComponent(repo.name)}/sync`,
@@ -302,6 +402,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function requestCodex(repo, pull) {
+    if (!canMutate('codex_review')) return;
     return runAction(
       repo, `review:${repo.name}:${pull.number}`,
       `/api/repositories/${encodeURIComponent(repo.name)}/pulls/${pull.number}/codex-review`,
@@ -310,6 +411,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function changeDraft(repo, pull, ready) {
+    if (!canMutate(ready ? 'mark_ready' : 'mark_draft')) return;
     return runAction(
       repo, `${ready ? 'ready' : 'draft'}:${repo.name}:${pull.number}`,
       `/api/repositories/${encodeURIComponent(repo.name)}/pulls/${pull.number}/${ready ? 'ready' : 'draft'}`,
@@ -317,9 +419,22 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   }
 
   function mergeAndPull(repo, pull) {
+    if (!canMutate('merge_and_pull')) return;
     const workTree = repo.layout?.work_tree || repo.path || 'canonical live source';
+    // CI and Codex state sit right next to this button; an owner can still
+    // override them, but the confirmation must show what is being overridden.
+    const evidence = [
+      `CI: ${checkSummary(pull)}`,
+      `Codex: ${codexSummary(pull)}`,
+    ];
+    if (repo.working_tree?.dirty) {
+      evidence.push('Production working tree has local changes — they will be stashed and restored.');
+    }
+    if (pull.mergeable !== true) {
+      evidence.push('GitHub has not confirmed the PR as mergeable yet.');
+    }
     const confirmed = window.confirm(
-      `Rebase-merge PR #${pull.number} into ${repo.branch}, then fast-forward production on ${repo.host}:\n\n${workTree}\n\nContinue?`,
+      `Rebase-merge PR #${pull.number} into ${repo.branch}, then fast-forward production on ${repo.host}:\n\n${workTree}\n\n${evidence.join('\n')}\n\nContinue?`,
     );
     if (!confirmed) return;
     return runAction(
@@ -340,7 +455,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
   function repoCard(repo) {
     const selected = repo.name === selectedName;
     const pulls = repo.pull_requests || [];
-    const pending = [...active].some((key) => key.includes(`:${repo.name}`));
+    const pending = [...active].some((key) => keyMatches(key, repo.name));
     const card = el('article', {
       class: `repo-card${selected ? ' is-selected' : ''}${ATTENTION_STATES.has(repo.state) ? ' has-attention' : ''}`,
       tabindex: '0',
@@ -402,8 +517,14 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('span', { class: 'repo-pr-summary', text: `${fmtWhen(repo.last_commit_at)} · ${repo.last_commit_subject || 'No commit data'}` }),
         el('div', { class: 'repo-card-actions' }, [
           !repo.layout?.ready
-            ? button(pending ? 'Initializing…' : 'Initialize', () => initialize(repo), { primary: true, disabled: pending })
-            : button(pending ? 'Syncing…' : 'Sync', () => syncRepository(repo), { disabled: pending }),
+            ? button(pending ? 'Initializing…' : 'Initialize', () => initialize(repo), {
+              primary: true, disabled: pending || !canMutate('initialize_layout'),
+              title: mutationGateTitle('initialize_layout', 'Initialize'),
+            })
+            : button(pending ? 'Syncing…' : 'Sync', () => syncRepository(repo), {
+              disabled: pending || !canMutate('sync'),
+              title: mutationGateTitle('sync', 'Sync'),
+            }),
         ]),
       ]),
     );
@@ -475,6 +596,11 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       }, [
         el('strong', { text: lastOperation.partial_success ? 'Partial success' : lastOperation.ok ? 'Completed' : 'Failed' }),
         el('span', { text: operationMessage(lastOperation) }),
+        // Correlation id for the audit trail — a failed owner action is only
+        // traceable in journalctl/audit through its request id.
+        !lastOperation.ok && lastOperation.request_id
+          ? el('code', { class: 'mono repo-banner-rid', text: `request ${lastOperation.request_id}` })
+          : null,
       ]));
     }
     grid.hidden = false;
@@ -497,9 +623,12 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
 
   function pullRow(repo, pull) {
     const selected = pull.number === selectedPullNumber;
-    const busy = [...active].some((key) => key.endsWith(`:${repo.name}:${pull.number}`));
+    const busy = [...active].some((key) => keyMatches(key, repo.name, pull.number));
     const codex = pull.codex || {};
     const checks = pull.checks || {};
+    // A request already posted for this head does not need another comment;
+    // re-requesting is what spams "@codex review" threads on GitHub.
+    const reviewPending = codex.state === 'requested';
     return el('div', {
       class: `repo-pr-control${selected ? ' is-selected' : ''}`,
       onclick: (event) => {
@@ -522,13 +651,27 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         el('div', {}, [el('span', { text: 'Head' }), el('code', { text: shortSha(pull.head_sha) })]),
       ]),
       el('div', { class: 'repo-pr-actions' }, [
-        button(busy ? 'Working…' : 'Review with Codex', () => requestCodex(repo, pull), { disabled: busy }),
+        button(busy ? 'Working…' : reviewPending ? 'Review requested' : 'Review with Codex',
+          () => requestCodex(repo, pull), {
+          disabled: busy || reviewPending || !canMutate('codex_review'),
+          title: reviewPending
+            ? 'Codex review already requested for this head'
+            : mutationGateTitle('codex_review', 'Review with Codex'),
+        }),
         pull.draft
-          ? button('Mark ready', () => changeDraft(repo, pull, true), { disabled: busy })
-          : button('Convert to draft', () => changeDraft(repo, pull, false), { disabled: busy }),
+          ? button('Mark ready', () => changeDraft(repo, pull, true), {
+            disabled: busy || !canMutate('mark_ready'),
+            title: mutationGateTitle('mark_ready', 'Mark ready'),
+          })
+          : button('Convert to draft', () => changeDraft(repo, pull, false), {
+            disabled: busy || !canMutate('mark_draft'),
+            title: mutationGateTitle('mark_draft', 'Convert to draft'),
+          }),
         button('Merge & Pull', () => mergeAndPull(repo, pull), {
           primary: true,
-          disabled: busy || pull.draft || pull.mergeable === false || !repo.layout?.ready,
+          disabled: busy || pull.draft || pull.mergeable === false || !repo.layout?.ready
+            || !canMutate('merge_and_pull'),
+          title: mutationGateTitle('merge_and_pull', 'Merge & Pull'),
         }),
       ]),
     ]);
@@ -566,8 +709,16 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         }),
         el('div', { class: 'repo-side-footer-actions' }, [
           !repo.layout?.ready
-            ? button('Initialize repository layout', () => initialize(repo), { primary: true })
-            : button('Sync', () => syncRepository(repo), { primary: true }),
+            ? button('Initialize repository layout', () => initialize(repo), {
+              primary: true,
+              disabled: !canMutate('initialize_layout'),
+              title: mutationGateTitle('initialize_layout', 'Initialize repository layout'),
+            })
+            : button('Sync', () => syncRepository(repo), {
+              primary: true,
+              disabled: !canMutate('sync'),
+              title: mutationGateTitle('sync', 'Sync'),
+            }),
         ]),
       ]),
       section('Pull requests', (repo.pull_requests || []).length
@@ -627,7 +778,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       filterSelect,
       searchInput,
       el('span', { class: 'repo-toolbar-note', text: 'Owner control · registry driven' }),
-      button(refreshing ? 'Refreshing…' : 'Refresh', () => load({ refresh: true }), { disabled: refreshing }),
+      button(refreshing ? 'Refreshing…' : 'Refresh', () => revalidate(), { disabled: refreshing }),
     );
   }
 
@@ -646,7 +797,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       return { selection: selectedName, pull: selectedPullNumber };
     },
-    refresh: () => load({ refresh: true }),
+    refresh: () => revalidate(),
     renderToolbar,
     renderInspector(container) {
       inspectorHost = container;

@@ -20,6 +20,7 @@
 .repo-banner-ok{border-color:rgba(var(--ok-rgb),.36);background:rgba(var(--ok-rgb),.07);color:var(--ok)}
 .repo-banner-warn{border-color:rgba(var(--warn-rgb),.36);background:rgba(var(--warn-rgb),.07);color:var(--warn)}
 .repo-banner-danger{border-color:rgba(var(--danger-rgb),.36);background:rgba(var(--danger-rgb),.07);color:var(--danger)}
+.repo-banner-rid{margin-left:auto;font-size:9px;color:var(--text-faint)}
 
 .repo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .repo-card{min-width:0;padding:13px;border:1px solid var(--border);border-radius:10px;background:var(--surface-1);outline:none;transition:border-color .12s ease,box-shadow .12s ease}

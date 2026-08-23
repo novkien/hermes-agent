@@ -93,6 +93,10 @@ READ_ALLOWLIST = [
     "/api/health", "/api/hermes", "/api/learning", "/api/logs", "/api/mcp",
     "/api/media", "/api/memory", "/api/messaging", "/api/model", "/api/ops",
     "/api/pairing", "/api/portal", "/api/profiles", "/api/providers",
+    # Native BFF surface (repository_routes.py) — registered before the
+    # catch-all, so this entry documents readability and keeps the
+    # "advertised writes imply readable surface" invariant true.
+    "/api/repositories",
     "/api/sessions", "/api/skills", "/api/ssh", "/api/status", "/api/system",
     "/api/tools", "/api/webhooks",
 ]
@@ -669,6 +673,11 @@ READ_PATH_MUTATIONS = {
     "/api/ops/checkpoints": ("prune",),
     "/api/model": ("set", "set_moa"),
     "/api/config": ("save_section",),
+    # Owner repository control plane (repository_routes.py). The read envelope
+    # advertises these so the Repositories tab gates its Initialize / Sync /
+    # Codex / draft / merge controls on the same list the BFF enforces.
+    "/api/repositories": ("initialize_layout", "sync", "codex_review",
+                          "mark_ready", "mark_draft", "merge_and_pull"),
 }
 
 ROOM_SLOT_SEAT_ROLES = ("ceo", "coder", "research", "system")
