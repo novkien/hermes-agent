@@ -815,6 +815,10 @@ class GitHubGitlinkWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(first["state"], "created")
+        self.assertRegex(
+            first["branch"],
+            r"^mission-control/hermes-gitlinks-hermes-agent-4{12}-[0-9]+$",
+        )
         self.assertEqual(second["state"], "updated")
         self.assertEqual(second["pull_number"], first["pull_number"])
         self.assertEqual(duplicate["state"], "pull_current")
