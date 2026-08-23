@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from urllib.parse import parse_qs, unquote, urlparse
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
@@ -56,9 +57,14 @@ class OfflineGithub:
 
 
 class MergeGithub(OfflineGithub):
-    def __init__(self, callback=None):
+    MERGE_SHA = "1" * 40
+    BRANCH_SHA = "6" * 40
+
+    def __init__(self, callback=None, *, pin_error=None):
         self.callback = callback
         self.merge_calls = []
+        self.pin_calls = []
+        self.pin_error = pin_error
 
     def pull_detail(self, _spec, number):
         return {"number": number, "draft": False, "head": {"sha": "abc1234"}}
@@ -67,7 +73,26 @@ class MergeGithub(OfflineGithub):
         self.merge_calls.append((number, expected_head_sha))
         if self.callback:
             self.callback()
-        return {"merged": True, "merge_sha": "merged123", "head_sha": "abc1234"}
+        return {"merged": True, "merge_sha": self.MERGE_SHA, "head_sha": "abc1234"}
+
+    def ensure_superproject_gitlink_pr(self, parent, child, *, target_sha):
+        self.pin_calls.append((parent.name, child.name, target_sha))
+        if self.pin_error:
+            raise self.pin_error
+        return {
+            "managed": True,
+            "changed": True,
+            "state": "created",
+            "superproject": parent.name,
+            "repository": child.name,
+            "path": child.superproject_path,
+            "target_sha": target_sha,
+            "pull_number": 12,
+            "html_url": "https://github.com/example/hermes/pull/12",
+        }
+
+    def branch_sha(self, _spec):
+        return self.BRANCH_SHA
 
 
 class RepositoryRegistryTests(unittest.TestCase):
@@ -87,6 +112,16 @@ class RepositoryRegistryTests(unittest.TestCase):
         for name, spec in registry.items():
             if name != "hermes":
                 self.assertEqual(spec.local_mode, "remote_only")
+        expected_gitlinks = {
+            "hermes-agent": "hermes-agent",
+            "hermes-skills": ".sources/hermes-skills",
+            "hermes-plugins": "plugins",
+            "agents": "profiles",
+        }
+        for name, path in expected_gitlinks.items():
+            self.assertEqual(registry[name].superproject_path, path)
+        for name in {"hermes", "llama-proxy", "9router", "godot-mcp"}:
+            self.assertIsNone(registry[name].superproject_path)
         self.assertEqual(registry["llama-proxy"].host, "jarvis-pi")
         self.assertEqual(registry["llama-proxy"].ssh_target, "jarvis-pi")
         for spec in registry.values():
@@ -554,7 +589,258 @@ class RemoteOnlyRepositoryTests(unittest.TestCase):
         result = self.service.merge_pr("child", 9, expected_head_sha="abc1234")
         self.assertTrue(result["ok"], result)
         self.assertFalse(result["local_mutation"])
+        self.assertFalse(result["superproject_pin"]["managed"])
         self.assertEqual(self.github.merge_calls, [(9, "abc1234")])
+        self.assertEqual(self.github.pin_calls, [])
+
+    def _managed_service(self, github):
+        parent = RepoSpec(
+            name="hermes", repo_full_name="example/hermes", branch="main",
+            host="jarvis", transport="local", ssh_target=None,
+            hermes_home=str(Path(self.tmp.name)), git_dir=str(Path(self.tmp.name) / ".git"),
+            work_tree=str(Path(self.tmp.name)), origin_url="https://github.com/example/hermes.git",
+            local_mode="superproject", sync_script=str(Path(self.tmp.name) / "sync.sh"),
+        )
+        child = dataclasses.replace(self.spec, superproject_path="modules/child")
+        return RepositorySyncService(
+            {"hermes": parent, "child": child}, runner=self.NoLocalRunner(),
+            store=OperationStore(Path(self.tmp.name) / "managed-state"),
+            github=github, timeout=30,
+        )
+
+    def test_merge_managed_child_creates_exact_parent_gitlink_pr(self):
+        github = MergeGithub()
+        service = self._managed_service(github)
+
+        result = service.merge_pr("child", 9, expected_head_sha="abc1234")
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["local_mutation"])
+        self.assertEqual(
+            github.pin_calls,
+            [("hermes", "child", MergeGithub.MERGE_SHA)],
+        )
+        self.assertEqual(result["superproject_pin"]["path"], "modules/child")
+        self.assertEqual(result["superproject_pin"]["pull_number"], 12)
+
+    def test_managed_child_status_advertises_exact_parent_projection(self):
+        service = self._managed_service(MergeGithub())
+
+        result = service.status("child", fetch=True, include_github=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["capabilities"]["sync_local"])
+        self.assertTrue(result["capabilities"]["project_to_superproject"])
+        self.assertEqual(
+            result["superproject"],
+            {"managed": True, "name": "hermes", "path": "modules/child"},
+        )
+
+    def test_invalid_merge_sha_is_partial_after_child_merge(self):
+        github = MergeGithub()
+        github.MERGE_SHA = "not-a-commit"
+        service = self._managed_service(github)
+
+        result = service.merge_pr("child", 9, expected_head_sha="abc1234")
+
+        self.assertFalse(result["ok"], result)
+        self.assertTrue(result["partial_success"])
+        self.assertEqual(result["completed_phase"], "github_merge")
+        self.assertEqual(result["error"]["code"], "superproject_pin_invalid")
+
+    def test_parent_pin_failure_is_partial_after_child_merge(self):
+        github = MergeGithub(
+            pin_error=RepositorySyncError("pin_failed", "could not prepare parent PR")
+        )
+        service = self._managed_service(github)
+
+        result = service.merge_pr("child", 9, expected_head_sha="abc1234")
+
+        self.assertFalse(result["ok"], result)
+        self.assertTrue(result["partial_success"])
+        self.assertEqual(result["completed_phase"], "github_merge")
+        self.assertEqual(result["error"]["code"], "pin_failed")
+        self.assertEqual(github.merge_calls, [(9, "abc1234")])
+
+    def test_prepare_pin_reconciles_current_fork_branch_without_local_git(self):
+        github = MergeGithub()
+        service = self._managed_service(github)
+
+        result = service.prepare_superproject_pin("child")
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["local_mutation"])
+        self.assertEqual(
+            github.pin_calls,
+            [("hermes", "child", MergeGithub.BRANCH_SHA)],
+        )
+
+    def test_prepare_pin_rejects_repository_without_local_projection(self):
+        result = self.service.prepare_superproject_pin("child")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["error"]["code"], "superproject_projection_unavailable"
+        )
+        self.assertEqual(self.github.pin_calls, [])
+
+    def test_merging_parent_pr_does_not_recursively_prepare_another_pin(self):
+        github = MergeGithub()
+        service = self._managed_service(github)
+
+        result = service.merge_pr("hermes", 12, expected_head_sha="abc1234")
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["superproject_pin"]["managed"])
+        self.assertEqual(github.pin_calls, [])
+
+
+class GitlinkGithub(GitHubRestClient):
+    BASE_COMMIT = "a" * 40
+    BASE_TREE = "b" * 40
+
+    def __init__(self, initial_pins):
+        super().__init__(token="test-token")
+        self.refs = {"main": self.BASE_COMMIT}
+        self.commits = {self.BASE_COMMIT: self.BASE_TREE}
+        self.trees = {self.BASE_TREE: dict(initial_pins)}
+        self.open_pull = None
+        self.counter = 10
+        self.tree_entries = []
+        self.ref_updates = []
+
+    def _new_sha(self):
+        self.counter += 1
+        return f"{self.counter:040x}"
+
+    def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
+        del accept
+        parsed = urlparse(path)
+        endpoint = parsed.path
+        if endpoint.endswith("/pulls") and method == "GET":
+            return [self.open_pull] if self.open_pull else []
+        marker = "/git/ref/heads/"
+        if marker in endpoint and method == "GET":
+            branch = unquote(endpoint.split(marker, 1)[1])
+            return {"object": {"sha": self.refs[branch]}}
+        marker = "/git/commits/"
+        if marker in endpoint and method == "GET":
+            sha = endpoint.split(marker, 1)[1]
+            return {"tree": {"sha": self.commits[sha]}}
+        marker = "/contents/"
+        if marker in endpoint and method == "GET":
+            item = unquote(endpoint.split(marker, 1)[1])
+            ref = parse_qs(parsed.query)["ref"][0]
+            tree = self.commits[self.refs[ref]]
+            return {"sha": self.trees[tree][item], "type": "submodule"}
+        if endpoint.endswith("/git/trees") and method == "POST":
+            tree_sha = self._new_sha()
+            pins = dict(self.trees[body["base_tree"]])
+            entry = body["tree"][0]
+            pins[entry["path"]] = entry["sha"]
+            self.trees[tree_sha] = pins
+            self.tree_entries.append(dict(entry))
+            return {"sha": tree_sha}
+        if endpoint.endswith("/git/commits") and method == "POST":
+            commit_sha = self._new_sha()
+            self.commits[commit_sha] = body["tree"]
+            self.assert_parent = body["parents"][0]
+            return {"sha": commit_sha}
+        if endpoint.endswith("/git/refs") and method == "POST":
+            branch = body["ref"].removeprefix("refs/heads/")
+            self.refs[branch] = body["sha"]
+            return {"ref": body["ref"], "object": {"sha": body["sha"]}}
+        marker = "/git/refs/heads/"
+        if marker in endpoint and method == "PATCH":
+            branch = unquote(endpoint.split(marker, 1)[1])
+            self.refs[branch] = body["sha"]
+            self.ref_updates.append({"branch": branch, **body})
+            return {"ref": f"refs/heads/{branch}", "object": {"sha": body["sha"]}}
+        if endpoint.endswith("/pulls") and method == "POST":
+            branch = body["head"]
+            self.open_pull = {
+                "number": 12,
+                "html_url": "https://github.com/example/hermes/pull/12",
+                "head": {
+                    "ref": branch,
+                    "sha": self.refs[branch],
+                    "label": f"example:{branch}",
+                    "repo": {"full_name": "example/hermes"},
+                },
+            }
+            return self.open_pull
+        raise AssertionError(f"unexpected request: {method} {path} {body}")
+
+
+class GitHubGitlinkWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.parent = RepoSpec(
+            name="hermes", repo_full_name="example/hermes", branch="main",
+            host="jarvis", transport="local", ssh_target=None, hermes_home="~/.hermes",
+            git_dir="~/.hermes/.git", work_tree="~/.hermes",
+            origin_url="https://github.com/example/hermes.git", local_mode="superproject",
+            sync_script="~/.hermes/scripts/sync.sh",
+        )
+        self.agent = RepoSpec(
+            name="hermes-agent", repo_full_name="example/hermes-agent", branch="main",
+            host="jarvis", transport="local", ssh_target=None, hermes_home="~/.hermes",
+            git_dir="unused", work_tree="unused", origin_url="https://github.com/example/hermes-agent.git",
+            local_mode="remote_only", superproject_path="hermes-agent",
+        )
+        self.skills = dataclasses.replace(
+            self.agent,
+            name="hermes-skills",
+            repo_full_name="example/hermes-skills",
+            superproject_path=".sources/hermes-skills",
+        )
+        self.old_agent = "2" * 40
+        self.old_skills = "3" * 40
+        self.github = GitlinkGithub({
+            "hermes-agent": self.old_agent,
+            ".sources/hermes-skills": self.old_skills,
+        })
+
+    def test_create_reuse_and_verify_one_aggregate_parent_pull(self):
+        agent_target = "4" * 40
+        skills_target = "5" * 40
+
+        first = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.agent, target_sha=agent_target
+        )
+        second = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.skills, target_sha=skills_target
+        )
+        duplicate = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.skills, target_sha=skills_target
+        )
+
+        self.assertEqual(first["state"], "created")
+        self.assertEqual(second["state"], "updated")
+        self.assertEqual(second["pull_number"], first["pull_number"])
+        self.assertEqual(duplicate["state"], "pull_current")
+        self.assertFalse(duplicate["changed"])
+        self.assertEqual(
+            self.github.tree_entries,
+            [
+                {"path": "hermes-agent", "mode": "160000", "type": "commit", "sha": agent_target},
+                {"path": ".sources/hermes-skills", "mode": "160000", "type": "commit", "sha": skills_target},
+            ],
+        )
+        branch = first["branch"]
+        tree = self.github.commits[self.github.refs[branch]]
+        self.assertEqual(self.github.trees[tree]["hermes-agent"], agent_target)
+        self.assertEqual(self.github.trees[tree][".sources/hermes-skills"], skills_target)
+        self.assertEqual(self.github.ref_updates[-1]["force"], False)
+
+    def test_no_parent_pull_when_base_already_pins_target(self):
+        result = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.agent, target_sha=self.old_agent
+        )
+
+        self.assertEqual(result["state"], "already_pinned")
+        self.assertFalse(result["changed"])
+        self.assertIsNone(self.github.open_pull)
+        self.assertEqual(self.github.tree_entries, [])
 
 
 class UnreachableHostRunner(RepositoryGitRunner):

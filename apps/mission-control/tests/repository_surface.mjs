@@ -32,6 +32,7 @@ for (const path of [
   '/api/repositories',
   '/api/repositories/{repo}/initialize',
   '/api/repositories/{repo}/pull',
+  '/api/repositories/{repo}/prepare-superproject-pin',
   '/api/repositories/{repo}/pulls/{number}/codex-review',
   '/api/repositories/{repo}/pulls/{number}/ready',
   '/api/repositories/{repo}/pulls/{number}/draft',
@@ -50,6 +51,11 @@ assert.match(registry, /git_dir: repos\/\{repository\}\.git/);
 assert.match(registry, /hermes:[\s\S]*git_dir: \.git[\s\S]*local_mode: superproject[\s\S]*sync_script: scripts\/sync\.sh/);
 assert.equal((registry.match(/local_mode: superproject/g) || []).length, 1);
 assert.equal((registry.match(/local_mode: remote_only/g) || []).length, 7);
+assert.equal((registry.match(/superproject_path:/g) || []).length, 4);
+assert.match(registry, /hermes-agent:[\s\S]*superproject_path: hermes-agent/);
+assert.match(registry, /hermes-skills:[\s\S]*superproject_path: \.sources\/hermes-skills/);
+assert.match(registry, /hermes-plugins:[\s\S]*superproject_path: plugins/);
+assert.match(registry, /agents:[\s\S]*superproject_path: profiles/);
 assert.doesNotMatch(registry, /production_worktree|worktrees\/\{repository\}\/production/);
 assert.match(registry, /hermes-skills:[\s\S]*work_tree: \.\n[\s\S]*paths:[\s\S]*- skills[\s\S]*- workspace\/skills-pack/);
 assert.match(registry, /hermes-plugins:[\s\S]*work_tree: plugins/);
@@ -63,7 +69,11 @@ assert.match(tab, /Merge PR/);
 assert.doesNotMatch(tab, /Merge & Pull/);
 assert.match(tab, /Sync Hermes/);
 assert.match(tab, /repo\.capabilities\?\.sync_local/);
-assert.match(tab, /This changes GitHub only/);
+assert.match(tab, /Mission Control will create or update a Hermes gitlink PR/);
+assert.match(tab, /This repository has no Hermes local projection/);
+assert.match(tab, /PR merge \+ Hermes pin PR/);
+assert.match(tab, /Prepare Hermes pin/);
+assert.match(tab, /prepare_superproject_pin/);
 assert.doesNotMatch(tab, /Pull production/);
 assert.match(tab, /Initialize repository layout/);
 assert.match(tab, /Codex/);
@@ -85,6 +95,11 @@ assert.match(servicePy, /--git-dir=/);
 assert.match(servicePy, /--work-tree=/);
 assert.match(servicePy, /def _sync_superproject_locked/);
 assert.match(servicePy, /def merge_pr/);
+assert.match(servicePy, /def ensure_superproject_gitlink_pr/);
+assert.match(servicePy, /"mode": "160000"/);
+assert.match(servicePy, /"force": False/);
+assert.match(servicePy, /completed_phase="github_merge"/);
+assert.match(servicePy, /def prepare_superproject_pin/);
 assert.match(servicePy, /local sync is available only on the Hermes superproject card/);
 assert.match(servicePy, /production_dirty/);
 assert.match(servicePy, /partial_success/);
@@ -108,6 +123,7 @@ assert.match(tab, /function keyMatches\(/);
 assert.match(tab, /function unionProjectedRows\(/);
 assert.doesNotMatch(tab, /mergeProjectedRows/);
 assert.match(routesPy, /REPOSITORY_MUTATIONS/);
+assert.match(routesPy, /prepare_superproject_pin/);
 assert.match(routesPy, /parse_body=lambda: _parse_expected_head\(request\)/);
 assert.match(coreRoutesPy, /"\/api\/repositories": \("initialize_layout", "sync", "codex_review",/);
 

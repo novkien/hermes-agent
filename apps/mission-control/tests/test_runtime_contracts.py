@@ -2311,6 +2311,11 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
             order.append("upstream:merge_pr")
             return {"ok": True, "repo": name}
 
+        def prepare_superproject_pin(self, name, *, trigger=""):
+            service_calls.append({"prepare": name})
+            order.append("upstream:prepare_superproject_pin")
+            return {"ok": True, "repo": name}
+
         def status_all(self, *, fetch=True, include_github=True):
             return []
 
@@ -2354,6 +2359,9 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
 
     merge_path = "/api/repositories/{repo}/pulls/{number}/merge"
     merge = endpoint_for(merge_path, "POST")
+    prepare = endpoint_for(
+        "/api/repositories/{repo}/prepare-superproject-pin", "POST"
+    )
 
     def post_request(body: bytes):
         request = Request({
@@ -2414,7 +2422,19 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
     ], f"mutation chain out of order: {order}"
     assert service_calls == [{"expected": sha}]
 
-    # 4. The read advertises exactly what the writes accept, read_only=False
+    # 4. Recovery pin preparation follows the same guarded/audited boundary.
+    order.clear()
+    response = await prepare(post_request(b"{}"), "repo-a")
+    assert response.status_code == 200
+    assert order == [
+        "audit:pending",
+        "upstream:prepare_superproject_pin",
+        "result:ok",
+        "publish:repository.changed",
+    ]
+    assert service_calls[-1] == {"prepare": "repo-a"}
+
+    # 5. The read advertises exactly what the writes accept, read_only=False
     #    per the house convention for mutation-capable reads.
     get_listing = endpoint_for("/api/repositories", "GET")
     request = make_request("refresh=0&github=0")
