@@ -2306,9 +2306,9 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
         registry = {"repo-a": object()}
         store = _AuditStore()
 
-        def merge_and_pull(self, name, number, *, expected_head_sha=None, trigger=""):
+        def merge_pr(self, name, number, *, expected_head_sha=None, trigger=""):
             service_calls.append({"expected": expected_head_sha})
-            order.append("upstream:merge_and_pull")
+            order.append("upstream:merge_pr")
             return {"ok": True, "repo": name}
 
         def status_all(self, *, fetch=True, include_github=True):
@@ -2352,15 +2352,15 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
                 return route.endpoint
         raise AssertionError(f"missing {method} {path}")
 
-    merge_path = "/api/repositories/{repo}/pulls/{number}/merge-and-pull"
+    merge_path = "/api/repositories/{repo}/pulls/{number}/merge"
     merge = endpoint_for(merge_path, "POST")
 
     def post_request(body: bytes):
         request = Request({
             "type": "http", "http_version": "1.1", "method": "POST",
             "scheme": "http",
-            "path": "/api/repositories/repo-a/pulls/5/merge-and-pull",
-            "raw_path": b"/api/repositories/repo-a/pulls/5/merge-and-pull",
+            "path": "/api/repositories/repo-a/pulls/5/merge",
+            "raw_path": b"/api/repositories/repo-a/pulls/5/merge",
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
             "client": ("127.0.0.1", 1234),
@@ -2408,7 +2408,7 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
     assert body["meta"]["read_only"] is False
     assert order == [
         "audit:pending",
-        "upstream:merge_and_pull",
+        "upstream:merge_pr",
         "result:ok",
         "publish:repository.changed",
     ], f"mutation chain out of order: {order}"

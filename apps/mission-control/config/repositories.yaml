@@ -20,11 +20,22 @@ hosts:
     hermes_home: ~/.hermes
 
 repositories:
+  hermes:
+    github: novkien/hermes
+    branch: master
+    host: jarvis
+    git_dir: .git
+    work_tree: .
+    local_mode: superproject
+    sync_script: scripts/sync.sh
+    visibility: private
+
   hermes-agent:
     github: novkien/hermes-agent
     branch: master
     host: jarvis
     work_tree: hermes-agent
+    local_mode: remote_only
     visibility: public
     upstream: NousResearch/hermes-agent
 
@@ -33,6 +44,7 @@ repositories:
     branch: master
     host: jarvis
     work_tree: .
+    local_mode: remote_only
     paths:
       - skills
       - workspace/skills-pack
@@ -43,6 +55,7 @@ repositories:
     branch: master
     host: jarvis
     work_tree: plugins
+    local_mode: remote_only
     visibility: private
 
   agents:
@@ -50,6 +63,7 @@ repositories:
     branch: master
     host: jarvis
     work_tree: profiles
+    local_mode: remote_only
     visibility: private
 
   llama-proxy:
@@ -57,6 +71,7 @@ repositories:
     branch: master
     host: jarvis-pi
     work_tree: /home/pi/llama-proxy
+    local_mode: remote_only
     visibility: private
 
   9router:
@@ -64,6 +79,7 @@ repositories:
     branch: master
     host: jarvis-pi
     work_tree: /home/pi/9router
+    local_mode: remote_only
     visibility: public
     upstream: decolua/9router
 
@@ -72,5 +88,6 @@ repositories:
     branch: main
     host: workstation
     work_tree: /home/novkien/godot-mcp
+    local_mode: remote_only
     visibility: public
     upstream: tugcantopaloglu/godot-mcp

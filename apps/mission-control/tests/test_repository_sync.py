@@ -71,15 +71,22 @@ class MergeGithub(OfflineGithub):
 
 
 class RepositoryRegistryTests(unittest.TestCase):
-    def test_registry_is_yaml_driven_and_contains_seven_repositories(self):
+    def test_registry_marks_only_hermes_as_locally_synced(self):
         registry = default_repository_registry()
         self.assertEqual(
             list(registry),
             [
-                "hermes-agent", "hermes-skills", "hermes-plugins", "agents",
+                "hermes", "hermes-agent", "hermes-skills", "hermes-plugins", "agents",
                 "llama-proxy", "9router", "godot-mcp",
             ],
         )
+        self.assertEqual(registry["hermes"].local_mode, "superproject")
+        self.assertEqual(registry["hermes"].git_dir, "~/.hermes/.git")
+        self.assertEqual(registry["hermes"].work_tree, "~/.hermes")
+        self.assertEqual(registry["hermes"].sync_script, "~/.hermes/scripts/sync.sh")
+        for name, spec in registry.items():
+            if name != "hermes":
+                self.assertEqual(spec.local_mode, "remote_only")
         self.assertEqual(registry["llama-proxy"].host, "jarvis-pi")
         self.assertEqual(registry["llama-proxy"].ssh_target, "jarvis-pi")
         for spec in registry.values():
@@ -89,6 +96,7 @@ class RepositoryRegistryTests(unittest.TestCase):
             )
         self.assertEqual(registry["godot-mcp"].branch, "main")
         expected_live = {
+            "hermes": "~/.hermes",
             "hermes-agent": "~/.hermes/hermes-agent",
             "hermes-skills": "~/.hermes",
             "hermes-plugins": "~/.hermes/plugins",
@@ -98,7 +106,8 @@ class RepositoryRegistryTests(unittest.TestCase):
             "godot-mcp": "/home/novkien/godot-mcp",
         }
         for name, spec in registry.items():
-            self.assertEqual(spec.git_dir, f"~/.hermes/repos/{name}.git")
+            expected_git_dir = "~/.hermes/.git" if name == "hermes" else f"~/.hermes/repos/{name}.git"
+            self.assertEqual(spec.git_dir, expected_git_dir)
             self.assertEqual(spec.work_tree, expected_live[name])
             self.assertNotIn("/worktrees/", spec.work_tree)
         self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))
@@ -483,6 +492,69 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertEqual(result["after"]["behind"], 0)
         self.assertTrue((self.work_tree / "local.txt").exists())
         self.assertTrue((self.work_tree / "remote.txt").exists())
+
+    def test_superproject_sync_runs_only_the_configured_script_and_verifies_status(self):
+        self.assertTrue(self.service.initialize_layout("demo")["ok"])
+        script = self.hermes_home / "scripts" / "sync.sh"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("#!/bin/sh\nprintf 'superproject-sync-ok\\n'\n", encoding="utf-8")
+        script.chmod(0o755)
+        spec = dataclasses.replace(
+            self.spec, local_mode="superproject", sync_script=str(script)
+        )
+        service = RepositorySyncService(
+            {"demo": spec}, runner=self.service.runner, store=self.service.store,
+            github=OfflineGithub(), timeout=30,
+        )
+
+        result = service.sync("demo")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["script"]["stdout"], "superproject-sync-ok")
+        self.assertEqual(result["sync_script"], str(script))
+        self.assertNotIn("local_commit", result)
+
+
+class RemoteOnlyRepositoryTests(unittest.TestCase):
+    class NoLocalRunner(RepositoryGitRunner):
+        def _host_process(self, spec, argv, *, timeout=None):
+            raise AssertionError(f"local command forbidden for {spec.name}: {argv}")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="repository-remote-only-")
+        root = Path(self.tmp.name)
+        self.spec = RepoSpec(
+            name="child", repo_full_name="example/child", branch="main",
+            host="jarvis", transport="local", ssh_target=None,
+            hermes_home=str(root), git_dir=str(root / "child.git"),
+            work_tree=str(root / "child"), origin_url="https://github.com/example/child.git",
+            local_mode="remote_only",
+        )
+        self.github = MergeGithub()
+        self.service = RepositorySyncService(
+            {"child": self.spec}, runner=self.NoLocalRunner(),
+            store=OperationStore(root / "state"), github=self.github, timeout=30,
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_status_and_sync_never_touch_local_git(self):
+        status = self.service.status("child", fetch=True, include_github=True)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["state"], "remote_only")
+        self.assertFalse(status["layout"]["managed"])
+        self.assertFalse(status["capabilities"]["sync_local"])
+
+        result = self.service.sync("child")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "remote_only")
+
+    def test_merge_pr_mutates_github_only(self):
+        result = self.service.merge_pr("child", 9, expected_head_sha="abc1234")
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["local_mutation"])
+        self.assertEqual(self.github.merge_calls, [(9, "abc1234")])
 
 
 class UnreachableHostRunner(RepositoryGitRunner):
