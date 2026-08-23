@@ -677,7 +677,8 @@ READ_PATH_MUTATIONS = {
     # advertises these so the Repositories tab gates its Hermes Sync and
     # GitHub-only PR controls on the same list the BFF enforces.
     "/api/repositories": ("initialize_layout", "sync", "codex_review",
-                          "mark_ready", "mark_draft", "merge_pr"),
+                          "mark_ready", "mark_draft", "merge_pr",
+                          "prepare_superproject_pin"),
 }
 
 ROOM_SLOT_SEAT_ROLES = ("ceo", "coder", "research", "system")

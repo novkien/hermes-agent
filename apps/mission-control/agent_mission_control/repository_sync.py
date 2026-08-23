@@ -7,9 +7,10 @@ is remote-only.
 
 The registry explicitly distinguishes the one locally managed Hermes
 superproject from remote-only GitHub repositories. Remote-only cards never
-inspect or mutate a local worktree. Their PR controls act on GitHub only. The
-Hermes card delegates local convergence to the superproject's checked-in sync
-script, which owns submodule checkout and layout verification.
+inspect or mutate a local worktree. Their PR controls act on GitHub only. A
+managed child merge creates or advances an aggregate GitHub PR containing the
+exact parent gitlink. The Hermes card delegates local convergence to the
+superproject's checked-in sync script only after that parent PR is merged.
 """
 
 from __future__ import annotations
@@ -27,13 +28,14 @@ import subprocess
 import time
 from typing import Any, Iterator, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 
 
 GITHUB_API_VERSION = "2022-11-28"
 DEFAULT_TIMEOUT_SECONDS = 90
 INITIALIZE_FETCH_TIMEOUT_SECONDS = 300
+SUPERPROJECT_BRANCH_PREFIX = "mission-control/hermes-gitlinks-"
 _CODEX_LOGIN = "chatgpt-codex-connector"
 _CODEX_REVIEW_RE = re.compile(r"Reviewed commit:\*{0,2}\s*`([0-9a-fA-F]{7,64})`")
 _FAILED_CONCLUSIONS = {
@@ -64,6 +66,7 @@ class RepoSpec:
     origin_url: str
     local_mode: str = "canonical"
     sync_script: str | None = None
+    superproject_path: str | None = None
     scope_paths: tuple[str, ...] = ()
     upstream_repo: str | None = None
     private: bool = True
@@ -186,6 +189,18 @@ def _scope_paths(value: Any, *, repository: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(rows))
 
 
+def _superproject_path(value: Any, *, repository: str) -> str | None:
+    if value in (None, ""):
+        return None
+    item = str(value).strip().strip("/")
+    path = PurePosixPath(item)
+    if not item or path.is_absolute() or ".." in path.parts or item == ".":
+        raise RepositorySyncError(
+            "registry_invalid", f"unsafe superproject_path for {repository}: {value!r}"
+        )
+    return str(path)
+
+
 def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSpec]:
     source = Path(path).expanduser() if path is not None else _registry_path()
     payload = _load_yaml(source)
@@ -247,6 +262,14 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
                 "registry_invalid", f"superproject repository {name} has no sync_script"
             )
         scope_paths = _scope_paths(raw_spec.get("paths"), repository=name)
+        superproject_path = _superproject_path(
+            raw_spec.get("superproject_path"), repository=name
+        )
+        if superproject_path and local_mode != "remote_only":
+            raise RepositorySyncError(
+                "registry_invalid",
+                f"superproject_path is valid only for remote-only repository {name}",
+            )
         upstream = str(raw_spec.get("upstream") or "").strip() or None
         if upstream:
             upstream = _clean_repo(upstream)
@@ -275,12 +298,18 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
             origin_url=origin_url,
             local_mode=local_mode,
             sync_script=sync_script,
+            superproject_path=superproject_path,
             scope_paths=scope_paths,
             upstream_repo=upstream,
             private=visibility != "public",
         )
     if not registry:
         raise RepositorySyncError("registry_invalid", "repository registry is empty")
+    superprojects = [spec for spec in registry.values() if spec.local_mode == "superproject"]
+    if len(superprojects) != 1:
+        raise RepositorySyncError(
+            "registry_invalid", "registry requires exactly one superproject repository"
+        )
     return registry
 
 
@@ -697,6 +726,226 @@ class GitHubRestClient:
             "html_url": confirmed.get("html_url"),
         }
 
+    def _branch_sha(self, spec: RepoSpec, branch: str) -> str:
+        encoded = quote(branch, safe="")
+        payload = self.request(
+            "GET", f"/repos/{spec.repo_full_name}/git/ref/heads/{encoded}"
+        )
+        sha = str(((payload or {}).get("object") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
+            raise GitHubApiError(
+                "github_response_invalid",
+                f"GitHub did not return a valid branch SHA for {spec.repo_full_name}:{branch}",
+            )
+        return sha.lower()
+
+    def branch_sha(self, spec: RepoSpec) -> str:
+        return self._branch_sha(spec, spec.branch)
+
+    def _commit_tree_sha(self, spec: RepoSpec, commit_sha: str) -> str:
+        payload = self.request(
+            "GET", f"/repos/{spec.repo_full_name}/git/commits/{commit_sha}"
+        )
+        tree_sha = str(((payload or {}).get("tree") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", tree_sha):
+            raise GitHubApiError(
+                "github_response_invalid",
+                f"GitHub did not return a tree for commit {commit_sha}",
+            )
+        return tree_sha.lower()
+
+    def _content_sha(self, spec: RepoSpec, path: str, *, ref: str) -> str:
+        encoded_path = quote(path, safe="/")
+        query = urlencode({"ref": ref})
+        payload = self.request(
+            "GET", f"/repos/{spec.repo_full_name}/contents/{encoded_path}?{query}"
+        )
+        sha = str((payload or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
+            raise GitHubApiError(
+                "github_response_invalid",
+                f"GitHub did not return a gitlink SHA for {path} at {ref}",
+            )
+        return sha.lower()
+
+    def _open_gitlink_pull(self, spec: RepoSpec) -> dict[str, Any] | None:
+        query = urlencode({
+            "state": "open", "base": spec.branch, "sort": "created",
+            "direction": "asc", "per_page": 100,
+        })
+        rows = self.request("GET", f"/repos/{spec.repo_full_name}/pulls?{query}")
+        owner = spec.repo_full_name.split("/", 1)[0]
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            head = row.get("head") or {}
+            branch = str(head.get("ref") or "")
+            head_repo = str(((head.get("repo") or {}).get("full_name")) or "")
+            label = str(head.get("label") or "")
+            if (
+                branch.startswith(SUPERPROJECT_BRANCH_PREFIX)
+                and (head_repo == spec.repo_full_name or label.startswith(f"{owner}:"))
+            ):
+                return row
+        return None
+
+    def ensure_superproject_gitlink_pr(
+        self,
+        superproject: RepoSpec,
+        child: RepoSpec,
+        *,
+        target_sha: str,
+    ) -> dict[str, Any]:
+        """Create or advance one aggregate parent PR to an exact child commit.
+
+        This uses GitHub's Git database only. It never reads or mutates the
+        deployed superproject worktree; production convergence remains a
+        separate Sync Hermes action after the parent PR is merged.
+        """
+        if not child.superproject_path:
+            return {
+                "managed": False,
+                "state": "not_projected",
+                "repository": child.name,
+            }
+        target = str(target_sha or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", target):
+            raise GitHubApiError(
+                "superproject_pin_invalid",
+                "GitHub merge did not return a valid child commit SHA",
+                details={"repository": child.name, "target_sha": target_sha},
+            )
+
+        current = self._open_gitlink_pull(superproject)
+        if current:
+            branch = str((current.get("head") or {}).get("ref") or "")
+            branch_sha = self._branch_sha(superproject, branch)
+            pull_number = int(current.get("number") or 0)
+            pull_url = current.get("html_url")
+            state = "updated"
+        else:
+            branch = (
+                f"{SUPERPROJECT_BRANCH_PREFIX}{child.name}-{target[:12]}-{time.time_ns()}"
+            )
+            branch_sha = self._branch_sha(superproject, superproject.branch)
+            pull_number = 0
+            pull_url = None
+            state = "created"
+
+        current_pin = self._content_sha(
+            superproject, child.superproject_path, ref=branch
+            if current else superproject.branch
+        )
+        if current_pin == target:
+            return {
+                "managed": True,
+                "changed": False,
+                "state": "pull_current" if current else "already_pinned",
+                "superproject": superproject.name,
+                "repository": child.name,
+                "path": child.superproject_path,
+                "target_sha": target,
+                "branch": branch if current else None,
+                "pull_number": pull_number or None,
+                "html_url": pull_url,
+            }
+
+        base_tree = self._commit_tree_sha(superproject, branch_sha)
+        tree = self.request(
+            "POST",
+            f"/repos/{superproject.repo_full_name}/git/trees",
+            {
+                "base_tree": base_tree,
+                "tree": [{
+                    "path": child.superproject_path,
+                    "mode": "160000",
+                    "type": "commit",
+                    "sha": target,
+                }],
+            },
+        )
+        tree_sha = str((tree or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", tree_sha):
+            raise GitHubApiError(
+                "github_response_invalid", "GitHub did not create the superproject tree"
+            )
+        commit = self.request(
+            "POST",
+            f"/repos/{superproject.repo_full_name}/git/commits",
+            {
+                "message": f"chore: update {child.name} gitlink to {target[:12]}",
+                "tree": tree_sha,
+                "parents": [branch_sha],
+            },
+        )
+        commit_sha = str((commit or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit_sha):
+            raise GitHubApiError(
+                "github_response_invalid", "GitHub did not create the superproject commit"
+            )
+        commit_sha = commit_sha.lower()
+
+        if current:
+            encoded = quote(branch, safe="")
+            self.request(
+                "PATCH",
+                f"/repos/{superproject.repo_full_name}/git/refs/heads/{encoded}",
+                {"sha": commit_sha, "force": False},
+            )
+        else:
+            self.request(
+                "POST",
+                f"/repos/{superproject.repo_full_name}/git/refs",
+                {"ref": f"refs/heads/{branch}", "sha": commit_sha},
+            )
+            pull = self.request(
+                "POST",
+                f"/repos/{superproject.repo_full_name}/pulls",
+                {
+                    "title": "chore: update Hermes submodule pins",
+                    "head": branch,
+                    "base": superproject.branch,
+                    "body": (
+                        "Mission Control generated this PR after merging a managed child "
+                        "repository. Merge it from the Hermes card, then use Sync Hermes "
+                        "to converge the local superproject to the committed gitlinks."
+                    ),
+                },
+            )
+            pull_number = int((pull or {}).get("number") or 0)
+            pull_url = (pull or {}).get("html_url")
+            if not pull_number:
+                raise GitHubApiError(
+                    "github_response_invalid", "GitHub did not create the gitlink pull request"
+                )
+
+        verified = self._content_sha(
+            superproject, child.superproject_path, ref=branch
+        )
+        if verified != target:
+            raise GitHubApiError(
+                "superproject_pin_unverified",
+                "parent branch does not contain the expected child gitlink",
+                details={
+                    "path": child.superproject_path,
+                    "expected": target,
+                    "actual": verified,
+                },
+            )
+        return {
+            "managed": True,
+            "changed": True,
+            "state": state,
+            "superproject": superproject.name,
+            "repository": child.name,
+            "path": child.superproject_path,
+            "target_sha": target,
+            "branch": branch,
+            "parent_commit_sha": commit_sha,
+            "pull_number": pull_number,
+            "html_url": pull_url,
+        }
+
     def sync_fork(self, _spec: RepoSpec) -> dict[str, Any]:
         raise RepositorySyncError("upstream_disabled", "upstream synchronization is disabled")
 
@@ -832,6 +1081,15 @@ class RepositorySyncService:
             return self.registry[name]
         except KeyError as exc:
             raise RepositorySyncError("repo_unknown", f"unknown repository: {name}") from exc
+
+    def _superproject_spec(self) -> RepoSpec:
+        rows = [spec for spec in self.registry.values() if spec.local_mode == "superproject"]
+        if len(rows) != 1:
+            raise RepositorySyncError(
+                "superproject_unavailable",
+                "exactly one Hermes superproject is required for gitlink projection",
+            )
+        return rows[0]
 
     @staticmethod
     def _origin_ref(spec: RepoSpec) -> str:
@@ -1324,6 +1582,13 @@ class RepositorySyncService:
         spec = self.spec(name)
         started = time.monotonic()
         layout = self._layout(spec)
+        superproject_name = next(
+            (
+                row.name for row in self.registry.values()
+                if row.local_mode == "superproject"
+            ),
+            None,
+        )
         base: dict[str, Any] = {
             "name": spec.name, "repo_full_name": spec.repo_full_name,
             "branch": spec.branch, "host": spec.host, "transport": spec.transport,
@@ -1336,6 +1601,12 @@ class RepositorySyncService:
                 "merge_pr": True,
                 "sync_local": spec.local_mode != "remote_only",
                 "initialize_local": spec.local_mode == "canonical",
+                "project_to_superproject": bool(spec.superproject_path),
+            },
+            "superproject": {
+                "managed": bool(spec.superproject_path),
+                "name": superproject_name if spec.superproject_path else None,
+                "path": spec.superproject_path,
             },
         }
         if include_last_operation:
@@ -1936,10 +2207,11 @@ class RepositorySyncService:
         self, name: str, number: int, *, expected_head_sha: str | None = None,
         trigger: str = "manual", wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
-        """Rebase-merge one GitHub PR without reading or mutating local Git."""
+        """Merge on GitHub and prepare an exact parent gitlink PR when managed."""
         spec = self.spec(name)
         event = self._event_base(spec, "merge_pr", trigger)
         event["pull_number"] = int(number)
+        github: dict[str, Any] | None = None
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
                 pull = self.github.pull_detail(spec, int(number))
@@ -1950,12 +2222,93 @@ class RepositorySyncService:
                 github = self.github.merge_pr_rebase(
                     spec, int(number), expected_head_sha=expected_head_sha
                 )
+                pin: dict[str, Any] = {
+                    "managed": False,
+                    "state": "not_projected",
+                    "repository": spec.name,
+                }
+                if spec.superproject_path:
+                    target_sha = str(github.get("merge_sha") or "").lower()
+                    if not re.fullmatch(r"[0-9a-f]{40,64}", target_sha):
+                        raise RepositorySyncError(
+                            "superproject_pin_invalid",
+                            "GitHub merge did not return a valid child commit SHA",
+                            details={
+                                "repository": spec.name,
+                                "target_sha": github.get("merge_sha"),
+                            },
+                        )
+                    superproject = self._superproject_spec()
+                    with self.store.lock(
+                        "hermes-superproject-gitlinks", wait_seconds=wait_seconds
+                    ):
+                        pin = self.github.ensure_superproject_gitlink_pr(
+                            superproject, spec, target_sha=target_sha
+                        )
                 return self._finish_event(
-                    event, ok=True, status="ok", github=github, local_mutation=False
+                    event,
+                    ok=True,
+                    status="ok",
+                    github=github,
+                    superproject_pin=pin,
+                    local_mutation=False,
                 )
         except RepositorySyncError as exc:
+            partial = github is not None
             return self._finish_event(
-                event, ok=False, status="error", local_mutation=False,
+                event,
+                ok=False,
+                status="partial_success" if partial else "error",
+                partial_success=partial,
+                completed_phase="github_merge" if partial else None,
+                github=github,
+                local_mutation=False,
+                error={"code": exc.code, "message": str(exc), "details": exc.details},
+            )
+
+    def prepare_superproject_pin(
+        self,
+        name: str,
+        *,
+        trigger: str = "manual",
+        wait_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Reconcile a managed child branch into the aggregate Hermes pin PR."""
+        spec = self.spec(name)
+        event = self._event_base(spec, "prepare_superproject_pin", trigger)
+        if not spec.superproject_path:
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                local_mutation=False,
+                error={
+                    "code": "superproject_projection_unavailable",
+                    "message": "repository is not projected into the Hermes superproject",
+                    "details": {},
+                },
+            )
+        try:
+            with self.store.lock(
+                "hermes-superproject-gitlinks", wait_seconds=wait_seconds
+            ):
+                target_sha = self.github.branch_sha(spec)
+                pin = self.github.ensure_superproject_gitlink_pr(
+                    self._superproject_spec(), spec, target_sha=target_sha
+                )
+            return self._finish_event(
+                event,
+                ok=True,
+                status="ok" if pin.get("changed") else "noop",
+                superproject_pin=pin,
+                local_mutation=False,
+            )
+        except RepositorySyncError as exc:
+            return self._finish_event(
+                event,
+                ok=False,
+                status="error",
+                local_mutation=False,
                 error={"code": exc.code, "message": str(exc), "details": exc.details},
             )
 

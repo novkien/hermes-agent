@@ -68,6 +68,7 @@ REPOSITORY_MUTATIONS: tuple[str, ...] = (
     "mark_ready",
     "mark_draft",
     "merge_pr",
+    "prepare_superproject_pin",
 )
 
 
@@ -258,6 +259,20 @@ def build_repository_router(core: Any) -> APIRouter:
             action="repository.sync",
             target=f"/api/repositories/{repo}/sync",
             call=lambda _parsed: service.sync(repo, trigger="dashboard"),
+        )
+
+    @router.post("/api/repositories/{repo}/prepare-superproject-pin")
+    async def prepare_superproject_pin(request: Request, repo: str) -> Response:
+        invalid = known(repo, request.state.request_id)
+        if invalid:
+            return invalid
+        return await run_mutation(
+            request,
+            action="repository.prepare_superproject_pin",
+            target=f"/api/repositories/{repo}/prepare-superproject-pin",
+            call=lambda _parsed: service.prepare_superproject_pin(
+                repo, trigger="dashboard"
+            ),
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/codex-review")

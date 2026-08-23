@@ -20,6 +20,9 @@ hosts:
     hermes_home: ~/.hermes
 
 repositories:
+  # superproject_path marks the four remote repositories that have a committed
+  # gitlink in novkien/hermes. Mission Control updates those pins through one
+  # aggregate GitHub PR; it never checks out or pulls these cards individually.
   hermes:
     github: novkien/hermes
     branch: master
@@ -36,6 +39,7 @@ repositories:
     host: jarvis
     work_tree: hermes-agent
     local_mode: remote_only
+    superproject_path: hermes-agent
     visibility: public
     upstream: NousResearch/hermes-agent
 
@@ -45,6 +49,7 @@ repositories:
     host: jarvis
     work_tree: .
     local_mode: remote_only
+    superproject_path: .sources/hermes-skills
     paths:
       - skills
       - workspace/skills-pack
@@ -56,6 +61,7 @@ repositories:
     host: jarvis
     work_tree: plugins
     local_mode: remote_only
+    superproject_path: plugins
     visibility: private
 
   agents:
@@ -64,6 +70,7 @@ repositories:
     host: jarvis
     work_tree: profiles
     local_mode: remote_only
+    superproject_path: profiles
     visibility: private
 
   llama-proxy:

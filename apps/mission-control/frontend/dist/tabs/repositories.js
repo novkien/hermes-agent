@@ -121,16 +121,35 @@ function operationMessage(operation) {
   if (!operation) return null;
   if (operation.ok) {
     if (operation.action === 'merge_pr') {
-      return `PR #${operation.pull_number} merged on GitHub. Local source was not changed.`;
+      const pin = operation.superproject_pin || {};
+      if (operation.repo === 'hermes') {
+        return `Hermes PR #${operation.pull_number} merged. Use Sync Hermes to converge the local superproject.`;
+      }
+      if (pin.managed) {
+        const pull = pin.pull_number ? ` PR #${pin.pull_number}` : ' PR';
+        return `PR #${operation.pull_number} merged on GitHub. Hermes gitlink${pull} ${pin.state === 'created' ? 'created' : 'updated'} at ${shortSha(pin.target_sha)}; merge it on the Hermes card, then use Sync Hermes.`;
+      }
+      return `PR #${operation.pull_number} merged on GitHub. This repository has no Hermes local projection.`;
     }
     if (operation.action === 'sync') {
       return `Hermes superproject sync complete at ${shortSha(operation.after?.local_sha)}; submodule pins and layout verified.`;
+    }
+    if (operation.action === 'prepare_superproject_pin') {
+      const pin = operation.superproject_pin || {};
+      if (pin.state === 'already_pinned') {
+        return `${pin.repository || 'Repository'} is already pinned at ${shortSha(pin.target_sha)} on Hermes master.`;
+      }
+      const pull = pin.pull_number ? ` #${pin.pull_number}` : '';
+      return `Hermes gitlink PR${pull} ${pin.state === 'created' ? 'created' : 'updated'} for ${pin.repository || 'repository'} at ${shortSha(pin.target_sha)}.`;
     }
     if (operation.action === 'codex_review') return 'Codex review requested for the current PR head.';
     if (operation.action === 'initialize_layout') return 'Canonical Git directory and live source are ready.';
     return 'Repository operation completed.';
   }
   if (operation.partial_success) {
+    if (operation.action === 'merge_pr' && operation.completed_phase === 'github_merge') {
+      return `PR #${operation.pull_number} merged on GitHub, but the Hermes gitlink PR was not prepared: ${operation.error?.message || 'unknown error'}`;
+    }
     // The service emits two distinct partial shapes: the GitHub merge landed
     // but the production pull failed, or both landed and only the stashed
     // local work failed to restore. They need different guidance.
@@ -382,6 +401,19 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     );
   }
 
+  function prepareSuperprojectPin(repo) {
+    if (!canMutate('prepare_superproject_pin')) return;
+    if (!repo.capabilities?.project_to_superproject) return;
+    const confirmed = window.confirm(
+      `Create or update the Hermes gitlink PR so ${repo.name}:${repo.branch} is projected at ${repo.superproject?.path}.\n\nThis changes GitHub only. Merge the resulting PR on the Hermes card, then use Sync Hermes.\n\nContinue?`,
+    );
+    if (!confirmed) return;
+    return runAction(
+      repo, `pin:${repo.name}`,
+      `/api/repositories/${encodeURIComponent(repo.name)}/prepare-superproject-pin`,
+    );
+  }
+
   function requestCodex(repo, pull) {
     if (!canMutate('codex_review')) return;
     return runAction(
@@ -410,8 +442,16 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     if (pull.mergeable !== true) {
       evidence.push('GitHub has not confirmed the PR as mergeable yet.');
     }
+    let convergence;
+    if (repo.local_mode === 'superproject') {
+      convergence = 'After merge, use Sync Hermes to converge the local superproject.';
+    } else if (repo.superproject?.managed) {
+      convergence = `After merge, Mission Control will create or update a Hermes gitlink PR for ${repo.superproject.path}. Merge that PR on the Hermes card, then use Sync Hermes.`;
+    } else {
+      convergence = 'This repository has no Hermes local projection; no local checkout will be changed.';
+    }
     const confirmed = window.confirm(
-      `Rebase-merge PR #${pull.number} into ${repo.repo_full_name || repo.name}:${repo.branch}.\n\n${evidence.join('\n')}\n\nThis changes GitHub only. To update Jarvis, merge the matching gitlink PR in novkien/hermes and use Sync on the Hermes card.\n\nContinue?`,
+      `Rebase-merge PR #${pull.number} into ${repo.repo_full_name || repo.name}:${repo.branch}.\n\n${evidence.join('\n')}\n\n${convergence}\n\nContinue?`,
     );
     if (!confirmed) return;
     return runAction(
@@ -473,7 +513,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
       el('div', { class: 'repo-card-facts' }, [
         el('div', { class: 'repo-fact' }, [
           el('span', { text: 'Local behavior' }),
-          el('code', { text: repo.local_mode === 'superproject' ? 'Hermes superproject sync' : 'Remote only' }),
+          el('code', { text: repo.local_mode === 'superproject' ? 'Hermes superproject sync' : repo.superproject?.managed ? `Via Hermes gitlink · ${repo.superproject.path}` : 'Remote only' }),
         ]),
         el('div', { class: 'repo-fact' }, [
           el('span', { text: 'Local source' }),
@@ -481,7 +521,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         ]),
         el('div', { class: 'repo-fact' }, [
           el('span', { text: 'Git action' }),
-          el('code', { text: repo.local_mode === 'remote_only' ? 'PR merge on GitHub' : `${shortSha(repo.local_sha)} / ${shortSha(repo.remote_sha)}` }),
+          el('code', { text: repo.local_mode === 'remote_only' ? repo.superproject?.managed ? 'PR merge + Hermes pin PR' : 'PR merge on GitHub' : `${shortSha(repo.local_sha)} / ${shortSha(repo.remote_sha)}` }),
         ]),
         el('div', { class: 'repo-fact' }, [
           el('span', { text: 'Pull requests' }),
@@ -503,7 +543,12 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
             : repo.capabilities?.sync_local ? button(pending ? 'Syncing…' : 'Sync Hermes', () => syncRepository(repo), {
               disabled: pending || !canMutate('sync'),
               title: mutationGateTitle('sync', 'Sync Hermes superproject'),
-            }) : el('span', { class: 'repo-pr-summary', text: 'No local sync' }),
+            }) : repo.capabilities?.project_to_superproject
+              ? button(pending ? 'Preparing…' : 'Prepare Hermes pin', () => prepareSuperprojectPin(repo), {
+                disabled: pending || !canMutate('prepare_superproject_pin'),
+                title: mutationGateTitle('prepare_superproject_pin', 'Prepare Hermes gitlink PR'),
+              })
+              : el('span', { class: 'repo-pr-summary', text: 'No local projection' }),
         ]),
       ]),
     );
@@ -667,6 +712,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
     }
     const pull = selectedPull();
     const repoOps = operations.filter((row) => row.repo === repo.name).slice(0, 12);
+    const repoPending = [...active].some((key) => keyMatches(key, repo.name));
     appendPresent(inspectorHost,
       el('div', { class: 'repo-side-head' }, [
         el('div', { class: 'repo-side-name', text: repo.repo_full_name || repo.name }),
@@ -684,7 +730,7 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
         kv('Host', repo.host),
         kv('Branch', repo.branch, { mono: true }),
         kv('Origin', repo.origin_actual || repo.origin_url, { mono: true }),
-        kv('Local mode', repo.local_mode === 'remote_only' ? 'No local Git; PR actions only' : 'Superproject sync', { mono: true }),
+        kv('Local mode', repo.local_mode === 'remote_only' ? repo.superproject?.managed ? `Projected by Hermes gitlink · ${repo.superproject.path}` : 'No Hermes local projection; PR actions only' : 'Superproject sync', { mono: true }),
         repo.local_mode !== 'remote_only' ? kv('Git dir', repo.layout?.git_dir, { mono: true }) : null,
         repo.local_mode !== 'remote_only' ? kv('Live source', repo.layout?.work_tree, { mono: true }) : null,
         repo.local_mode !== 'remote_only' ? kv('Local SHA', shortSha(repo.local_sha), { mono: true }) : null,
@@ -703,7 +749,13 @@ export function createRepositories({ api, profile, toolbar, liveStore }) {
               primary: true,
               disabled: !canMutate('sync'),
               title: mutationGateTitle('sync', 'Sync Hermes superproject'),
-            }) : el('span', { class: 'repo-side-empty', text: 'Local sync is intentionally unavailable for this card.' }),
+            }) : repo.capabilities?.project_to_superproject
+              ? button(repoPending ? 'Preparing…' : 'Prepare Hermes pin', () => prepareSuperprojectPin(repo), {
+                primary: true,
+                disabled: repoPending || !canMutate('prepare_superproject_pin'),
+                title: mutationGateTitle('prepare_superproject_pin', 'Prepare Hermes gitlink PR'),
+              })
+              : el('span', { class: 'repo-side-empty', text: 'This repository has no Hermes local projection.' }),
         ]),
       ]),
       section('Pull requests', (repo.pull_requests || []).length
