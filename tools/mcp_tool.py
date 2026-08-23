@@ -422,6 +422,8 @@ _MCP_LOG_LEVEL_MAP = {
 
 _DEFAULT_TOOL_TIMEOUT = 300      # seconds for tool calls
 _DEFAULT_CONNECT_TIMEOUT = 60    # seconds for initial connection per server
+_DISCOVERY_OUTER_TIMEOUT_FLOOR = 120.0
+_DISCOVERY_OUTER_TIMEOUT_GRACE = 30.0
 _MAX_RECONNECT_RETRIES = 5
 _MAX_INITIAL_CONNECT_RETRIES = 3 # retries for the very first connection attempt
 _MAX_BACKOFF_SECONDS = 60
@@ -6760,6 +6762,24 @@ async def _discover_and_register_server(name: str, config: dict) -> List[str]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _parallel_discovery_timeout(servers: Dict[str, dict]) -> float:
+    """Bound a discovery batch without undercutting per-server timeouts."""
+
+    largest = float(_DEFAULT_CONNECT_TIMEOUT)
+    for config in servers.values():
+        try:
+            configured = float(
+                config.get("connect_timeout", _DEFAULT_CONNECT_TIMEOUT)
+            )
+        except (TypeError, ValueError):
+            configured = float(_DEFAULT_CONNECT_TIMEOUT)
+        if configured > 0:
+            largest = max(largest, configured)
+    return max(
+        _DISCOVERY_OUTER_TIMEOUT_FLOOR,
+        largest + _DISCOVERY_OUTER_TIMEOUT_GRACE,
+    )
+
 def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     """Connect to explicit MCP servers and register their tools.
 
@@ -6914,7 +6934,10 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
                     _clear_connect_failure(name)
 
     # Per-server timeouts are handled inside _discover_and_register_server.
-    # The outer timeout is generous: 120s total for parallel discovery.
+    # Keep the parallel batch bound above the largest configured per-server
+    # connect timeout. A fixed 120s outer bound used to cancel valid cold
+    # starts even when that server explicitly configured connect_timeout=300.
+    discovery_timeout = _parallel_discovery_timeout(new_servers)
     #
     # Temporarily clear the interrupt flag on the current thread so that MCP
     # discovery is never cancelled by a stale interrupt from a prior agent
@@ -6924,7 +6947,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     if _was_interrupted:
         _set_interrupt(False)
     try:
-        _run_on_mcp_loop(_discover_all, timeout=120)
+        _run_on_mcp_loop(_discover_all, timeout=discovery_timeout)
     except (TimeoutError, InterruptedError) as _e:
         # When the outer timeout fires or the user interrupts,
         # _discover_all's gather may not have finished, leaving
