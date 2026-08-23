@@ -882,6 +882,24 @@ class TestMCPServerTask:
 # ---------------------------------------------------------------------------
 
 class TestToolsetInjection:
+    def test_parallel_discovery_timeout_honors_slowest_server(self):
+        """The batch timeout must not cancel a valid long cold start."""
+        from tools.mcp_tool import _parallel_discovery_timeout
+
+        assert _parallel_discovery_timeout({
+            "fast": {"connect_timeout": 15},
+            "cold-comfyui": {"connect_timeout": 300},
+        }) == 330.0
+
+    def test_parallel_discovery_timeout_keeps_legacy_floor(self):
+        """Normal and malformed configs retain the bounded 120s floor."""
+        from tools.mcp_tool import _parallel_discovery_timeout
+
+        assert _parallel_discovery_timeout({
+            "default": {},
+            "malformed": {"connect_timeout": "not-a-number"},
+        }) == 120.0
+
     def test_mcp_tools_resolve_through_server_aliases(self):
         """Discovered MCP tools resolve through raw server-name aliases."""
         from tools.mcp_tool import MCPServerTask
