@@ -102,28 +102,13 @@ def generate_systemd_unit(
 ) -> str:
     """Generate an independent Mission Control systemd service definition."""
     ctx = _resolve_unit_context(system=system, run_as_user=run_as_user)
-    git_write_paths = " ".join(
-        str(path)
-        for path in (
-            ctx.data_root,
-            ctx.hermes_root / "hermes-agent",
-            ctx.hermes_root / "hermes-plugins",
-            ctx.hermes_root / "skills",
-            ctx.hermes_root / "workspace" / "skills-pack",
-            # SQLite WAL readers may need to create the transient -shm sidecar
-            # even when the database itself is opened with mode=ro.
-            ctx.hermes_root / "workspace" / "state",
-            ctx.hermes_root.parent / "agents",
-            # The whole common Git directory: repository control keeps every
-            # managed repository's bare git dir under <HERMES_HOME>/repos and
-            # must be able to create a new one during initialize_layout.
-            ctx.hermes_root / "repos",
-        )
-        # ReadWritePaths entries must exist at unit-apply time or the service
-        # fails with status 226 (NAMESPACE); optional host-specific paths are
-        # only whitelisted where they actually exist.
-        if path.exists()
-    )
+    # Repository sync is intentionally rooted at the Hermes superproject. Git
+    # may update the parent .git directory, any tracked root file, and every
+    # pinned submodule in one transaction, so narrower per-child write paths
+    # would make the advertised Sync action fail inside ProtectHome=read-only.
+    # HERMES_HOME is the smallest durable boundary that contains that complete
+    # transaction as well as Mission Control's own SQLite state.
+    git_write_paths = str(ctx.hermes_root)
     identity = ""
     wanted_by = "default.target"
     if system:
