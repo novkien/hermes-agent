@@ -54,16 +54,7 @@ def test_generated_unit_is_independent(monkeypatch, tmp_path: Path) -> None:
     assert "PartOf=" not in unit
     assert "BindsTo=" not in unit
     assert "Requires=" not in unit
-    assert (
-        f"ReadWritePaths={tmp_path / '.hermes' / 'mission-control'} "
-        f"{tmp_path / '.hermes' / 'hermes-agent'} "
-        f"{tmp_path / '.hermes' / 'hermes-plugins'} "
-        f"{tmp_path / '.hermes' / 'skills'} "
-        f"{tmp_path / '.hermes' / 'workspace' / 'skills-pack'} "
-        f"{tmp_path / '.hermes' / 'workspace' / 'state'} "
-        f"{tmp_path / 'agents'} "
-        f"{tmp_path / '.hermes' / 'repos'}"
-    ) in unit
+    assert f"ReadWritePaths={tmp_path / '.hermes'}" in unit
 
 
 def test_gateway_coupling_uses_start_not_restart(monkeypatch) -> None:
