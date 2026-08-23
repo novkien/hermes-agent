@@ -118,8 +118,13 @@ class _AllowlistGate:
         )
         if not self._router.allowlist.contains(effective):
             return JSONResponse(
-                {"error": {"message": "source IP not allowed", "code": "ip_forbidden"},
-                 "request_id": getattr(request.state, "request_id", None)},
+                {
+                    "error": {
+                        "message": "source IP not allowed",
+                        "code": "ip_forbidden",
+                    },
+                    "request_id": getattr(request.state, "request_id", None),
+                },
                 status_code=403,
             )
         if request.method in {"OPTIONS", "HEAD"}:
@@ -132,9 +137,13 @@ class _AllowlistGate:
             session = self._router.auto_issue_session(request)
             if session is None:
                 return JSONResponse(
-                    {"error": {"message": "session issue rate limit exceeded",
-                               "code": "rate_limited"},
-                     "request_id": getattr(request.state, "request_id", None)},
+                    {
+                        "error": {
+                            "message": "session issue rate limit exceeded",
+                            "code": "rate_limited",
+                        },
+                        "request_id": getattr(request.state, "request_id", None),
+                    },
                     status_code=429,
                 )
             request.state.auto_session = session
@@ -173,8 +182,12 @@ async def _body_limit_middleware(request: Request, call_next) -> Response:
             try:
                 if int(content_length) > request.app.state.settings.body_limit_bytes:
                     return JSONResponse(
-                        {"error": {"message": "request body too large",
-                                   "code": "body_too_large"}},
+                        {
+                            "error": {
+                                "message": "request body too large",
+                                "code": "body_too_large",
+                            }
+                        },
                         status_code=413,
                     )
             except ValueError:
@@ -194,8 +207,10 @@ async def _security_headers_middleware(request: Request, call_next) -> Response:
 
 async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(
-        {"error": {"message": exc.message, "code": exc.code},
-         "request_id": getattr(request.state, "request_id", None)},
+        {
+            "error": {"message": exc.message, "code": exc.code},
+            "request_id": getattr(request.state, "request_id", None),
+        },
         status_code=exc.status,
     )
 
@@ -254,19 +269,14 @@ def _wire_audit_live_updates(deps: AppDeps) -> None:
     bounded inventory worker remains the convergence path if either live
     operation is unavailable.
     """
-    if (
-        not hasattr(deps.store, "set_audit_listener")
-        or deps.event_bus is None
-    ):
+    if not hasattr(deps.store, "set_audit_listener") or deps.event_bus is None:
         return
 
     async def publish_audit_delta(row: dict[str, Any]) -> None:
         payload = dict(row)
         revision = 0
         if deps.read_model is not None:
-            revision, payload = deps.read_model.upsert_entity(
-                "action.audit", row
-            )
+            revision, payload = deps.read_model.upsert_entity("action.audit", row)
         await deps.event_bus.safe_publish(
             "audit.changed",
             "control-store",
@@ -291,7 +301,9 @@ def _wire_audit_live_updates(deps: AppDeps) -> None:
     deps.store.set_audit_listener(schedule_audit_delta)
 
 
-def create_app(deps: AppDeps | None = None, settings: Settings | None = None) -> FastAPI:
+def create_app(
+    deps: AppDeps | None = None, settings: Settings | None = None
+) -> FastAPI:
     """Build the FastAPI app. Pass ``deps`` (fully built) or ``settings``
     (builds real collaborators against env defaults)."""
     s = settings or Settings.from_env()
@@ -302,7 +314,9 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
         dashboard_store = SessionPersonaStore(s.dashboard_store_path)
         dashboard = DashboardClient(s.dashboard_url, s.dashboard_basic_auth_password)
         gateway = GatewayClient(
-            s.gateway_url, s.gateway_token, nas_jwt_secret=s.nas_jwt_secret,
+            s.gateway_url,
+            s.gateway_token,
+            nas_jwt_secret=s.nas_jwt_secret,
             stream_read_timeout=s.chat_stream_read_timeout_seconds,
         )
         adapter = LocalDataBackend(DataBackendSettings(s.hermes_home))
@@ -313,7 +327,9 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
             keepalive_fresh_seconds=s.runner_pool_keepalive_fresh_seconds,
             port_announce_timeout_seconds=s.runner_port_announce_timeout_seconds,
         )
-        cache = Cache(ttl_seconds=s.cache_ttl_seconds, max_concurrency=s.cache_max_concurrency)
+        cache = Cache(
+            ttl_seconds=s.cache_ttl_seconds, max_concurrency=s.cache_max_concurrency
+        )
         bus = EventBus(
             store,
             ring_buffer_size=s.event_ring_buffer_size,
@@ -332,20 +348,50 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
         alert_engine = alerts_mod.AlertEngine(store, s, bus=bus)
         pulse = Pulse(store)
         workers = SourceWorkers(
-            bus, store, cache, dashboard, gateway, adapter, s,
-            alert_engine=alert_engine, read_model=read_model,
+            bus,
+            store,
+            cache,
+            dashboard,
+            gateway,
+            adapter,
+            s,
+            alert_engine=alert_engine,
+            read_model=read_model,
         )
         router = Router(
-            s, store, dashboard, gateway, adapter, cache, registry,
-            event_bus=bus, correlation_engine=engine, run_inspector=inspector,
-            alert_engine=alert_engine, pulse=pulse, dashboard_store=dashboard_store,
-            runner_manager=runner_manager, read_model=read_model,
+            s,
+            store,
+            dashboard,
+            gateway,
+            adapter,
+            cache,
+            registry,
+            event_bus=bus,
+            correlation_engine=engine,
+            run_inspector=inspector,
+            alert_engine=alert_engine,
+            pulse=pulse,
+            dashboard_store=dashboard_store,
+            runner_manager=runner_manager,
+            read_model=read_model,
         )
         deps = AppDeps(
-            s, store, dashboard, gateway, adapter, cache, registry, router,
-            event_bus=bus, correlation_engine=engine, run_inspector=inspector,
-            alert_engine=alert_engine, pulse=pulse, workers=workers,
-            dashboard_store=dashboard_store, runner_manager=runner_manager,
+            s,
+            store,
+            dashboard,
+            gateway,
+            adapter,
+            cache,
+            registry,
+            router,
+            event_bus=bus,
+            correlation_engine=engine,
+            run_inspector=inspector,
+            alert_engine=alert_engine,
+            pulse=pulse,
+            workers=workers,
+            dashboard_store=dashboard_store,
+            runner_manager=runner_manager,
             read_model=read_model,
         )
 
@@ -354,8 +400,13 @@ def create_app(deps: AppDeps | None = None, settings: Settings | None = None) ->
     # after their respective commits.
     _wire_audit_live_updates(deps)
 
-    app = FastAPI(title="agent-mission-control", version="0.1.0", docs_url=None,
-                  redoc_url=None, openapi_url=None)
+    app = FastAPI(
+        title="agent-mission-control",
+        version="0.1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.settings = s
     app.state.deps = deps
     # Set by the foreground server's signal handler before Uvicorn starts
@@ -467,7 +518,8 @@ async def _alert_tick_loop(deps: AppDeps) -> None:
                 workers = getattr(deps, "workers", None)
                 if workers is not None:
                     deps.alert_engine.set_source_data(
-                        "freshness", workers.freshness_snapshot())
+                        "freshness", workers.freshness_snapshot()
+                    )
                 deps.alert_engine.evaluate()
                 await deps.alert_engine.publish_resolved()
             except Exception:  # noqa: BLE001
@@ -478,6 +530,7 @@ async def _alert_tick_loop(deps: AppDeps) -> None:
 
 def _exc_name() -> str:
     import sys
+
     return type(sys.exc_info()[1]).__name__ if sys.exc_info()[1] else "unknown"
 
 

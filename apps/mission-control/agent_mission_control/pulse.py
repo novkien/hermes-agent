@@ -5,6 +5,7 @@ active_sessions, running_tasks, pending_permits, open_issues, tokens_in,
 tokens_out, cost_estimated, cost_class} from cached adapter/API data via
 bounded queries only — NO state.db count(*).
 """
+
 from __future__ import annotations
 
 import time
@@ -46,9 +47,15 @@ class Pulse:
         cutoff = now - seconds
         event_count = 0
         try:
-            row = self.store.conn().execute(
-                "SELECT COUNT(*) AS c FROM event_replay WHERE occurred_at>=?", (cutoff,)
-            ).fetchone()
+            row = (
+                self.store
+                .conn()
+                .execute(
+                    "SELECT COUNT(*) AS c FROM event_replay WHERE occurred_at>=?",
+                    (cutoff,),
+                )
+                .fetchone()
+            )
             event_count = row["c"] if row else 0
         except Exception:
             event_count = 0
@@ -65,9 +72,7 @@ class Pulse:
                 failures += 1
 
         sessions = self.source_data.get("sessions", [])
-        active_sessions = sum(
-            1 for s in sessions if s.get("ended_at") in (None, "", 0)
-        )
+        active_sessions = sum(1 for s in sessions if s.get("ended_at") in (None, "", 0))
 
         running_tasks = sum(1 for t in tasks if t.get("status") == "running")
 

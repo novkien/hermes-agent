@@ -11,6 +11,7 @@ Rules kept from the engines themselves:
     honest, where a fabricated one would not be;
   * nothing here infers a relation. Providers return rows; the engines decide.
 """
+
 from __future__ import annotations
 
 import logging
@@ -63,7 +64,9 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
         except Exception:  # noqa: BLE001
             # Anything else is a bug in this file, not a source outage. Swallowing
             # it silently once cost a fully empty graph, so it gets logged.
-            logger.exception("correlation provider failed: %s", getattr(call, "__name__", call))
+            logger.exception(
+                "correlation provider failed: %s", getattr(call, "__name__", call)
+            )
             return None
         if not isinstance(result, BackendResult):
             return None
@@ -86,7 +89,9 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
             return None
         body = _unwrap(body)
         if isinstance(body, dict):
-            return body.get("session") if isinstance(body.get("session"), dict) else body
+            return (
+                body.get("session") if isinstance(body.get("session"), dict) else body
+            )
         return None
 
     async def issue(issue_id) -> Optional[dict]:
@@ -101,15 +106,20 @@ def build_correlation_providers(adapter, dashboard) -> dict[str, Callable]:
 
     # ---- bounded child lists --------------------------------------------
     async def task_runs(task_id) -> list[dict]:
-        return _rows(await _adapter(adapter.kanban_task_runs, str(task_id)), "runs", "items")
+        return _rows(
+            await _adapter(adapter.kanban_task_runs, str(task_id)), "runs", "items"
+        )
 
     async def task_events(task_id) -> list[dict]:
-        return _rows(await _adapter(adapter.kanban_task_events, str(task_id)), "events", "items")
+        return _rows(
+            await _adapter(adapter.kanban_task_events, str(task_id)), "events", "items"
+        )
 
     async def task_attachments(task_id) -> list[dict]:
         return _rows(
             await _adapter(adapter.kanban_task_attachments, str(task_id)),
-            "attachments", "items",
+            "attachments",
+            "items",
         )
 
     # ---- reverse lookups (bounded scan + client-side filter) ------------

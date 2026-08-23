@@ -76,8 +76,7 @@ def _connect(path: Path) -> sqlite3.Connection:
 def _retryable_error(exc: sqlite3.Error) -> bool:
     detail = str(exc).lower()
     return any(
-        marker in detail
-        for marker in ("locked", "busy", "snapshot", "interrupted")
+        marker in detail for marker in ("locked", "busy", "snapshot", "interrupted")
     )
 
 
@@ -87,7 +86,9 @@ def _read_live_occupancy_once(path: Path) -> dict[str, Any]:
         conn = _connect(path)
         bindings = [dict(r) for r in conn.execute(_BINDINGS_SQL, (MAX_ROWS,))]
         try:
-            reservations = [dict(r) for r in conn.execute(_RESERVATIONS_SQL, (MAX_ROWS,))]
+            reservations = [
+                dict(r) for r in conn.execute(_RESERVATIONS_SQL, (MAX_ROWS,))
+            ]
         except sqlite3.Error:
             # Older plugin revisions predate this table.
             reservations = []

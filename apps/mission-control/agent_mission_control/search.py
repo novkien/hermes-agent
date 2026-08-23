@@ -147,7 +147,9 @@ async def search_issues(adapter: DataBackend, q: str, limit: int) -> dict:
     degraded = False
     results: list[dict] = []
     try:
-        r = await _fetch_with_timeout(adapter.issues(limit=100), SOURCE_TIMEOUT_SECONDS, None)
+        r = await _fetch_with_timeout(
+            adapter.issues(limit=100), SOURCE_TIMEOUT_SECONDS, None
+        )
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
@@ -157,7 +159,9 @@ async def search_issues(adapter: DataBackend, q: str, limit: int) -> dict:
                 degraded = True
             else:
                 rows = _rows_from(r.data, ("issues", "items"))
-                matched = _filter_rows(rows, q, ["issue", "context", "status", "severity"])
+                matched = _filter_rows(
+                    rows, q, ["issue", "context", "status", "severity"]
+                )
                 for i in matched[:limit]:
                     iid = i.get("id", "")
                     results.append({
@@ -183,7 +187,9 @@ async def search_permits(adapter: DataBackend, q: str, limit: int) -> dict:
     degraded = False
     results: list[dict] = []
     try:
-        r = await _fetch_with_timeout(adapter.permits(limit=100), SOURCE_TIMEOUT_SECONDS, None)
+        r = await _fetch_with_timeout(
+            adapter.permits(limit=100), SOURCE_TIMEOUT_SECONDS, None
+        )
         if r == "__TIMEOUT__":
             timed_out = True
         elif r == "__ERROR__":
@@ -193,7 +199,11 @@ async def search_permits(adapter: DataBackend, q: str, limit: int) -> dict:
                 degraded = True
             else:
                 rows = _rows_from(r.data, ("permits", "items"))
-                matched = _filter_rows(rows, q, ["permit_id", "issue_title", "status", "severity", "source"])
+                matched = _filter_rows(
+                    rows,
+                    q,
+                    ["permit_id", "issue_title", "status", "severity", "source"],
+                )
                 for p in matched[:limit]:
                     pid = p.get("permit_id", "")
                     results.append({
@@ -229,8 +239,11 @@ async def federated_search(adapter: DataBackend, q: str, limit: int = 20) -> dic
     for r in results:
         if isinstance(r, Exception):
             sources.append({
-                "source_id": "unknown", "results": [], "count": 0,
-                "timed_out": False, "degraded": True,
+                "source_id": "unknown",
+                "results": [],
+                "count": 0,
+                "timed_out": False,
+                "degraded": True,
             })
         else:
             sources.append(r)

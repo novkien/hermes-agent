@@ -72,6 +72,7 @@ def _resolve_runner_executable(raw: str) -> str:
 
     return candidate
 
+
 class RunnerSpawnError(RuntimeError):
     """A profile gateway process failed to start or become healthy."""
 
@@ -385,7 +386,8 @@ class RunnerManager:
             ) from exc
         argv = [
             self._hermes_executable,
-            "gateway", "run",
+            "gateway",
+            "run",
             "--force",
             "--external-supervisor",
         ]
@@ -408,7 +410,9 @@ class RunnerManager:
         env["HERMES_PARENT_PID"] = str(os.getpid())
 
         entry.state = RunnerState.STARTING
-        logger.info("runner[%s] starting via %r", entry.profile, self._hermes_executable)
+        logger.info(
+            "runner[%s] starting via %r", entry.profile, self._hermes_executable
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -419,7 +423,11 @@ class RunnerManager:
                 start_new_session=True,
             )
         except OSError as exc:
-            code = "runner_executable_missing" if isinstance(exc, FileNotFoundError) else "runner_exited"
+            code = (
+                "runner_executable_missing"
+                if isinstance(exc, FileNotFoundError)
+                else "runner_exited"
+            )
             raise RunnerSpawnError(
                 code,
                 f"failed to start Hermes for {entry.profile!r} using "
@@ -450,7 +458,9 @@ class RunnerManager:
             return entry.client
         except RunnerSpawnError as exc:
             entry.state = RunnerState.FAILED
-            logger.warning("runner[%s] failed code=%s: %s", entry.profile, exc.code, exc)
+            logger.warning(
+                "runner[%s] failed code=%s: %s", entry.profile, exc.code, exc
+            )
             await _close_entry_resources(entry, self._stop_grace_seconds)
             raise
         except Exception as exc:  # noqa: BLE001
@@ -473,7 +483,8 @@ class RunnerManager:
         now = time.monotonic()
         evictable = sorted(
             (
-                e for e in self._pool.values()
+                e
+                for e in self._pool.values()
                 if now - e.last_active_at > self._keepalive_fresh_seconds
             ),
             key=lambda e: e.last_active_at,
@@ -484,7 +495,8 @@ class RunnerManager:
                 break
             logger.info(
                 "evicting idle profile gateway %r (LRU cap %s)",
-                entry.profile, self._pool_max,
+                entry.profile,
+                self._pool_max,
             )
             await self._stop(entry.profile)
             removable -= 1
@@ -510,7 +522,8 @@ class RunnerManager:
                 if now - entry.last_active_at > self._idle_seconds:
                     logger.info(
                         "reaping idle profile gateway %r (idle > %ss)",
-                        profile, self._idle_seconds,
+                        profile,
+                        self._idle_seconds,
                     )
                     await self._stop(profile)
 

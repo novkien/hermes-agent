@@ -184,7 +184,9 @@ def kanban_list_tasks(
 _WORKER_PROMPT_PREFIX = "work kanban task "
 
 
-def _worker_anchor_matches(store: SourceStore, card_id: str) -> list[tuple[int, str, str]]:
+def _worker_anchor_matches(
+    store: SourceStore, card_id: str
+) -> list[tuple[int, str, str]]:
     """Return (message_id, session_id, content) for stored user messages whose
     text is the worker anchor prompt for card_id, content used only to verify
     the match in-process and never returned to a caller of this module."""
@@ -200,7 +202,9 @@ def _worker_anchor_matches(store: SourceStore, card_id: str) -> list[tuple[int, 
                 "WHERE messages_fts MATCH ? AND m.role = 'user'",
                 (phrase,),
             )
-            return [(int(r["id"]), str(r["session_id"]), r["content"] or "") for r in rows]
+            return [
+                (int(r["id"]), str(r["session_id"]), r["content"] or "") for r in rows
+            ]
         except sqlite3.Error:
             pass
     rows = store.query(
@@ -214,10 +218,10 @@ def _worker_anchor_matches_card(content: str, card_id: str) -> bool:
     stripped = content.strip()
     if not stripped.lower().startswith(_WORKER_PROMPT_PREFIX):
         return False
-    remainder = stripped[len(_WORKER_PROMPT_PREFIX):].strip()
+    remainder = stripped[len(_WORKER_PROMPT_PREFIX) :].strip()
     if not remainder.startswith(card_id):
         return False
-    tail = remainder[len(card_id):]
+    tail = remainder[len(card_id) :]
     return tail == "" or not (tail[0].isalnum() or tail[0] == "_")
 
 
@@ -266,15 +270,15 @@ def resolve_worker_session(
             for field in ("started_at", "ended_at"):
                 if session.get(field) is not None:
                     session[f"{field}_iso_utc"] = _epoch_to_iso(session[field])
-            candidates.append(
-                {
-                    "session_id": session_id,
-                    "profile": label,
-                    "method": "worker_prompt_anchor" if is_first else "worker_prompt_mention",
-                    "confidence": "high" if is_first else "medium",
-                    "session": session,
-                }
-            )
+            candidates.append({
+                "session_id": session_id,
+                "profile": label,
+                "method": "worker_prompt_anchor"
+                if is_first
+                else "worker_prompt_mention",
+                "confidence": "high" if is_first else "medium",
+                "session": session,
+            })
     if not candidates:
         return None
     candidates.sort(
@@ -299,7 +303,8 @@ def _epoch_to_iso(value: Any) -> str | None:
         import datetime
 
         return (
-            datetime.datetime.fromtimestamp(float(value), tz=datetime.timezone.utc)
+            datetime.datetime
+            .fromtimestamp(float(value), tz=datetime.timezone.utc)
             .isoformat()
             .replace("+00:00", "Z")
         )
@@ -321,16 +326,14 @@ def kanban_task_detail(
     children = [
         r["child_id"]
         for r in store.query(
-            "SELECT child_id FROM task_links WHERE parent_id = ? "
-            "ORDER BY child_id",
+            "SELECT child_id FROM task_links WHERE parent_id = ? ORDER BY child_id",
             (task_id,),
         )
     ]
     parents = [
         r["parent_id"]
         for r in store.query(
-            "SELECT parent_id FROM task_links WHERE child_id = ? "
-            "ORDER BY parent_id",
+            "SELECT parent_id FROM task_links WHERE child_id = ? ORDER BY parent_id",
             (task_id,),
         )
     ]
@@ -511,26 +514,20 @@ def kanban_boards_list(registry: KanbanBoardRegistry) -> dict[str, Any]:
         try:
             task_count = int(store.query("SELECT COUNT(*) FROM tasks")[0][0])
             running = int(
-                store.query(
-                    "SELECT COUNT(*) FROM tasks WHERE status = 'running'"
-                )[0][0]
+                store.query("SELECT COUNT(*) FROM tasks WHERE status = 'running'")[0][0]
             )
             blocked = int(
-                store.query(
-                    "SELECT COUNT(*) FROM tasks WHERE status = 'blocked'"
-                )[0][0]
+                store.query("SELECT COUNT(*) FROM tasks WHERE status = 'blocked'")[0][0]
             )
         except Exception:
             task_count = running = blocked = 0
-        boards.append(
-            {
-                "board": name,
-                "task_count": task_count,
-                "running_count": running,
-                "blocked_count": blocked,
-                "fingerprint": fp,
-            }
-        )
+        boards.append({
+            "board": name,
+            "task_count": task_count,
+            "running_count": running,
+            "blocked_count": blocked,
+            "fingerprint": fp,
+        })
     query_ms = (time.perf_counter() - t0) * 1000
     return {
         "data": boards,
@@ -860,13 +857,10 @@ def state_session_by_id(store: SourceStore, session_id: str) -> dict[str, Any] |
     return _row_to_dict(rows[0]) if rows else None
 
 
-def state_recent_sessions(
-    store: SourceStore, limit: int = 50
-) -> list[dict[str, Any]]:
+def state_recent_sessions(store: SourceStore, limit: int = 50) -> list[dict[str, Any]]:
     limit = _clamp_int(limit, 50, 1, 50, "limit")
     rows = store.query(
-        f"SELECT {SESSION_META_SQL} FROM sessions "
-        "ORDER BY started_at DESC LIMIT ?",
+        f"SELECT {SESSION_META_SQL} FROM sessions ORDER BY started_at DESC LIMIT ?",
         (limit,),
     )
     return [_row_to_dict(r) for r in rows]
@@ -952,9 +946,7 @@ def state_messages_meta(
     return [_row_to_dict(r) for r in rows]
 
 
-def state_model_usage(
-    store: SourceStore, session_id: str
-) -> list[dict[str, Any]]:
+def state_model_usage(store: SourceStore, session_id: str) -> list[dict[str, Any]]:
     rows = store.query(
         "SELECT session_id, model, billing_provider, billing_base_url, "
         "billing_mode, task, api_call_count, input_tokens, output_tokens, "

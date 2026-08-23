@@ -42,7 +42,15 @@ async def test_poll_hooks() -> None:
     async def failure(exc):
         calls.append(("failure", type(exc).__name__))
 
-    worker = PollWorker("test", 1, fetch, delta, lambda _data: "same", on_success=success, on_failure=failure)
+    worker = PollWorker(
+        "test",
+        1,
+        fetch,
+        delta,
+        lambda _data: "same",
+        on_success=success,
+        on_failure=failure,
+    )
     await worker.tick_once()
     await worker.tick_once()
     fail = True
@@ -55,20 +63,37 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "live.db"
         model = ReadModel(path)
-        assert model.available and model.health()["schema_version"] == READ_MODEL_SCHEMA_VERSION
+        assert (
+            model.available
+            and model.health()["schema_version"] == READ_MODEL_SCHEMA_VERSION
+        )
         assert model._conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"  # noqa: SLF001
 
         alpha_rev = model.replace_entities(
             "kanban.tasks",
-            [task("a", "Alpha", token="must-not-persist", content="body", attachment_path="/secret")],
+            [
+                task(
+                    "a",
+                    "Alpha",
+                    token="must-not-persist",
+                    content="body",
+                    attachment_path="/secret",
+                )
+            ],
             profile_id="alpha",
             fingerprint="fp-a",
         )
         assert alpha_rev == 1
         # Identical success refreshes freshness but does not manufacture a new revision.
-        assert model.replace_entities(
-            "kanban.tasks", [task("a", "Alpha")], profile_id="alpha", fingerprint="fp-a"
-        ) == alpha_rev
+        assert (
+            model.replace_entities(
+                "kanban.tasks",
+                [task("a", "Alpha")],
+                profile_id="alpha",
+                fingerprint="fp-a",
+            )
+            == alpha_rev
+        )
         beta_rev = model.replace_entities(
             "kanban.tasks", [task("b", "Beta")], profile_id="beta", fingerprint="fp-b"
         )
@@ -82,13 +107,18 @@ def main() -> None:
         duplicate_revision = model.replace_entities(
             "catalog.profiles",
             [{"name": "default", "model": "old"}, {"name": "default", "model": "new"}],
-            profile_id="alpha", fingerprint="duplicate-profile",
+            profile_id="alpha",
+            fingerprint="duplicate-profile",
         )
-        duplicate_rows = model.resource("catalog.profiles", profile_id="alpha")["entities"]
+        duplicate_rows = model.resource("catalog.profiles", profile_id="alpha")[
+            "entities"
+        ]
         assert duplicate_revision == 1 and len(duplicate_rows) == 1
         assert duplicate_rows[0]["payload"]["model"] == "new"
         next_revision, projected = model.upsert_entity(
-            "kanban.tasks", task("a", "Alpha updated", password="drop"), profile_id="alpha"
+            "kanban.tasks",
+            task("a", "Alpha updated", password="drop"),
+            profile_id="alpha",
         )
         assert next_revision == 2 and projected["title"] == "Alpha updated"
         assert model.revision("kanban.tasks", profile_id="alpha") == 2
@@ -97,7 +127,14 @@ def main() -> None:
         # not erase, the last projected entity stored by the polling worker.
         model.replace_entities(
             "issues",
-            [{"id": 9, "title": "Keep this title", "severity": "high", "status": "open"}],
+            [
+                {
+                    "id": 9,
+                    "title": "Keep this title",
+                    "severity": "high",
+                    "status": "open",
+                }
+            ],
             profile_id="alpha",
         )
         issue_revision, issue = model.upsert_entity(
@@ -105,16 +142,28 @@ def main() -> None:
         )
         assert issue_revision == 2
         assert issue == {
-            "id": 9, "title": "Keep this title", "severity": "high", "status": "resolved"
+            "id": 9,
+            "title": "Keep this title",
+            "severity": "high",
+            "status": "resolved",
         }
-        assert model.resource("issues", profile_id="alpha")["entities"][0]["payload"]["title"] == "Keep this title"
+        assert (
+            model.resource("issues", profile_id="alpha")["entities"][0]["payload"][
+                "title"
+            ]
+            == "Keep this title"
+        )
 
         analytics = project_summary(
             "analytics.usage",
             {
                 "period_days": 30,
-                "daily": [{"day": "2026-08-17", "total_tokens": 12, "messages": ["drop"]}],
-                "by_model": [{"model": "safe-model", "api_calls": 2, "authorization": "drop"}],
+                "daily": [
+                    {"day": "2026-08-17", "total_tokens": 12, "messages": ["drop"]}
+                ],
+                "by_model": [
+                    {"model": "safe-model", "api_calls": 2, "authorization": "drop"}
+                ],
                 "totals": {"total_tokens": 12, "estimated_cost": 0.2, "secret": "drop"},
                 "content": "drop",
                 "token": "drop",
@@ -132,18 +181,30 @@ def main() -> None:
         )
         assert restored_revision == 4
 
-        model.record_failure(("kanban.tasks",), RuntimeError("source offline"), profile_id="alpha")
+        model.record_failure(
+            ("kanban.tasks",), RuntimeError("source offline"), profile_id="alpha"
+        )
         stale = model.resource("kanban.tasks", profile_id="alpha")
         assert stale["provenance"] == "stale"
-        assert stale["entities"][0]["entity_id"] == "a", "failure erased last-known-good"
-        unchanged = model.resource("kanban.tasks", profile_id="alpha", after_revision=restored_revision)
+        assert stale["entities"][0]["entity_id"] == "a", (
+            "failure erased last-known-good"
+        )
+        unchanged = model.resource(
+            "kanban.tasks", profile_id="alpha", after_revision=restored_revision
+        )
         assert unchanged["provenance"] == "unchanged" and unchanged["entities"] == []
 
         bootstrap = model.bootstrap("kanban", profile_id="alpha")
         assert bootstrap["profile_id"] == "alpha"
-        assert set(bootstrap["resources"]) == {"kanban.boards", "kanban.tasks", "kanban.runs"}
+        assert set(bootstrap["resources"]) == {
+            "kanban.boards",
+            "kanban.tasks",
+            "kanban.runs",
+        }
         try:
-            model.replace_summary("memory.detail", {"content": "forbidden"}, profile_id="alpha")
+            model.replace_summary(
+                "memory.detail", {"content": "forbidden"}, profile_id="alpha"
+            )
         except ValueError:
             pass
         else:
@@ -151,7 +212,12 @@ def main() -> None:
 
         model.close()
         reopened = ReadModel(path)
-        assert reopened.resource("kanban.tasks", profile_id="alpha")["entities"][0]["entity_id"] == "a"
+        assert (
+            reopened.resource("kanban.tasks", profile_id="alpha")["entities"][0][
+                "entity_id"
+            ]
+            == "a"
+        )
         reopened.close()
 
         raw = path.read_bytes().lower()
@@ -171,7 +237,8 @@ def main() -> None:
         migrated = ReadModel(Path(tmp) / "idempotent.db")
         assert migrated.available
         tables = {
-            row[0] for row in migrated._conn.execute(  # noqa: SLF001
+            row[0]
+            for row in migrated._conn.execute(  # noqa: SLF001
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
@@ -213,10 +280,13 @@ def main() -> None:
                 "AND resource_key='action.audit'"
             ).fetchone()[0]
             assert count == 0
-        assert scoped._conn.execute(  # noqa: SLF001
-            "SELECT COUNT(*) FROM resource_snapshots WHERE profile_id='default' "
-            "AND resource_key='kanban.tasks'"
-        ).fetchone()[0] == 1
+        assert (
+            scoped._conn.execute(  # noqa: SLF001
+                "SELECT COUNT(*) FROM resource_snapshots WHERE profile_id='default' "
+                "AND resource_key='kanban.tasks'"
+            ).fetchone()[0]
+            == 1
+        )
         scoped.close()
 
     asyncio.run(test_poll_hooks())

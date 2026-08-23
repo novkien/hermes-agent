@@ -125,7 +125,10 @@ assert.doesNotMatch(tab, /mergeProjectedRows/);
 assert.match(routesPy, /REPOSITORY_MUTATIONS/);
 assert.match(routesPy, /prepare_superproject_pin/);
 assert.match(routesPy, /parse_body=lambda: _parse_expected_head\(request\)/);
-assert.match(coreRoutesPy, /"\/api\/repositories": \("initialize_layout", "sync", "codex_review",/);
+assert.match(
+  coreRoutesPy,
+  /"\/api\/repositories":\s*\(\s*"initialize_layout",\s*"sync",\s*"codex_review",/
+);
 
 assert.match(css, /\.repo-grid/);
 assert.match(css, /\.repo-pr-control/);

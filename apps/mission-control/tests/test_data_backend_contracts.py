@@ -107,21 +107,54 @@ CREATE TABLE issue_occurrences (
 """
 
 SESSION_COLUMNS = (
-    "id TEXT PRIMARY KEY", "source TEXT", "user_id TEXT", "session_key TEXT",
-    "chat_id TEXT", "chat_type TEXT", "thread_id TEXT", "display_name TEXT",
-    "expiry_finalized INTEGER", "model TEXT", "model_config TEXT",
-    "system_prompt TEXT", "system_prompt_hash TEXT", "parent_session_id TEXT",
-    "started_at REAL", "ended_at REAL", "end_reason TEXT", "message_count INTEGER",
-    "tool_call_count INTEGER", "input_tokens INTEGER", "output_tokens INTEGER",
-    "cache_read_tokens INTEGER", "cache_write_tokens INTEGER",
-    "reasoning_tokens INTEGER", "cwd TEXT", "git_branch TEXT", "git_repo_root TEXT",
-    "billing_provider TEXT", "billing_base_url TEXT", "billing_mode TEXT",
-    "estimated_cost_usd REAL", "actual_cost_usd REAL", "cost_status TEXT",
-    "cost_source TEXT", "pricing_version TEXT", "title TEXT", "title_source TEXT",
-    "last_activity_at REAL", "last_activity_description TEXT",
-    "last_activity_provenance TEXT", "api_call_count INTEGER", "handoff_state TEXT",
-    "handoff_platform TEXT", "handoff_error TEXT", "profile_name TEXT",
-    "archived INTEGER", "pinned INTEGER", "last_read_at REAL"
+    "id TEXT PRIMARY KEY",
+    "source TEXT",
+    "user_id TEXT",
+    "session_key TEXT",
+    "chat_id TEXT",
+    "chat_type TEXT",
+    "thread_id TEXT",
+    "display_name TEXT",
+    "expiry_finalized INTEGER",
+    "model TEXT",
+    "model_config TEXT",
+    "system_prompt TEXT",
+    "system_prompt_hash TEXT",
+    "parent_session_id TEXT",
+    "started_at REAL",
+    "ended_at REAL",
+    "end_reason TEXT",
+    "message_count INTEGER",
+    "tool_call_count INTEGER",
+    "input_tokens INTEGER",
+    "output_tokens INTEGER",
+    "cache_read_tokens INTEGER",
+    "cache_write_tokens INTEGER",
+    "reasoning_tokens INTEGER",
+    "cwd TEXT",
+    "git_branch TEXT",
+    "git_repo_root TEXT",
+    "billing_provider TEXT",
+    "billing_base_url TEXT",
+    "billing_mode TEXT",
+    "estimated_cost_usd REAL",
+    "actual_cost_usd REAL",
+    "cost_status TEXT",
+    "cost_source TEXT",
+    "pricing_version TEXT",
+    "title TEXT",
+    "title_source TEXT",
+    "last_activity_at REAL",
+    "last_activity_description TEXT",
+    "last_activity_provenance TEXT",
+    "api_call_count INTEGER",
+    "handoff_state TEXT",
+    "handoff_platform TEXT",
+    "handoff_error TEXT",
+    "profile_name TEXT",
+    "archived INTEGER",
+    "pinned INTEGER",
+    "last_read_at REAL",
 )
 
 
@@ -138,8 +171,18 @@ def create_kanban(path: Path, task_id: str, session_id: str, created_at: int) ->
         "INSERT INTO tasks (id,title,body,assignee,status,priority,created_by,created_at,"
         "workspace_path,max_runtime_seconds,skills,session_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            task_id, "Fixture task", "private task body", "worker", "running", 3,
-            "tester", created_at, "/bounded/workspace", 60, "[]", session_id,
+            task_id,
+            "Fixture task",
+            "private task body",
+            "worker",
+            "running",
+            3,
+            "tester",
+            created_at,
+            "/bounded/workspace",
+            60,
+            "[]",
+            session_id,
         ),
     )
     connection.execute(
@@ -213,11 +256,43 @@ def insert_session(
         "api_call_count,profile_name,archived,pinned) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            session_id, "telegram", "user-1", f"key-{session_id}", "chat-1", "group",
-            "10", "Fixture", 0, "model", "{}", "never expose prompt", "hash", parent,
-            started_at, ended_at, end_reason, 1, 0, 1, 1, 0, 0, 0, "provider", "http://local",
-            "test", 0.1, 0.0, "Fixture session", started_at, "active", "fixture", 1,
-            profile, 0, 0,
+            session_id,
+            "telegram",
+            "user-1",
+            f"key-{session_id}",
+            "chat-1",
+            "group",
+            "10",
+            "Fixture",
+            0,
+            "model",
+            "{}",
+            "never expose prompt",
+            "hash",
+            parent,
+            started_at,
+            ended_at,
+            end_reason,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            "provider",
+            "http://local",
+            "test",
+            0.1,
+            0.0,
+            "Fixture session",
+            started_at,
+            "active",
+            "fixture",
+            1,
+            profile,
+            0,
+            0,
         ),
     )
 
@@ -238,7 +313,9 @@ def create_state(path: Path, *, worker_anchor: bool = False) -> None:
             end_reason="session_reset",
             started_at=100.0,
         )
-        insert_session(connection, "tip-session", parent="root-session", started_at=200.0)
+        insert_session(
+            connection, "tip-session", parent="root-session", started_at=200.0
+        )
         connection.execute(
             "INSERT INTO messages VALUES (1,'root-session','user','searchable phrase',"
             "NULL,NULL,NULL,110,3,NULL,'secret api content')"
@@ -380,12 +457,16 @@ async def exercise_backend(root: Path) -> None:
     health = await backend.health()
     assert health.status == "ok"
     assert {row["source_id"] for row in health.sources} == {
-        "kanban", "permits", "issues", "state"
+        "kanban",
+        "permits",
+        "issues",
+        "state",
     }
     capabilities = await backend.capabilities()
     assert set(capabilities.data) == {"kanban", "permits", "issues", "state"}
     assert {row["board"] for row in capabilities.data["kanban"]["boards"]} == {
-        "task", "ops"
+        "task",
+        "ops",
     }
 
     boards = await backend.kanban_boards()
@@ -400,7 +481,9 @@ async def exercise_backend(root: Path) -> None:
     assert "stored_path" not in detail.data["attachments"][0]
     assert (await backend.kanban_task_events("task-1")).data[0]["kind"] == "created"
     assert (await backend.kanban_task_runs("task-1")).data[0]["status"] == "running"
-    assert (await backend.kanban_task_attachments("task-1")).data[0]["filename"] == "report.txt"
+    assert (await backend.kanban_task_attachments("task-1")).data[0][
+        "filename"
+    ] == "report.txt"
     worker = await backend.kanban_worker_session("task-1")
     assert worker.data["session_id"] == "worker-session"
     assert worker.data["profile"] == "worker"
@@ -421,7 +504,9 @@ async def exercise_backend(root: Path) -> None:
     update = await backend.update_issue("1", {"status": "resolved"})
     assert update.data["issue_id"] == 1
     await assert_error(400, backend.update_issue("1", {"arbitrary": "x"}))
-    await assert_error(400, backend.update_issue("../../outside", {"status": "resolved"}))
+    await assert_error(
+        400, backend.update_issue("../../outside", {"status": "resolved"})
+    )
 
     search = await backend.search_sessions("searchable", limit=5)
     assert search.data[0]["session_id"] == "root-session"
@@ -521,7 +606,9 @@ async def exercise_backend(root: Path) -> None:
         413,
         backend.save_memory_file("memory", "x" * 1_000_001),
     )
-    assert {path.name for path in backend.settings.memory_dir.iterdir()} == {"MEMORY.md"}
+    assert {path.name for path in backend.settings.memory_dir.iterdir()} == {
+        "MEMORY.md"
+    }
     assert backend.settings.scripts_dir == root / "hermes" / "scripts"
     outside_script = root / "outside_issue_script.py"
     outside_script.write_text("raise SystemExit('must not run')\n", encoding="utf-8")
@@ -577,7 +664,9 @@ def test_capabilities_degrade_one_unavailable_board() -> None:
             raise sqlite3.OperationalError("unable to open database file")
 
         def row_count(self, table: str):
-            raise AssertionError(f"row_count must not run for unreachable board: {table}")
+            raise AssertionError(
+                f"row_count must not run for unreachable board: {table}"
+            )
 
     class Registry:
         def board_names(self):

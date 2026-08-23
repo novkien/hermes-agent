@@ -200,9 +200,7 @@ class Store:
         self._path = str(db_path)
         migrate(self._path)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(
-            self._path, timeout=10.0, check_same_thread=False
-        )
+        self._conn = sqlite3.connect(self._path, timeout=10.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._audit_listener = None
         with self._lock:
@@ -264,9 +262,7 @@ class Store:
 
     def delete_expired_sessions(self, now: float | None = None) -> int:
         now = now or time.time()
-        cur = self._execute(
-            "DELETE FROM sessions WHERE expires_at < ?", (_iso(now),)
-        )
+        cur = self._execute("DELETE FROM sessions WHERE expires_at < ?", (_iso(now),))
         self._commit()
         return cur.rowcount
 
@@ -326,7 +322,9 @@ class Store:
     def count_audit(self) -> int:
         return int(self._execute("SELECT COUNT(*) FROM action_audit").fetchone()[0])
 
-    def complete_audit(self, request_id: str, upstream_status: int, result: str) -> None:
+    def complete_audit(
+        self, request_id: str, upstream_status: int, result: str
+    ) -> None:
         """Mark the pending audit row(s) for a request_id with the upstream
         outcome (in-place UPDATE — append-only refers to row creation; the
         pending row is updated, never duplicated)."""
@@ -356,7 +354,9 @@ class Store:
         return int(rows["c"] if rows else 0) >= min_count
 
     # -- preferences / saved views / alerts (thin, JSON-value) ------------
-    def set_preference(self, key: str, value: Any, profile_id: str | None = None) -> None:
+    def set_preference(
+        self, key: str, value: Any, profile_id: str | None = None
+    ) -> None:
         self._execute(
             "INSERT INTO preferences (key, value, profile_id) VALUES (?, ?, ?) "
             "ON CONFLICT(key, profile_id) DO UPDATE SET value = excluded.value",
@@ -397,8 +397,14 @@ class Store:
                     out[row["key"]] = row["value"]
         return out
 
-    def save_view(self, view_id: str, name: str, route: str, filters: dict,
-                  profile_id: str | None = None) -> None:
+    def save_view(
+        self,
+        view_id: str,
+        name: str,
+        route: str,
+        filters: dict,
+        profile_id: str | None = None,
+    ) -> None:
         self._execute(
             "INSERT INTO saved_views (id, name, route, filters, profile_id) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -408,8 +414,12 @@ class Store:
 
     # -- cache metadata ---------------------------------------------------
     def upsert_cache_metadata(
-        self, key: str, source_id: str, fingerprint: str | None,
-        fetched_at: float, stale_after: float,
+        self,
+        key: str,
+        source_id: str,
+        fingerprint: str | None,
+        fetched_at: float,
+        stale_after: float,
     ) -> None:
         self._execute(
             "INSERT INTO cache_metadata (key, source_id, fingerprint, fetched_at, stale_after) "
@@ -455,7 +465,9 @@ class Store:
         return [dict(r) for r in rows]
 
     # -- alert rules / acknowledgements -----------------------------------
-    def upsert_alert_rule(self, rule_id: str, config: dict, enabled: bool = True) -> None:
+    def upsert_alert_rule(
+        self, rule_id: str, config: dict, enabled: bool = True
+    ) -> None:
         self._execute(
             "INSERT INTO alert_rules (id, rule_id, config, enabled) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET config=excluded.config, enabled=excluded.enabled",
@@ -473,14 +485,21 @@ class Store:
         ).fetchone()
         return bool(row and row["enabled"])
 
-    def acknowledge_alert(self, alert_id: str, action: str, expires_at: float | None = None) -> None:
+    def acknowledge_alert(
+        self, alert_id: str, action: str, expires_at: float | None = None
+    ) -> None:
         self._execute(
             "INSERT INTO alert_acknowledgements (id, alert_id, action, expires_at, created_at) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET action=excluded.action, "
             "expires_at=excluded.expires_at, created_at=excluded.created_at",
-            (f"{alert_id}:{action}", alert_id, action,
-             int(expires_at) if expires_at is not None else None, _iso(time.time())),
+            (
+                f"{alert_id}:{action}",
+                alert_id,
+                action,
+                int(expires_at) if expires_at is not None else None,
+                _iso(time.time()),
+            ),
         )
         self._commit()
 
@@ -525,13 +544,27 @@ class Store:
             "source_id, entity_type, entity_id, payload_json, coverage, "
             "profile_id, resource_key, operation, revision) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (event_id, event_type, occurred_at, source_id, entity_type, entity_id,
-             json.dumps(payload), coverage, profile_id, resource_key, operation, revision),
+            (
+                event_id,
+                event_type,
+                occurred_at,
+                source_id,
+                entity_type,
+                entity_id,
+                json.dumps(payload),
+                coverage,
+                profile_id,
+                resource_key,
+                operation,
+                revision,
+            ),
         )
         self._commit()
         return cur.rowcount > 0
 
-    def replay_events_after(self, last_event_id: str, limit: int = 2000) -> list[dict[str, Any]]:
+    def replay_events_after(
+        self, last_event_id: str, limit: int = 2000
+    ) -> list[dict[str, Any]]:
         """Events strictly newer than last_event_id (Last-Event-ID replay).
 
         Resolves the event_id to its numeric row id first, then returns rows
@@ -577,9 +610,12 @@ class Store:
         return row["event_id"] if row else ""
 
     def event_replay_has(self, event_id: str) -> bool:
-        return self._execute(
-            "SELECT 1 FROM event_replay WHERE event_id=? LIMIT 1", (event_id,)
-        ).fetchone() is not None
+        return (
+            self._execute(
+                "SELECT 1 FROM event_replay WHERE event_id=? LIMIT 1", (event_id,)
+            ).fetchone()
+            is not None
+        )
 
     def event_replay_count(self) -> int:
         return int(self._execute("SELECT COUNT(*) FROM event_replay").fetchone()[0])

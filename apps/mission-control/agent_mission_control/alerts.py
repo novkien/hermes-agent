@@ -20,6 +20,7 @@ first_seen_at, last_seen_at, state: active|acknowledged|snoozed|resolved,
 reason}. GET /api/alerts, POST /api/alerts/{id}/ack + /snooze
 (CSRF + local-store mutation only).
 """
+
 from __future__ import annotations
 
 import time
@@ -67,8 +68,15 @@ def _parse_iso_to_epoch(value: Any) -> Optional[int]:
 
 
 class Alert:
-    def __init__(self, rule_id: str, severity: str, source_id: str,
-                 entity_type: str, entity_id: str, reason: str) -> None:
+    def __init__(
+        self,
+        rule_id: str,
+        severity: str,
+        source_id: str,
+        entity_type: str,
+        entity_id: str,
+        reason: str,
+    ) -> None:
         self.rule_id = rule_id
         self.severity = severity
         self.source_id = source_id
@@ -125,7 +133,11 @@ class AlertEngine:
         ack = self.store.get_acknowledgement(alert.key())
         if not ack:
             return ACTIVE
-        if ack["action"] == SNOOZE and ack.get("expires_at") and ack["expires_at"] > int(time.time()):
+        if (
+            ack["action"] == SNOOZE
+            and ack.get("expires_at")
+            and ack["expires_at"] > int(time.time())
+        ):
             return SNOOZE
         if ack["action"] == ACK:
             return ACK
@@ -140,8 +152,14 @@ class AlertEngine:
         health = self.source_data.get("health", {})
         for src, ok in health.items():
             if ok is False:
-                a = Alert("R1", "critical", "health", "source", src,
-                          f"upstream source {src} unavailable")
+                a = Alert(
+                    "R1",
+                    "critical",
+                    "health",
+                    "source",
+                    src,
+                    f"upstream source {src} unavailable",
+                )
                 found[a.key()] = a
 
         # R2 — schema fingerprint changed
@@ -153,48 +171,90 @@ class AlertEngine:
             if fp:
                 recorded = self.store.get_fingerprint("adapter")
                 if recorded and recorded != str(fp):
-                    a = Alert("R2", "warning", "adapter", "schema", "adapter",
-                              f"schema fingerprint changed: {recorded} -> {fp}")
+                    a = Alert(
+                        "R2",
+                        "warning",
+                        "adapter",
+                        "schema",
+                        "adapter",
+                        f"schema fingerprint changed: {recorded} -> {fp}",
+                    )
                     found[a.key()] = a
 
         # R3 — stale source beyond policy
         freshness = self.source_data.get("freshness", {})
         for src, meta in freshness.items():
             fetched = meta.get("fetched_at") if isinstance(meta, dict) else None
-            if isinstance(fetched, (int, float)) and now - int(fetched) > self.cfg.alert_stale_seconds:
-                a = Alert("R3", "warning", src, "source", src,
-                          f"source {src} stale beyond policy")
+            if (
+                isinstance(fetched, (int, float))
+                and now - int(fetched) > self.cfg.alert_stale_seconds
+            ):
+                a = Alert(
+                    "R3",
+                    "warning",
+                    src,
+                    "source",
+                    src,
+                    f"source {src} stale beyond policy",
+                )
                 found[a.key()] = a
 
         # R4 — failed cron run
         cron_jobs = self.source_data.get("cron", [])
         for j in cron_jobs:
             if j.get("last_status") == "error":
-                a = Alert("R4", "warning", "cron", "cron_job", j.get("id", ""),
-                          f"cron job {j.get('name') or j.get('id')} last run failed")
+                a = Alert(
+                    "R4",
+                    "warning",
+                    "cron",
+                    "cron_job",
+                    j.get("id", ""),
+                    f"cron job {j.get('name') or j.get('id')} last run failed",
+                )
                 found[a.key()] = a
 
         # R5 — failed run/task
         tasks = self.source_data.get("tasks", [])
         for t in tasks:
             if t.get("status") in ("failed", "timed_out", "crashed", "gave_up"):
-                a = Alert("R5", "warning", "kanban", "task", t.get("id", ""),
-                          f"task {t.get('id')} status {t.get('status')}")
+                a = Alert(
+                    "R5",
+                    "warning",
+                    "kanban",
+                    "task",
+                    t.get("id", ""),
+                    f"task {t.get('id')} status {t.get('status')}",
+                )
                 found[a.key()] = a
         runs = self.source_data.get("runs", [])
         for r in runs:
             if r.get("outcome") in ("crashed", "timed_out", "spawn_failed", "gave_up"):
-                a = Alert("R5", "warning", "kanban", "run", str(r.get("id", "")),
-                          f"run {r.get('id')} outcome {r.get('outcome')}")
+                a = Alert(
+                    "R5",
+                    "warning",
+                    "kanban",
+                    "run",
+                    str(r.get("id", "")),
+                    f"run {r.get('id')} outcome {r.get('outcome')}",
+                )
                 found[a.key()] = a
 
         # R6 — stale running-task heartbeat
         for t in tasks:
             if t.get("status") == "running":
                 hb = t.get("last_heartbeat_at")
-                if isinstance(hb, (int, float)) and now - int(hb) > self.cfg.alert_heartbeat_stale_seconds:
-                    a = Alert("R6", "warning", "kanban", "task", t.get("id", ""),
-                              f"running task {t.get('id')} heartbeat stale")
+                if (
+                    isinstance(hb, (int, float))
+                    and now - int(hb) > self.cfg.alert_heartbeat_stale_seconds
+                ):
+                    a = Alert(
+                        "R6",
+                        "warning",
+                        "kanban",
+                        "task",
+                        t.get("id", ""),
+                        f"running task {t.get('id')} heartbeat stale",
+                    )
                     found[a.key()] = a
 
         # R7 — expiring/long-pending permit
@@ -205,20 +265,41 @@ class AlertEngine:
             exp = _parse_iso_to_epoch(p.get("expires_at"))
             created = _parse_iso_to_epoch(p.get("created_at"))
             if exp and exp - now < self.cfg.alert_permit_expiry_hours * 3600:
-                a = Alert("R7", "warning", "permits", "permit", p.get("permit_id", ""),
-                          f"permit {p.get('permit_id')} expiring <24h")
+                a = Alert(
+                    "R7",
+                    "warning",
+                    "permits",
+                    "permit",
+                    p.get("permit_id", ""),
+                    f"permit {p.get('permit_id')} expiring <24h",
+                )
                 found[a.key()] = a
             elif created and now - created > self.cfg.alert_permit_pending_days * 86400:
-                a = Alert("R7", "warning", "permits", "permit", p.get("permit_id", ""),
-                          f"permit {p.get('permit_id')} pending >7d")
+                a = Alert(
+                    "R7",
+                    "warning",
+                    "permits",
+                    "permit",
+                    p.get("permit_id", ""),
+                    f"permit {p.get('permit_id')} pending >7d",
+                )
                 found[a.key()] = a
 
         # R8 — unresolved high-severity issue
         issues = self.source_data.get("issues", [])
         for i in issues:
-            if i.get("status") in ("open",) and i.get("severity") in ("critical", "high"):
-                a = Alert("R8", "critical", "issues", "issue", str(i.get("id", "")),
-                          f"issue {i.get('id')} {i.get('severity')} open")
+            if i.get("status") in ("open",) and i.get("severity") in (
+                "critical",
+                "high",
+            ):
+                a = Alert(
+                    "R8",
+                    "critical",
+                    "issues",
+                    "issue",
+                    str(i.get("id", "")),
+                    f"issue {i.get('id')} {i.get('severity')} open",
+                )
                 found[a.key()] = a
 
         # R10 — token/cost spike vs local threshold
@@ -226,17 +307,30 @@ class AlertEngine:
         threshold = float(analytics.get("token_threshold", 0) or 0)
         observed = float(analytics.get("tokens", 0) or 0)
         if threshold > 0 and observed > threshold:
-            a = Alert("R10", "warning", "analytics", "source", "analytics",
-                      f"token usage {observed} exceeds threshold {threshold}")
+            a = Alert(
+                "R10",
+                "warning",
+                "analytics",
+                "source",
+                "analytics",
+                f"token usage {observed} exceeds threshold {threshold}",
+            )
             found[a.key()] = a
 
         # R11 — repeated authenticated mutation failure
         if self.store.audit_failures_since(
-            self.cfg.alert_mutation_fail_window_seconds, self.cfg.alert_mutation_fail_min
+            self.cfg.alert_mutation_fail_window_seconds,
+            self.cfg.alert_mutation_fail_min,
         ):
-            a = Alert("R11", "warning", "audit", "source", "audit",
-                      f">={self.cfg.alert_mutation_fail_min} mutation failures in "
-                      f"{self.cfg.alert_mutation_fail_window_seconds}s")
+            a = Alert(
+                "R11",
+                "warning",
+                "audit",
+                "source",
+                "audit",
+                f">={self.cfg.alert_mutation_fail_min} mutation failures in "
+                f"{self.cfg.alert_mutation_fail_window_seconds}s",
+            )
             found[a.key()] = a
 
         # merge into persistent state
@@ -281,8 +375,12 @@ class AlertEngine:
             key = self.resolved_pending.pop(0)
             try:
                 await self.bus.publish(
-                    "alert.changed", "alert-engine", "alert", key,
-                    {"state": RESOLVED}, coverage="derived",
+                    "alert.changed",
+                    "alert-engine",
+                    "alert",
+                    key,
+                    {"state": RESOLVED},
+                    coverage="derived",
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -291,14 +389,22 @@ class AlertEngine:
         out = []
         for key, a in self.alerts.items():
             d = dict(a)
-            d["state"] = self._state_for(Alert(
-                d["rule_id"], d["severity"], d["source_id"],
-                d["entity_type"], d["entity_id"], d["reason"],
-            ))
+            d["state"] = self._state_for(
+                Alert(
+                    d["rule_id"],
+                    d["severity"],
+                    d["source_id"],
+                    d["entity_type"],
+                    d["entity_id"],
+                    d["reason"],
+                )
+            )
             out.append(d)
         return out
 
-    async def acknowledge(self, alert_id: str, action: str = ACK, snooze_seconds: Optional[int] = None) -> dict:
+    async def acknowledge(
+        self, alert_id: str, action: str = ACK, snooze_seconds: Optional[int] = None
+    ) -> dict:
         if alert_id not in self.alerts:
             raise KeyError(alert_id)
         expires_at = None
@@ -311,8 +417,12 @@ class AlertEngine:
         if self.bus is not None:
             try:
                 await self.bus.publish(
-                    "alert.changed", "alert-engine", "alert", alert_id,
-                    {"state": action}, coverage="native",
+                    "alert.changed",
+                    "alert-engine",
+                    "alert",
+                    alert_id,
+                    {"state": action},
+                    coverage="native",
                 )
             except Exception:
                 pass

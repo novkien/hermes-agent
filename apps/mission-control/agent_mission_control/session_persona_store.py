@@ -93,9 +93,7 @@ class SessionPersonaStore:
         self._path = str(db_path)
         migrate(self._path)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(
-            self._path, timeout=10.0, check_same_thread=False
-        )
+        self._conn = sqlite3.connect(self._path, timeout=10.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")

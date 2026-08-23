@@ -120,7 +120,9 @@ class LocalDataBackend:
             try:
                 return self.kanban_registry.default_store()
             except KeyError:
-                raise DataBackendError(404, "not_found", "default board not found") from None
+                raise DataBackendError(
+                    404, "not_found", "default board not found"
+                ) from None
         if board == "all":
             raise DataBackendError(
                 422,
@@ -130,35 +132,49 @@ class LocalDataBackend:
         try:
             return self.kanban_registry.resolve(board)
         except KeyError:
-            raise DataBackendError(404, "not_found", f"unknown board: {board}") from None
+            raise DataBackendError(
+                404, "not_found", f"unknown board: {board}"
+            ) from None
         except ValueError as exc:
             raise DataBackendError(422, "invalid_params", str(exc)) from None
         except sqlite3.Error:
-            raise DataBackendError(500, "backend_error", "data source query failed") from None
+            raise DataBackendError(
+                500, "backend_error", "data source query failed"
+            ) from None
         except OSError:
-            raise DataBackendError(500, "backend_error", "data source unavailable") from None
+            raise DataBackendError(
+                500, "backend_error", "data source unavailable"
+            ) from None
 
     @staticmethod
     def _guard_identifier(value: str, label: str) -> None:
         if not value or "/" in value or ".." in value:
             raise DataBackendError(404, "not_found", f"{label} not found")
 
-    async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def _call(
+        self, function: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
         try:
             return await asyncio.to_thread(function, *args, **kwargs)
         except DataBackendError:
             raise
         except DecisionError as exc:
-            code = "invalid_params" if exc.status in {400, 413, 422} else "backend_error"
+            code = (
+                "invalid_params" if exc.status in {400, 413, 422} else "backend_error"
+            )
             if exc.status == 404:
                 code = "not_found"
             raise DataBackendError(exc.status, code, exc.detail) from None
         except ValueError as exc:
             raise DataBackendError(422, "invalid_params", str(exc)) from None
         except sqlite3.Error:
-            raise DataBackendError(500, "backend_error", "data source query failed") from None
+            raise DataBackendError(
+                500, "backend_error", "data source query failed"
+            ) from None
         except OSError:
-            raise DataBackendError(500, "backend_error", "data source unavailable") from None
+            raise DataBackendError(
+                500, "backend_error", "data source unavailable"
+            ) from None
 
     async def _result(
         self, function: Callable[..., JsonObject], *args: Any, **kwargs: Any
@@ -197,13 +213,11 @@ class LocalDataBackend:
         for spec in self.settings.sources.values():
             store = self.stores[spec.id]
             present = Path(store.spec.path).exists()
-            sources.append(
-                {
-                    "source_id": spec.id,
-                    "present": present,
-                    "reachable": store.reachable() if present else False,
-                }
-            )
+            sources.append({
+                "source_id": spec.id,
+                "present": present,
+                "reachable": store.reachable() if present else False,
+            })
         return BackendHealth(
             status="ok",
             version=LOCAL_BACKEND_VERSION,
@@ -219,9 +233,9 @@ class LocalDataBackend:
             spec.id: self._capabilities_meta(spec, self.stores[spec.id])
             for spec in self.settings.sources.values()
         }
-        data["kanban"]["boards"] = kanban_boards_capabilities(
-            self.kanban_registry
-        )["boards"]
+        data["kanban"]["boards"] = kanban_boards_capabilities(self.kanban_registry)[
+            "boards"
+        ]
         try:
             data["kanban"]["schema_fingerprint"] = self.kanban_registry.fingerprint(
                 self.settings.default_kanban_board
@@ -251,7 +265,9 @@ class LocalDataBackend:
         except UnicodeDecodeError:
             content = path.read_bytes().decode("utf-8", errors="replace")
         except OSError:
-            raise DataBackendError(500, "backend_error", "memory file read failed") from None
+            raise DataBackendError(
+                500, "backend_error", "memory file read failed"
+            ) from None
         return {
             "data": {"file": filename, "path": str(path), "content": content},
             "meta": {
@@ -271,7 +287,9 @@ class LocalDataBackend:
             raise DataBackendError(400, "invalid_params", "content must be a string")
         encoded = content.encode("utf-8")
         if len(encoded) > MAX_MEMORY_FILE_BYTES:
-            raise DataBackendError(413, "invalid_params", "memory file exceeds size limit")
+            raise DataBackendError(
+                413, "invalid_params", "memory file exceeds size limit"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: str | None = None
         try:
@@ -285,7 +303,9 @@ class LocalDataBackend:
             os.replace(temporary_path, path)
             temporary_path = None
         except OSError:
-            raise DataBackendError(500, "backend_error", "memory file write failed") from None
+            raise DataBackendError(
+                500, "backend_error", "memory file write failed"
+            ) from None
         finally:
             if temporary_path is not None:
                 try:
@@ -461,10 +481,20 @@ class LocalDataBackend:
         return await self._result(self._kanban_summary_sync, board)
 
     async def permits(self, **filters: Any) -> BackendResult:
-        allowed = {"status", "severity", "approved", "executed", "sort", "page", "limit"}
+        allowed = {
+            "status",
+            "severity",
+            "approved",
+            "executed",
+            "sort",
+            "page",
+            "limit",
+        }
         unknown = sorted(set(filters) - allowed)
         if unknown:
-            raise DataBackendError(422, "invalid_params", f"unsupported filters: {', '.join(unknown)}")
+            raise DataBackendError(
+                422, "invalid_params", f"unsupported filters: {', '.join(unknown)}"
+            )
         return await self._result(permits_list, self._store("permits"), **filters)
 
     async def permit(self, permit_id: str) -> BackendResult:
@@ -499,10 +529,14 @@ class LocalDataBackend:
         allowed = {"status", "severity", "sort", "page", "limit"}
         unknown = sorted(set(filters) - allowed)
         if unknown:
-            raise DataBackendError(422, "invalid_params", f"unsupported filters: {', '.join(unknown)}")
+            raise DataBackendError(
+                422, "invalid_params", f"unsupported filters: {', '.join(unknown)}"
+            )
         return await self._result(issues_list, self._store("issues"), **filters)
 
-    async def issue(self, issue_id: int, *, occurrence_limit: int = 50) -> BackendResult:
+    async def issue(
+        self, issue_id: int, *, occurrence_limit: int = 50
+    ) -> BackendResult:
         def load() -> JsonObject:
             result = issue_detail(self._store("issues"), issue_id, occurrence_limit)
             if result is None:
@@ -537,7 +571,9 @@ class LocalDataBackend:
             budget_ms=10_000,
         )
 
-    def _room_sessions_sync(self, chat_id: str, limit: int, history: bool) -> JsonObject:
+    def _room_sessions_sync(
+        self, chat_id: str, limit: int, history: bool
+    ) -> JsonObject:
         rows = state_room_sessions(self._store("state"), chat_id, limit)
         extra: JsonObject = {}
         if history:

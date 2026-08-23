@@ -16,7 +16,9 @@ PROBE_PATH = ROOT / "tools" / "capture_adapter_baseline.py"
 
 
 def load_probe() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("capture_adapter_baseline", PROBE_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "capture_adapter_baseline", PROBE_PATH
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -83,16 +85,14 @@ def test_shape_redaction_contract() -> None:
     probe = load_probe()
     dynamic_id = "20260816_214805_fc7eefeb"
     secret_value = "must-never-survive-shaping"
-    shape = probe._shape(
-        {
-            "tips": {
-                dynamic_id: {
-                    "authorization": secret_value,
-                    "session_id": "value-is-never-emitted",
-                }
+    shape = probe._shape({
+        "tips": {
+            dynamic_id: {
+                "authorization": secret_value,
+                "session_id": "value-is-never-emitted",
             }
         }
-    )
+    })
     serialized = json.dumps(shape, sort_keys=True)
     assert dynamic_id not in serialized
     assert secret_value not in serialized

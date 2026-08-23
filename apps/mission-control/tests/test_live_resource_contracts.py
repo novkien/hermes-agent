@@ -25,19 +25,61 @@ from agent_mission_control.store import Store  # noqa: E402
 
 
 EXPECTED_ROUTES = {
-    "overview", "chat", "sessions", "fleet", "kanban", "cron", "activity",
-    "alerts", "analytics", "issues", "permits", "room-binding", "threads",
-    "action-audit", "skills", "memory", "profiles", "models", "tools", "mcp",
-    "plugins", "repositories", "webhooks", "channels", "artifacts", "files",
-    "system-manager", "logs", "command-center", "settings", "llama-proxy", "9router",
+    "overview",
+    "chat",
+    "sessions",
+    "fleet",
+    "kanban",
+    "cron",
+    "activity",
+    "alerts",
+    "analytics",
+    "issues",
+    "permits",
+    "room-binding",
+    "threads",
+    "action-audit",
+    "skills",
+    "memory",
+    "profiles",
+    "models",
+    "tools",
+    "mcp",
+    "plugins",
+    "repositories",
+    "webhooks",
+    "channels",
+    "artifacts",
+    "files",
+    "system-manager",
+    "logs",
+    "command-center",
+    "settings",
+    "llama-proxy",
+    "9router",
 }
 
 PRODUCED_EVENTS = {
-    "task.changed", "run.changed", "session.changed", "session.running",
-    "permit.changed", "issue.changed", "cron.changed", "log.appended",
-    "alert.changed", "source.health", "cache.invalidated", "repository.changed",
-    "system-manager.changed", "plugins.changed", "profiles.changed", "mcp.changed",
-    "toolsets.changed", "webhooks.changed", "channels.changed", "memory.changed",
+    "task.changed",
+    "run.changed",
+    "session.changed",
+    "session.running",
+    "permit.changed",
+    "issue.changed",
+    "cron.changed",
+    "log.appended",
+    "alert.changed",
+    "source.health",
+    "cache.invalidated",
+    "repository.changed",
+    "system-manager.changed",
+    "plugins.changed",
+    "profiles.changed",
+    "mcp.changed",
+    "toolsets.changed",
+    "webhooks.changed",
+    "channels.changed",
+    "memory.changed",
     "gateway.changed",
 }
 
@@ -55,7 +97,9 @@ async def test_event_transport() -> None:
         frame = sse_frame(event)
         assert "event: state.change\n" in frame
         assert "event: task.changed\n" not in frame
-        data_line = next(line[6:] for line in frame.splitlines() if line.startswith("data: "))
+        data_line = next(
+            line[6:] for line in frame.splitlines() if line.startswith("data: ")
+        )
         payload = json.loads(data_line)
         assert payload["event_type"] == "task.changed"
         assert payload["resource_key"] == "kanban.tasks"
@@ -68,13 +112,17 @@ def main() -> None:
     assert len(ROUTE_RESOURCES) == 32
     assert PRODUCED_EVENTS <= set(EVENT_RESOURCES)
     assert all(resources for resources in ROUTE_RESOURCES.values())
-    assert all(key in RESOURCE_SPECS for values in ROUTE_RESOURCES.values() for key in values)
+    assert all(
+        key in RESOURCE_SPECS for values in ROUTE_RESOURCES.values() for key in values
+    )
     assert canonical_event("session.changed", "").operation == "invalidate"
     assert canonical_event("session.changed", "session-1").operation == "upsert"
 
     registry = (ROOT / "frontend" / "dist" / "pure" / "route-registry.js").read_text()
-    registry_keys = set(re.findall(r"^  ['\"]?([a-z0-9-]+)['\"]?: route\(", registry, re.MULTILINE))
-    assert registry_keys == EXPECTED_ROUTES, (registry_keys ^ EXPECTED_ROUTES)
+    registry_keys = set(
+        re.findall(r"^  ['\"]?([a-z0-9-]+)['\"]?: route\(", registry, re.MULTILINE)
+    )
+    assert registry_keys == EXPECTED_ROUTES, registry_keys ^ EXPECTED_ROUTES
 
     events_js = (ROOT / "frontend" / "dist" / "events.js").read_text()
     assert "addEventListener('state.change'" in events_js

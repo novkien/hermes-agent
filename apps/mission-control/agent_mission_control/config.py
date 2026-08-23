@@ -16,8 +16,18 @@ from .ip_utils import CidrList
 # Placeholder guard values rejected as "not configured" (mirrors the
 # has_usable_secret philosophy from the Hermes gateway startup guard).
 _PLACEHOLDERS = {
-    "changeme", "your_api_key", "your_api_key_here", "your-api-key",
-    "placeholder", "example", "dummy", "null", "none", "***", "**", "*",
+    "changeme",
+    "your_api_key",
+    "your_api_key_here",
+    "your-api-key",
+    "placeholder",
+    "example",
+    "dummy",
+    "null",
+    "none",
+    "***",
+    "**",
+    "*",
 }
 
 
@@ -170,35 +180,42 @@ class Settings:
             trust_proxy_headers=_env_bool("TRUST_PROXY_HEADERS", False),
             session_ttl_seconds=_env_int("SESSION_TTL_HOURS", 12) * 3600,
             cookie_secure=_env_bool("COOKIE_SECURE", False),
-            dashboard_url=_env("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119") or "http://127.0.0.1:9119",
+            dashboard_url=_env("HERMES_DASHBOARD_URL", "http://127.0.0.1:9119")
+            or "http://127.0.0.1:9119",
             dashboard_basic_auth_password=(
                 _env("DASHBOARD_BASIC_AUTH_PASSWORD")
                 or _read_password_file(_env("DASHBOARD_BASIC_AUTH_PASSWORD_FILE"))
             ),
             hermes_home=_env("HERMES_HOME", "~/.hermes") or "~/.hermes",
-            gateway_url=_env("HERMES_GATEWAY_URL", "http://127.0.0.1:8642") or "http://127.0.0.1:8642",
-            gateway_token=(
-                _env("HERMES_GATEWAY_API_KEY")
-                or _env("API_SERVER_KEY")
-            ),
+            gateway_url=_env("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")
+            or "http://127.0.0.1:8642",
+            gateway_token=(_env("HERMES_GATEWAY_API_KEY") or _env("API_SERVER_KEY")),
             nas_jwt_secret=_env("NAS_JWT_SECRET"),
-            runner_hermes_executable=_env("RUNNER_HERMES_EXECUTABLE", "hermes") or "hermes",
+            runner_hermes_executable=_env("RUNNER_HERMES_EXECUTABLE", "hermes")
+            or "hermes",
             runner_pool_max=_env_int("RUNNER_POOL_MAX", 3),
-            runner_pool_idle_seconds=float(_env("RUNNER_POOL_IDLE_SECONDS", "900") or "900"),
+            runner_pool_idle_seconds=float(
+                _env("RUNNER_POOL_IDLE_SECONDS", "900") or "900"
+            ),
             runner_pool_keepalive_fresh_seconds=float(
                 _env("RUNNER_POOL_KEEPALIVE_FRESH_SECONDS", "90") or "90"
             ),
             runner_port_announce_timeout_seconds=float(
                 _env("RUNNER_PORT_ANNOUNCE_TIMEOUT_SECONDS", "90") or "90"
             ),
-            allowed_origin=_env("ALLOWED_ORIGIN", "http://192.168.1.9:51763") or "http://192.168.1.9:51763",
+            allowed_origin=_env("ALLOWED_ORIGIN", "http://192.168.1.9:51763")
+            or "http://192.168.1.9:51763",
             allowed_host=_env("ALLOWED_HOST"),
             body_limit_bytes=_env_int("BODY_LIMIT_BYTES", 1024 * 1024),
-            session_issue_rate_limit_per_min=_env_int("SESSION_ISSUE_RATE_LIMIT_PER_MIN", 5),
+            session_issue_rate_limit_per_min=_env_int(
+                "SESSION_ISSUE_RATE_LIMIT_PER_MIN", 5
+            ),
             mutation_rate_limit_per_min=_env_int("MUTATION_RATE_LIMIT_PER_MIN", 30),
             cache_ttl_seconds=_env_int("CACHE_TTL_SECONDS", 60),
             cache_max_concurrency=_env_int("CACHE_MAX_CONCURRENCY", 4),
-            upstream_timeout_seconds=float(_env("UPSTREAM_TIMEOUT_SECONDS", "10") or "10"),
+            upstream_timeout_seconds=float(
+                _env("UPSTREAM_TIMEOUT_SECONDS", "10") or "10"
+            ),
             chat_stream_read_timeout_seconds=float(
                 _env("CHAT_STREAM_READ_TIMEOUT_SECONDS", "300") or "300"
             ),
@@ -218,18 +235,25 @@ class Settings:
             poll_backoff_max_seconds=_env_int("POLL_BACKOFF_MAX_SECONDS", 300),
             alerts_tick_seconds=_env_int("ALERTS_TICK_SECONDS", 30),
             alert_stale_seconds=_env_int("ALERT_STALE_SECONDS", 300),
-            alert_heartbeat_stale_seconds=_env_int("ALERT_HEARTBEAT_STALE_SECONDS", 300),
+            alert_heartbeat_stale_seconds=_env_int(
+                "ALERT_HEARTBEAT_STALE_SECONDS", 300
+            ),
             alert_permit_expiry_hours=_env_int("ALERT_PERMIT_EXPIRY_HOURS", 24),
             alert_permit_pending_days=_env_int("ALERT_PERMIT_PENDING_DAYS", 7),
-            alert_mutation_fail_window_seconds=_env_int("ALERT_MUTATION_FAIL_WINDOW_SECONDS", 600),
+            alert_mutation_fail_window_seconds=_env_int(
+                "ALERT_MUTATION_FAIL_WINDOW_SECONDS", 600
+            ),
             alert_mutation_fail_min=_env_int("ALERT_MUTATION_FAIL_MIN", 3),
             alert_token_threshold=_env_int("ALERT_TOKEN_THRESHOLD", 0),
             inspector_timeline_limit=_env_int("INSPECTOR_TIMELINE_LIMIT", 200),
             bind_host=bind_host,
             frontend_dir=_env("FRONTEND_DIR", "../frontend/dist") or "../frontend/dist",
-            store_path=_env("STORE_PATH", "agentos-dashboard.db") or "agentos-dashboard.db",
-            read_model_path=_env("READ_MODEL_PATH", "mission-control-read-model.db") or "mission-control-read-model.db",
-            live_default_profile=_env("MISSION_DEFAULT_PROFILE", "default") or "default",
+            store_path=_env("STORE_PATH", "agentos-dashboard.db")
+            or "agentos-dashboard.db",
+            read_model_path=_env("READ_MODEL_PATH", "mission-control-read-model.db")
+            or "mission-control-read-model.db",
+            live_default_profile=_env("MISSION_DEFAULT_PROFILE", "default")
+            or "default",
             dashboard_store_path=_env("DASHBOARD_STORE_PATH", "store.db") or "store.db",
         )
         if overrides:

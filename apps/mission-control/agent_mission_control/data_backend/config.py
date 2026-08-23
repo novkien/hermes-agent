@@ -49,9 +49,17 @@ ROOM_TOPIC_KEYS = (
 )
 
 # Query parameters that are never accepted (raw SQL / generic access probes).
-FORBIDDEN_QUERY_PARAMS = frozenset(
-    {"sql", "query", "raw", "table", "columns", "where", "select", "from", "limit_sql"}
-)
+FORBIDDEN_QUERY_PARAMS = frozenset({
+    "sql",
+    "query",
+    "raw",
+    "table",
+    "columns",
+    "where",
+    "select",
+    "from",
+    "limit_sql",
+})
 
 # Per-source sort allowlists (column names only, never arbitrary expressions).
 KANBAN_TASK_SORTS = (
@@ -246,7 +254,9 @@ class Settings:
         room_bindings_db: str | Path | None = None,
     ) -> None:
         self.hermes_home = Path(hermes_home).expanduser().resolve()
-        self.sources = sources if sources is not None else default_sources(self.hermes_home)
+        self.sources = (
+            sources if sources is not None else default_sources(self.hermes_home)
+        )
         self.kanban_boards_dir = _resolved(
             Path(kanban_boards_dir)
             if kanban_boards_dir is not None
@@ -259,23 +269,37 @@ class Settings:
             else self.hermes_home / "profiles"
         )
         self.config_path = _resolved(
-            Path(config_path) if config_path is not None else self.hermes_home / "config.yaml"
+            Path(config_path)
+            if config_path is not None
+            else self.hermes_home / "config.yaml"
         )
-        self.memory_dir = Path(
-            memory_dir if memory_dir is not None else self.hermes_home / "memories"
-        ).expanduser().resolve()
-        self.scripts_dir = Path(
-            scripts_dir if scripts_dir is not None else self.hermes_home / "scripts"
-        ).expanduser().resolve()
-        self.room_bindings_db = Path(
-            room_bindings_db
-            if room_bindings_db is not None
-            else self.hermes_home
-            / "workspace"
-            / "state"
-            / "session-injector"
-            / "room_bindings.sqlite3"
-        ).expanduser().resolve()
+        self.memory_dir = (
+            Path(
+                memory_dir if memory_dir is not None else self.hermes_home / "memories"
+            )
+            .expanduser()
+            .resolve()
+        )
+        self.scripts_dir = (
+            Path(
+                scripts_dir if scripts_dir is not None else self.hermes_home / "scripts"
+            )
+            .expanduser()
+            .resolve()
+        )
+        self.room_bindings_db = (
+            Path(
+                room_bindings_db
+                if room_bindings_db is not None
+                else self.hermes_home
+                / "workspace"
+                / "state"
+                / "session-injector"
+                / "room_bindings.sqlite3"
+            )
+            .expanduser()
+            .resolve()
+        )
 
     def resolve_path(self, source_id: str) -> str:
         """Return the exact allowlisted path for a source id."""

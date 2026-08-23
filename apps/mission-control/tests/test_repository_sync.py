@@ -36,7 +36,10 @@ class CapturingSshRunner(RepositoryGitRunner):
 
 def git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False,
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        check=False,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
     if proc.returncode != 0:
@@ -101,8 +104,14 @@ class RepositoryRegistryTests(unittest.TestCase):
         self.assertEqual(
             list(registry),
             [
-                "hermes", "hermes-agent", "hermes-skills", "hermes-plugins", "agents",
-                "llama-proxy", "9router", "godot-mcp",
+                "hermes",
+                "hermes-agent",
+                "hermes-skills",
+                "hermes-plugins",
+                "agents",
+                "llama-proxy",
+                "9router",
+                "godot-mcp",
             ],
         )
         self.assertEqual(registry["hermes"].local_mode, "superproject")
@@ -141,11 +150,15 @@ class RepositoryRegistryTests(unittest.TestCase):
             "godot-mcp": "/home/novkien/godot-mcp",
         }
         for name, spec in registry.items():
-            expected_git_dir = "~/.hermes/.git" if name == "hermes" else f"~/.hermes/repos/{name}.git"
+            expected_git_dir = (
+                "~/.hermes/.git" if name == "hermes" else f"~/.hermes/repos/{name}.git"
+            )
             self.assertEqual(spec.git_dir, expected_git_dir)
             self.assertEqual(spec.work_tree, expected_live[name])
             self.assertNotIn("/worktrees/", spec.work_tree)
-        self.assertEqual(registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack"))
+        self.assertEqual(
+            registry["hermes-skills"].scope_paths, ("skills", "workspace/skills-pack")
+        )
 
     def test_ssh_runner_avoids_login_profile_output(self):
         spec = default_repository_registry()["9router"]
@@ -178,8 +191,14 @@ class RepositoryProductionTests(unittest.TestCase):
         self.work_tree = self.hermes_home / "demo"
         self.state = self.hermes_home / "state" / "repository-control"
 
-        subprocess.run(["git", "init", "--bare", str(self.origin)], check=True, capture_output=True)
-        subprocess.run(["git", "clone", str(self.origin), str(self.seed)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init", "--bare", str(self.origin)], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "clone", str(self.origin), str(self.seed)],
+            check=True,
+            capture_output=True,
+        )
         identity(self.seed)
         git(self.seed, "checkout", "-b", "main")
         (self.seed / "base.txt").write_text("base\n", encoding="utf-8")
@@ -187,10 +206,22 @@ class RepositoryProductionTests(unittest.TestCase):
         git(self.seed, "commit", "-m", "initial")
         git(self.seed, "push", "-u", "origin", "main")
         subprocess.run(
-            ["git", "--git-dir", str(self.origin), "symbolic-ref", "HEAD", "refs/heads/main"],
-            check=True, capture_output=True,
+            [
+                "git",
+                "--git-dir",
+                str(self.origin),
+                "symbolic-ref",
+                "HEAD",
+                "refs/heads/main",
+            ],
+            check=True,
+            capture_output=True,
         )
-        subprocess.run(["git", "clone", str(self.origin), str(self.writer)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "clone", str(self.origin), str(self.writer)],
+            check=True,
+            capture_output=True,
+        )
         identity(self.writer)
 
         self.spec = RepoSpec(
@@ -232,7 +263,10 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertTrue(self.work_tree.is_dir())
         self.assertFalse((self.work_tree / ".git").exists())
         self.assertEqual(self.service.runner.git_dir(self.spec), str(self.git_dir))
-        self.assertEqual(self.service.runner.git(self.spec, "branch", "--show-current").stdout, "main")
+        self.assertEqual(
+            self.service.runner.git(self.spec, "branch", "--show-current").stdout,
+            "main",
+        )
         self.assertEqual((self.work_tree / "base.txt").read_text(), "base\n")
 
     def test_initialize_repairs_origin_left_by_failed_partial_layout(self):
@@ -270,7 +304,9 @@ class RepositoryProductionTests(unittest.TestCase):
             check=True,
             capture_output=True,
         )
-        self.assertEqual(git(self.work_tree, "rev-parse", "--is-shallow-repository"), "true")
+        self.assertEqual(
+            git(self.work_tree, "rev-parse", "--is-shallow-repository"), "true"
+        )
         offline_spec = dataclasses.replace(
             self.spec,
             origin_url="file:///repository-not-reachable-during-layout-init.git",
@@ -293,7 +329,9 @@ class RepositoryProductionTests(unittest.TestCase):
             git(self.work_tree, "rev-parse", "main"),
         )
         self.assertEqual(
-            service.runner.git_common(offline_spec, "remote", "get-url", "origin").stdout,
+            service.runner.git_common(
+                offline_spec, "remote", "get-url", "origin"
+            ).stdout,
             offline_spec.origin_url,
         )
 
@@ -303,7 +341,9 @@ class RepositoryProductionTests(unittest.TestCase):
         result = self.service.pull_production("demo")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["production"]["after_sha"], remote)
-        self.assertEqual(self.service.runner.git(self.spec, "rev-parse", "HEAD").stdout, remote)
+        self.assertEqual(
+            self.service.runner.git(self.spec, "rev-parse", "HEAD").stdout, remote
+        )
         self.assertTrue((self.work_tree / "remote.txt").exists())
 
     def test_pull_refuses_dirty_production_without_stash_or_commit(self):
@@ -326,15 +366,15 @@ class RepositoryProductionTests(unittest.TestCase):
         (self.work_tree / "untracked.txt").write_text("untracked\n", encoding="utf-8")
         github = MergeGithub()
         self.service.github = github
-        result = self.service.merge_and_pull(
-            "demo", 7, expected_head_sha="abc1234"
-        )
+        result = self.service.merge_and_pull("demo", 7, expected_head_sha="abc1234")
         self.assertTrue(result["ok"], result)
         self.assertEqual(github.merge_calls, [(7, "abc1234")])
         self.assertEqual(result["local_changes"]["stashed"], True)
         self.assertEqual(result["local_changes"]["restored"], True)
         self.assertEqual(
-            self.service.runner.git(self.spec, "diff", "--cached", "--name-only").stdout,
+            self.service.runner.git(
+                self.spec, "diff", "--cached", "--name-only"
+            ).stdout,
             "staged.txt",
         )
         self.assertEqual((self.work_tree / "staged.txt").read_text(), "staged\n")
@@ -350,6 +390,7 @@ class RepositoryProductionTests(unittest.TestCase):
             "gitdir: /nonexistent/repository/worktree\n", encoding="utf-8"
         )
         (nested / "initial.txt").write_text("initial nested work\n", encoding="utf-8")
+
         class ResidualRunner(RepositoryGitRunner):
             def __init__(self):
                 super().__init__(timeout=30)
@@ -380,9 +421,7 @@ class RepositoryProductionTests(unittest.TestCase):
             timeout=30,
         )
 
-        result = service.merge_and_pull(
-            "demo", 7, expected_head_sha="abc1234"
-        )
+        result = service.merge_and_pull("demo", 7, expected_head_sha="abc1234")
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(len(result["local_changes"]["stash_shas"]), 2)
@@ -407,9 +446,7 @@ class RepositoryProductionTests(unittest.TestCase):
 
         github = FailingGithub()
         self.service.github = github
-        result = self.service.merge_and_pull(
-            "demo", 7, expected_head_sha="abc1234"
-        )
+        result = self.service.merge_and_pull("demo", 7, expected_head_sha="abc1234")
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "github_merge_failed")
         self.assertTrue(result["local_changes"]["restored"])
@@ -425,30 +462,29 @@ class RepositoryProductionTests(unittest.TestCase):
 
         github = MergeGithub(callback=push_conflicting_origin_change)
         self.service.github = github
-        result = self.service.merge_and_pull(
-            "demo", 7, expected_head_sha="abc1234"
-        )
+        result = self.service.merge_and_pull("demo", 7, expected_head_sha="abc1234")
         self.assertFalse(result["ok"])
         self.assertTrue(result["partial_success"])
         self.assertEqual(result["completed_phase"], "production_pull")
         self.assertEqual(result["error"]["code"], "local_restore_conflict")
         self.assertFalse(result["local_changes"]["restored"])
         self.assertIn("base.txt", result["error"]["details"]["conflict_files"])
-        self.assertIn("mission-control merge-and-pull", self.service.runner.git(
-            self.spec, "stash", "list"
-        ).stdout)
+        self.assertIn(
+            "mission-control merge-and-pull",
+            self.service.runner.git(self.spec, "stash", "list").stdout,
+        )
 
     def test_merge_and_pull_reports_partial_success_if_host_drifts_after_merge(self):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
 
         def dirty_after_merge():
-            (self.work_tree / "base.txt").write_text("dirty after merge\n", encoding="utf-8")
+            (self.work_tree / "base.txt").write_text(
+                "dirty after merge\n", encoding="utf-8"
+            )
 
         github = MergeGithub(callback=dirty_after_merge)
         self.service.github = github
-        result = self.service.merge_and_pull(
-            "demo", 7, expected_head_sha="abc1234"
-        )
+        result = self.service.merge_and_pull("demo", 7, expected_head_sha="abc1234")
         self.assertFalse(result["ok"])
         self.assertTrue(result["partial_success"])
         self.assertEqual(result["completed_phase"], "github_merge")
@@ -528,18 +564,25 @@ class RepositoryProductionTests(unittest.TestCase):
         self.assertTrue((self.work_tree / "local.txt").exists())
         self.assertTrue((self.work_tree / "remote.txt").exists())
 
-    def test_superproject_sync_runs_only_the_configured_script_and_verifies_status(self):
+    def test_superproject_sync_runs_only_the_configured_script_and_verifies_status(
+        self,
+    ):
         self.assertTrue(self.service.initialize_layout("demo")["ok"])
         script = self.hermes_home / "scripts" / "sync.sh"
         script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text("#!/bin/sh\nprintf 'superproject-sync-ok\\n'\n", encoding="utf-8")
+        script.write_text(
+            "#!/bin/sh\nprintf 'superproject-sync-ok\\n'\n", encoding="utf-8"
+        )
         script.chmod(0o755)
         spec = dataclasses.replace(
             self.spec, local_mode="superproject", sync_script=str(script)
         )
         service = RepositorySyncService(
-            {"demo": spec}, runner=self.service.runner, store=self.service.store,
-            github=OfflineGithub(), timeout=30,
+            {"demo": spec},
+            runner=self.service.runner,
+            store=self.service.store,
+            github=OfflineGithub(),
+            timeout=30,
         )
 
         result = service.sync("demo")
@@ -559,16 +602,25 @@ class RemoteOnlyRepositoryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="repository-remote-only-")
         root = Path(self.tmp.name)
         self.spec = RepoSpec(
-            name="child", repo_full_name="example/child", branch="main",
-            host="jarvis", transport="local", ssh_target=None,
-            hermes_home=str(root), git_dir=str(root / "child.git"),
-            work_tree=str(root / "child"), origin_url="https://github.com/example/child.git",
+            name="child",
+            repo_full_name="example/child",
+            branch="main",
+            host="jarvis",
+            transport="local",
+            ssh_target=None,
+            hermes_home=str(root),
+            git_dir=str(root / "child.git"),
+            work_tree=str(root / "child"),
+            origin_url="https://github.com/example/child.git",
             local_mode="remote_only",
         )
         self.github = MergeGithub()
         self.service = RepositorySyncService(
-            {"child": self.spec}, runner=self.NoLocalRunner(),
-            store=OperationStore(root / "state"), github=self.github, timeout=30,
+            {"child": self.spec},
+            runner=self.NoLocalRunner(),
+            store=OperationStore(root / "state"),
+            github=self.github,
+            timeout=30,
         )
 
     def tearDown(self):
@@ -595,17 +647,26 @@ class RemoteOnlyRepositoryTests(unittest.TestCase):
 
     def _managed_service(self, github):
         parent = RepoSpec(
-            name="hermes", repo_full_name="example/hermes", branch="main",
-            host="jarvis", transport="local", ssh_target=None,
-            hermes_home=str(Path(self.tmp.name)), git_dir=str(Path(self.tmp.name) / ".git"),
-            work_tree=str(Path(self.tmp.name)), origin_url="https://github.com/example/hermes.git",
-            local_mode="superproject", sync_script=str(Path(self.tmp.name) / "sync.sh"),
+            name="hermes",
+            repo_full_name="example/hermes",
+            branch="main",
+            host="jarvis",
+            transport="local",
+            ssh_target=None,
+            hermes_home=str(Path(self.tmp.name)),
+            git_dir=str(Path(self.tmp.name) / ".git"),
+            work_tree=str(Path(self.tmp.name)),
+            origin_url="https://github.com/example/hermes.git",
+            local_mode="superproject",
+            sync_script=str(Path(self.tmp.name) / "sync.sh"),
         )
         child = dataclasses.replace(self.spec, superproject_path="modules/child")
         return RepositorySyncService(
-            {"hermes": parent, "child": child}, runner=self.NoLocalRunner(),
+            {"hermes": parent, "child": child},
+            runner=self.NoLocalRunner(),
             store=OperationStore(Path(self.tmp.name) / "managed-state"),
-            github=github, timeout=30,
+            github=github,
+            timeout=30,
         )
 
     def test_merge_managed_child_creates_exact_parent_gitlink_pr(self):
@@ -679,9 +740,7 @@ class RemoteOnlyRepositoryTests(unittest.TestCase):
         result = self.service.prepare_superproject_pin("child")
 
         self.assertFalse(result["ok"])
-        self.assertEqual(
-            result["error"]["code"], "superproject_projection_unavailable"
-        )
+        self.assertEqual(result["error"]["code"], "superproject_projection_unavailable")
         self.assertEqual(self.github.pin_calls, [])
 
     def test_merging_parent_pr_does_not_recursively_prepare_another_pin(self):
@@ -775,17 +834,32 @@ class GitlinkGithub(GitHubRestClient):
 class GitHubGitlinkWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.parent = RepoSpec(
-            name="hermes", repo_full_name="example/hermes", branch="main",
-            host="jarvis", transport="local", ssh_target=None, hermes_home="~/.hermes",
-            git_dir="~/.hermes/.git", work_tree="~/.hermes",
-            origin_url="https://github.com/example/hermes.git", local_mode="superproject",
+            name="hermes",
+            repo_full_name="example/hermes",
+            branch="main",
+            host="jarvis",
+            transport="local",
+            ssh_target=None,
+            hermes_home="~/.hermes",
+            git_dir="~/.hermes/.git",
+            work_tree="~/.hermes",
+            origin_url="https://github.com/example/hermes.git",
+            local_mode="superproject",
             sync_script="~/.hermes/scripts/sync.sh",
         )
         self.agent = RepoSpec(
-            name="hermes-agent", repo_full_name="example/hermes-agent", branch="main",
-            host="jarvis", transport="local", ssh_target=None, hermes_home="~/.hermes",
-            git_dir="unused", work_tree="unused", origin_url="https://github.com/example/hermes-agent.git",
-            local_mode="remote_only", superproject_path="hermes-agent",
+            name="hermes-agent",
+            repo_full_name="example/hermes-agent",
+            branch="main",
+            host="jarvis",
+            transport="local",
+            ssh_target=None,
+            hermes_home="~/.hermes",
+            git_dir="unused",
+            work_tree="unused",
+            origin_url="https://github.com/example/hermes-agent.git",
+            local_mode="remote_only",
+            superproject_path="hermes-agent",
         )
         self.skills = dataclasses.replace(
             self.agent,
@@ -826,14 +900,26 @@ class GitHubGitlinkWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.github.tree_entries,
             [
-                {"path": "hermes-agent", "mode": "160000", "type": "commit", "sha": agent_target},
-                {"path": ".sources/hermes-skills", "mode": "160000", "type": "commit", "sha": skills_target},
+                {
+                    "path": "hermes-agent",
+                    "mode": "160000",
+                    "type": "commit",
+                    "sha": agent_target,
+                },
+                {
+                    "path": ".sources/hermes-skills",
+                    "mode": "160000",
+                    "type": "commit",
+                    "sha": skills_target,
+                },
             ],
         )
         branch = first["branch"]
         tree = self.github.commits[self.github.refs[branch]]
         self.assertEqual(self.github.trees[tree]["hermes-agent"], agent_target)
-        self.assertEqual(self.github.trees[tree][".sources/hermes-skills"], skills_target)
+        self.assertEqual(
+            self.github.trees[tree][".sources/hermes-skills"], skills_target
+        )
         self.assertEqual(self.github.ref_updates[-1]["force"], False)
 
     def test_no_parent_pull_when_base_already_pins_target(self):
@@ -852,7 +938,9 @@ class UnreachableHostRunner(RepositoryGitRunner):
 
     def _host_process(self, spec, argv, *, timeout=None):
         if spec.transport == "ssh":
-            raise RepositorySyncError("ssh_unreachable", f"could not reach {spec.ssh_target}")
+            raise RepositorySyncError(
+                "ssh_unreachable", f"could not reach {spec.ssh_target}"
+            )
         return super()._host_process(spec, argv, timeout=timeout)
 
 
@@ -863,17 +951,30 @@ class StatusAllContainmentTests(unittest.TestCase):
         self.hermes_home = root / ".hermes"
         self.state = self.hermes_home / "state" / "repository-control"
         local = RepoSpec(
-            name="good", repo_full_name="example/good", branch="main", host="local-test",
-            transport="local", ssh_target=None, hermes_home=str(self.hermes_home),
+            name="good",
+            repo_full_name="example/good",
+            branch="main",
+            host="local-test",
+            transport="local",
+            ssh_target=None,
+            hermes_home=str(self.hermes_home),
             git_dir=str(self.hermes_home / "repos" / "good.git"),
             work_tree=str(self.hermes_home / "good"),
-            origin_url="file:///nonexistent.git", private=True,
+            origin_url="file:///nonexistent.git",
+            private=True,
         )
         bad = RepoSpec(
-            name="bad", repo_full_name="example/bad", branch="main", host="far-host",
-            transport="ssh", ssh_target="far@host.invalid", hermes_home="~/.hermes",
-            git_dir="~/.hermes/repos/bad.git", work_tree="/home/far/bad",
-            origin_url="git@example.invalid:example/bad.git", private=True,
+            name="bad",
+            repo_full_name="example/bad",
+            branch="main",
+            host="far-host",
+            transport="ssh",
+            ssh_target="far@host.invalid",
+            hermes_home="~/.hermes",
+            git_dir="~/.hermes/repos/bad.git",
+            work_tree="/home/far/bad",
+            origin_url="git@example.invalid:example/bad.git",
+            private=True,
         )
         self.service = RepositorySyncService(
             {"good": local, "bad": bad},
@@ -902,30 +1003,44 @@ class StatusAllContainmentTests(unittest.TestCase):
 
 class CodexStateTests(unittest.TestCase):
     class Client(GitHubRestClient):
-        def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
+        def request(
+            self, method, path, body=None, *, accept="application/vnd.github+json"
+        ):
             del method, body, accept
             if path.endswith("/reviews?per_page=100"):
-                return [{
-                    "user": {"login": "chatgpt-codex-connector"},
-                    "body": "**Reviewed commit:** `abcdef1234`",
-                    "commit_id": "abcdef1234",
-                    "submitted_at": "2026-08-20T00:00:00Z",
-                }]
+                return [
+                    {
+                        "user": {"login": "chatgpt-codex-connector"},
+                        "body": "**Reviewed commit:** `abcdef1234`",
+                        "commit_id": "abcdef1234",
+                        "submitted_at": "2026-08-20T00:00:00Z",
+                    }
+                ]
             if path.endswith("/comments?per_page=100"):
                 return []
             raise AssertionError(path)
 
         def _review_threads(self, spec, number):
             del spec, number
-            return [{
-                "id": "thread-1", "resolved": False,
-                "comments": [{"author": "chatgpt-codex-connector", "body": "Fix this"}],
-            }]
+            return [
+                {
+                    "id": "thread-1",
+                    "resolved": False,
+                    "comments": [
+                        {"author": "chatgpt-codex-connector", "body": "Fix this"}
+                    ],
+                }
+            ]
 
     def test_current_codex_review_with_unresolved_thread_is_has_findings(self):
         spec = RepoSpec(
-            name="demo", repo_full_name="example/demo", branch="main", host="local",
-            transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
+            name="demo",
+            repo_full_name="example/demo",
+            branch="main",
+            host="local",
+            transport="local",
+            ssh_target=None,
+            hermes_home="/tmp/.hermes",
             git_dir="/tmp/.hermes/repos/demo.git",
             work_tree="/tmp/.hermes/demo",
             origin_url="git@example.invalid:example/demo.git",
@@ -938,18 +1053,27 @@ class CodexStateTests(unittest.TestCase):
         self.assertEqual(state["unresolved_threads"], 1)
 
     class ReRequestedClient(Client):
-        def request(self, method, path, body=None, *, accept="application/vnd.github+json"):
+        def request(
+            self, method, path, body=None, *, accept="application/vnd.github+json"
+        ):
             if path.endswith("/comments?per_page=100"):
-                return [{
-                    "body": "@codex review",
-                    "created_at": "2026-08-20T00:10:00Z",
-                }]
+                return [
+                    {
+                        "body": "@codex review",
+                        "created_at": "2026-08-20T00:10:00Z",
+                    }
+                ]
             return super().request(method, path, body, accept=accept)
 
     def test_new_request_after_stale_review_is_requested(self):
         spec = RepoSpec(
-            name="demo", repo_full_name="example/demo", branch="main", host="local",
-            transport="local", ssh_target=None, hermes_home="/tmp/.hermes",
+            name="demo",
+            repo_full_name="example/demo",
+            branch="main",
+            host="local",
+            transport="local",
+            ssh_target=None,
+            hermes_home="/tmp/.hermes",
             git_dir="/tmp/.hermes/repos/demo.git",
             work_tree="/tmp/.hermes/demo",
             origin_url="git@example.invalid:example/demo.git",
@@ -959,7 +1083,6 @@ class CodexStateTests(unittest.TestCase):
         )
         self.assertEqual(state["state"], "requested")
         self.assertFalse(state["current_head"])
-
 
 
 if __name__ == "__main__":

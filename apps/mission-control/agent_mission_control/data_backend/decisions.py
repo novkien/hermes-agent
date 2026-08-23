@@ -45,13 +45,28 @@ PERMIT_TRUTHY = ("ok", "true", "yes", "1", "x", "checked")
 
 ISSUE_STATUSES = ("open", "resolved", "dismissed", "merged")
 ISSUE_EVENT_TYPES = (
-    "observed", "recurred", "investigation", "workaround", "recovered",
-    "reproduced", "not_reproduced", "verification_failed", "resolved",
-    "dismissed", "merged",
+    "observed",
+    "recurred",
+    "investigation",
+    "workaround",
+    "recovered",
+    "reproduced",
+    "not_reproduced",
+    "verification_failed",
+    "resolved",
+    "dismissed",
+    "merged",
 )
 ISSUE_UPDATE_FIELDS = (
-    "status", "resolution", "verification", "merge_into_id", "event_type",
-    "context", "severity", "delete", "reason",
+    "status",
+    "resolution",
+    "verification",
+    "merge_into_id",
+    "event_type",
+    "context",
+    "severity",
+    "delete",
+    "reason",
 )
 
 
@@ -72,7 +87,9 @@ def _script_path(scripts_dir: str | Path, filename: str) -> Path:
     except OSError:
         raise DecisionError(503, f"decision script not installed: {filename}") from None
     if resolved.parent != root:
-        raise DecisionError(503, f"decision script escapes configured directory: {filename}")
+        raise DecisionError(
+            503, f"decision script escapes configured directory: {filename}"
+        )
     return resolved
 
 
@@ -146,8 +163,12 @@ def _permit_exists(
     argv = [python_executable, str(permits_script), "get", "--permit-id", permit_id]
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, shell=False
-            argv, shell=False, capture_output=True, text=True,
-            timeout=CALL_TIMEOUT_SECONDS, check=False,
+            argv,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=CALL_TIMEOUT_SECONDS,
+            check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
         raise DecisionError(504, "permit lookup timed out") from None
@@ -193,8 +214,7 @@ def apply_permit_decision(
     ):
         raise DecisionError(404, f"permit not found: {permit_id}")
 
-    argv = [python_executable, str(permits_script), "update",
-            "--permit-id", permit_id]
+    argv = [python_executable, str(permits_script), "update", "--permit-id", permit_id]
 
     if body.get("delete") is True:
         argv.append("--delete")
@@ -250,7 +270,8 @@ def apply_issue_update(
     event_type = payload.get("event_type")
     if event_type is not None and event_type not in ISSUE_EVENT_TYPES:
         raise DecisionError(
-            400, f"event_type must be one of: {', '.join(ISSUE_EVENT_TYPES)}")
+            400, f"event_type must be one of: {', '.join(ISSUE_EVENT_TYPES)}"
+        )
     if "merge_into_id" in payload:
         try:
             payload["merge_into_id"] = int(payload["merge_into_id"])
@@ -271,8 +292,15 @@ def apply_issue_update(
         raise DecisionError(400, "issue id must be an integer") from None
 
     issues_script = _script_path(scripts_dir, "agent_notes_db.py")
-    argv = [python_executable, str(issues_script), "update",
-            "--id", str(numeric_id), "--json", json.dumps(payload)]
+    argv = [
+        python_executable,
+        str(issues_script),
+        "update",
+        "--id",
+        str(numeric_id),
+        "--json",
+        json.dumps(payload),
+    ]
     return {
         "issue_id": numeric_id,
         "applied": sorted(payload),

@@ -95,17 +95,13 @@ class PollWorker:
                     await self.on_failure(exc)
                 except Exception:
                     pass
-            self.backoff_seconds = min(
-                self.backoff_seconds * 2 or 2, self.backoff_max
-            )
+            self.backoff_seconds = min(self.backoff_seconds * 2 or 2, self.backoff_max)
 
     async def run(self) -> None:
         while True:
             if not self.paused:
                 await self.tick_once()
-                await asyncio.sleep(
-                    self.interval_seconds + self.backoff_seconds
-                )
+                await asyncio.sleep(self.interval_seconds + self.backoff_seconds)
             else:
                 await asyncio.sleep(1)
 
@@ -123,11 +119,19 @@ def fingerprint_json(data: Any) -> str:
 def fingerprint_tasks(tasks: list[dict]) -> str:
     """Fingerprint over running-task lifecycle fields only (status/run/heartbeat)."""
     key = [
-        (t.get("id"), t.get("status"), t.get("current_run_id"),
-         t.get("last_heartbeat_at"), t.get("started_at"), t.get("completed_at"))
+        (
+            t.get("id"),
+            t.get("status"),
+            t.get("current_run_id"),
+            t.get("last_heartbeat_at"),
+            t.get("started_at"),
+            t.get("completed_at"),
+        )
         for t in tasks
     ]
-    return hashlib.sha256(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(key, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 class SourceWorkers:
@@ -187,8 +191,11 @@ class SourceWorkers:
         if not hasattr(self, "_initialized_sources"):
             self._initialized_sources = set()
         for name in (
-            "_permit_entities", "_issue_entities", "_cron_entities",
-            "_session_entities", "_repository_entities",
+            "_permit_entities",
+            "_issue_entities",
+            "_cron_entities",
+            "_session_entities",
+            "_repository_entities",
             "_system_manager_entities",
         ):
             if not hasattr(self, name):
@@ -219,7 +226,8 @@ class SourceWorkers:
 
     def _fp_kanban(self, data: dict) -> str:
         running = [
-            t for t in data.get("tasks", [])
+            t
+            for t in data.get("tasks", [])
             if t.get("status") in ("running", "ready", "blocked", "todo")
         ]
         return fingerprint_tasks(running)
@@ -241,7 +249,10 @@ class SourceWorkers:
             projected = project_entity("kanban.tasks", t)
             if prev is None or project_entity("kanban.tasks", prev) != projected:
                 await self.bus.publish(
-                    "task.changed", "kanban", "task", tid,
+                    "task.changed",
+                    "kanban",
+                    "task",
+                    tid,
                     projected,
                 )
         for tid in set(prev_by_id) - set(by_id):
@@ -256,9 +267,15 @@ class SourceWorkers:
                 continue
             if prev.get("status") in ("running",) and t.get("status") != "running":
                 await self.bus.publish(
-                    "run.changed", "kanban", "run", str(t.get("current_run_id") or ""),
-                    {"task_id": tid, "status": t.get("status"),
-                     "completed_at": t.get("completed_at")},
+                    "run.changed",
+                    "kanban",
+                    "run",
+                    str(t.get("current_run_id") or ""),
+                    {
+                        "task_id": tid,
+                        "status": t.get("status"),
+                        "completed_at": t.get("completed_at"),
+                    },
                 )
         self._kanban_tasks = cur_tasks
 
@@ -269,23 +286,42 @@ class SourceWorkers:
         return data if isinstance(data, list) else []
 
     def _fp_permits(self, data: list) -> str:
-        return fingerprint_json(
-            [(p.get("permit_id"), p.get("status"), p.get("severity"),
-              p.get("updated_at"), p.get("expires_at")) for p in data]
-        )
+        return fingerprint_json([
+            (
+                p.get("permit_id"),
+                p.get("status"),
+                p.get("severity"),
+                p.get("updated_at"),
+                p.get("expires_at"),
+            )
+            for p in data
+        ])
 
     async def _on_permits(self, data: list, fp: Optional[str]) -> None:
         self._ensure_delta_state()
         self._feed_alerts("permits", data)
-        current = {str(p.get("permit_id") or p.get("id")): p for p in data if p.get("permit_id") or p.get("id")}
+        current = {
+            str(p.get("permit_id") or p.get("id")): p
+            for p in data
+            if p.get("permit_id") or p.get("id")
+        }
         if "permits" in self._initialized_sources:
             for entity_id, row in current.items():
                 projected = project_entity("permits", row)
                 previous = self._permit_entities.get(entity_id)
                 if previous is None or project_entity("permits", previous) != projected:
-                    await self.bus.publish("permit.changed", "permits", "permit", entity_id, projected)
+                    await self.bus.publish(
+                        "permit.changed", "permits", "permit", entity_id, projected
+                    )
             for entity_id in set(self._permit_entities) - set(current):
-                await self.bus.publish("permit.changed", "permits", "permit", entity_id, {}, operation="delete")
+                await self.bus.publish(
+                    "permit.changed",
+                    "permits",
+                    "permit",
+                    entity_id,
+                    {},
+                    operation="delete",
+                )
         self._initialized_sources.add("permits")
         self._permit_entities = current
 
@@ -296,10 +332,16 @@ class SourceWorkers:
         return data if isinstance(data, list) else []
 
     def _fp_issues(self, data: list) -> str:
-        return fingerprint_json(
-            [(i.get("id"), i.get("status"), i.get("severity"),
-              i.get("last_seen_at"), i.get("updated_at")) for i in data]
-        )
+        return fingerprint_json([
+            (
+                i.get("id"),
+                i.get("status"),
+                i.get("severity"),
+                i.get("last_seen_at"),
+                i.get("updated_at"),
+            )
+            for i in data
+        ])
 
     async def _on_issues(self, data: list, fp: Optional[str]) -> None:
         self._ensure_delta_state()
@@ -310,9 +352,18 @@ class SourceWorkers:
                 projected = project_entity("issues", row)
                 previous = self._issue_entities.get(entity_id)
                 if previous is None or project_entity("issues", previous) != projected:
-                    await self.bus.publish("issue.changed", "issues", "issue", entity_id, projected)
+                    await self.bus.publish(
+                        "issue.changed", "issues", "issue", entity_id, projected
+                    )
             for entity_id in set(self._issue_entities) - set(current):
-                await self.bus.publish("issue.changed", "issues", "issue", entity_id, {}, operation="delete")
+                await self.bus.publish(
+                    "issue.changed",
+                    "issues",
+                    "issue",
+                    entity_id,
+                    {},
+                    operation="delete",
+                )
         self._initialized_sources.add("issues")
         self._issue_entities = current
 
@@ -328,10 +379,16 @@ class SourceWorkers:
         return jobs
 
     def _fp_cron(self, data: list) -> str:
-        return fingerprint_json(
-            [(j.get("id"), j.get("state"), j.get("last_run_at"),
-              j.get("next_run_at"), j.get("last_status")) for j in data]
-        )
+        return fingerprint_json([
+            (
+                j.get("id"),
+                j.get("state"),
+                j.get("last_run_at"),
+                j.get("next_run_at"),
+                j.get("last_status"),
+            )
+            for j in data
+        ])
 
     async def _on_cron(self, data: list, fp: Optional[str]) -> None:
         self._ensure_delta_state()
@@ -341,10 +398,22 @@ class SourceWorkers:
             for entity_id, row in current.items():
                 projected = project_entity("cron.jobs", row)
                 previous = self._cron_entities.get(entity_id)
-                if previous is None or project_entity("cron.jobs", previous) != projected:
-                    await self.bus.publish("cron.changed", "cron", "cron_job", entity_id, projected)
+                if (
+                    previous is None
+                    or project_entity("cron.jobs", previous) != projected
+                ):
+                    await self.bus.publish(
+                        "cron.changed", "cron", "cron_job", entity_id, projected
+                    )
             for entity_id in set(self._cron_entities) - set(current):
-                await self.bus.publish("cron.changed", "cron", "cron_job", entity_id, {}, operation="delete")
+                await self.bus.publish(
+                    "cron.changed",
+                    "cron",
+                    "cron_job",
+                    entity_id,
+                    {},
+                    operation="delete",
+                )
         self._initialized_sources.add("cron")
         self._cron_entities = current
 
@@ -364,16 +433,24 @@ class SourceWorkers:
             rows = body.get("sessions") or body.get("data") or body.get("items") or []
         else:
             rows = body
-        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        return (
+            [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        )
 
     def _fp_sessions(self, data: list) -> str:
         # Activity + message count, not just ids: a live conversation keeps the
         # same id while its transcript grows, and that growth is the delta the
         # SPA needs to hear about.
-        return fingerprint_json(
-            [(r.get("id") or r.get("session_id"), r.get("last_activity_at") or r.get("last_active"),
-              r.get("message_count"), r.get("ended_at"), r.get("archived")) for r in data]
-        )
+        return fingerprint_json([
+            (
+                r.get("id") or r.get("session_id"),
+                r.get("last_activity_at") or r.get("last_active"),
+                r.get("message_count"),
+                r.get("ended_at"),
+                r.get("archived"),
+            )
+            for r in data
+        ])
 
     async def _on_sessions(self, data: list, fp: Optional[str]) -> None:
         self._ensure_delta_state()
@@ -387,24 +464,42 @@ class SourceWorkers:
             current[sid] = row
             projected = project_entity("sessions", row)
             previous = self._session_entities.get(sid)
-            if "sessions" in self._initialized_sources and (
-                previous is None or project_entity("sessions", previous) != projected
-            ) and emitted < 100:
+            if (
+                "sessions" in self._initialized_sources
+                and (
+                    previous is None
+                    or project_entity("sessions", previous) != projected
+                )
+                and emitted < 100
+            ):
                 emitted += 1
                 await self.bus.publish(
-                    "session.changed", "sessions", "session", sid,
-                    projected, coverage="polled",
+                    "session.changed",
+                    "sessions",
+                    "session",
+                    sid,
+                    projected,
+                    coverage="polled",
                 )
         if "sessions" in self._initialized_sources:
             for sid in list(set(self._session_entities) - set(current))[:100]:
                 await self.bus.publish(
-                    "session.changed", "sessions", "session", sid, {},
-                    coverage="polled", operation="delete",
+                    "session.changed",
+                    "sessions",
+                    "session",
+                    sid,
+                    {},
+                    coverage="polled",
+                    operation="delete",
                 )
             if emitted >= 100 or len(set(self._session_entities) - set(current)) > 100:
                 await self.bus.publish(
-                    "session.changed", "sessions", "session", "",
-                    {"reason": "delta-bound-exceeded"}, coverage="derived",
+                    "session.changed",
+                    "sessions",
+                    "session",
+                    "",
+                    {"reason": "delta-bound-exceeded"},
+                    coverage="derived",
                     operation="resync-required",
                 )
         self._initialized_sources.add("sessions")
@@ -421,19 +516,31 @@ class SourceWorkers:
         if s >= 400:
             raise RuntimeError(f"running fetch failed: {s}")
         rows = body.get("running") if isinstance(body, dict) else None
-        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        return (
+            [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        )
 
     def _fp_running(self, data: list) -> str:
         return fingerprint_json(sorted(str(r.get("session_id") or "") for r in data))
 
     async def _on_running(self, data: list, fp: Optional[str]) -> None:
         await self.bus.publish(
-            "session.running", "sessions", "session", "",
-            {"running": [
-                {"session_id": r.get("session_id"), "run_id": r.get("run_id"),
-                 "started_at": r.get("started_at"), "platform": r.get("platform")}
-                for r in data if r.get("session_id")
-            ]},
+            "session.running",
+            "sessions",
+            "session",
+            "",
+            {
+                "running": [
+                    {
+                        "session_id": r.get("session_id"),
+                        "run_id": r.get("run_id"),
+                        "started_at": r.get("started_at"),
+                        "platform": r.get("platform"),
+                    }
+                    for r in data
+                    if r.get("session_id")
+                ]
+            },
             coverage="polled",
         )
 
@@ -476,7 +583,10 @@ class SourceWorkers:
                 continue
             if prev != ok:
                 await self.bus.publish(
-                    "source.health", "health", "source", source,
+                    "source.health",
+                    "health",
+                    "source",
+                    source,
                     {"healthy": ok, "previous": prev},
                     coverage="polled",
                 )
@@ -488,7 +598,12 @@ class SourceWorkers:
         return result.data if isinstance(result.data, dict) else {}
 
     def _fp_capabilities(self, data: dict) -> str:
-        fp = data.get("schema_fingerprint") or data.get("fingerprint") or data.get("global_fingerprint") or ""
+        fp = (
+            data.get("schema_fingerprint")
+            or data.get("fingerprint")
+            or data.get("global_fingerprint")
+            or ""
+        )
         if isinstance(fp, dict):
             fp = fp.get("sha256_ddl", "") or fp.get("global", "")
         return str(fp)
@@ -501,8 +616,12 @@ class SourceWorkers:
             # the source and forwards the event so clients clear their own
             # prefetch caches (app.js cache.invalidated handler).
             await self.bus.publish(
-                "cache.invalidated", "adapter", "schema", "adapter",
-                {"fingerprint": fp}, coverage="derived",
+                "cache.invalidated",
+                "adapter",
+                "schema",
+                "adapter",
+                {"fingerprint": fp},
+                coverage="derived",
             )
 
     # ---- analytics (R10 token-spike input) ----------------------------------
@@ -534,10 +653,13 @@ class SourceWorkers:
     async def _on_analytics(self, data: dict, fp: Optional[str]) -> None:
         # R10 stays inert unless the operator configured a threshold — there is
         # no defensible default for "too many tokens".
-        self._feed_alerts("analytics", {
-            "tokens": self._total_tokens(data),
-            "token_threshold": getattr(self.cfg, "alert_token_threshold", 0),
-        })
+        self._feed_alerts(
+            "analytics",
+            {
+                "tokens": self._total_tokens(data),
+                "token_threshold": getattr(self.cfg, "alert_token_threshold", 0),
+            },
+        )
 
     # ---- repository inventory --------------------------------------------
     async def _fetch_repositories(self) -> list[dict]:
@@ -551,8 +673,12 @@ class SourceWorkers:
     def _fp_repositories(self, data: list[dict]) -> str:
         return fingerprint_json([
             (
-                row.get("name"), row.get("state"), row.get("local_sha"),
-                row.get("remote_sha"), row.get("ahead"), row.get("behind"),
+                row.get("name"),
+                row.get("state"),
+                row.get("local_sha"),
+                row.get("remote_sha"),
+                row.get("ahead"),
+                row.get("behind"),
                 bool((row.get("working_tree") or {}).get("dirty")),
             )
             for row in data
@@ -560,22 +686,33 @@ class SourceWorkers:
 
     async def _on_repositories(self, data: list[dict], fp: Optional[str]) -> None:
         self._ensure_delta_state()
-        current = {
-            str(row.get("name")): row for row in data if row.get("name")
-        }
+        current = {str(row.get("name")): row for row in data if row.get("name")}
         if "repositories" in self._initialized_sources:
             for entity_id, row in current.items():
                 projected = project_entity("repositories", row)
                 previous = self._repository_entities.get(entity_id)
-                if previous is None or project_entity("repositories", previous) != projected:
+                if (
+                    previous is None
+                    or project_entity("repositories", previous) != projected
+                ):
                     await self.bus.publish(
-                        "repository.changed", "repository-worker", "repository",
-                        entity_id, projected, coverage="polled", operation="upsert",
+                        "repository.changed",
+                        "repository-worker",
+                        "repository",
+                        entity_id,
+                        projected,
+                        coverage="polled",
+                        operation="upsert",
                     )
             for entity_id in set(self._repository_entities) - set(current):
                 await self.bus.publish(
-                    "repository.changed", "repository-worker", "repository",
-                    entity_id, {}, coverage="polled", operation="delete",
+                    "repository.changed",
+                    "repository-worker",
+                    "repository",
+                    entity_id,
+                    {},
+                    coverage="polled",
+                    operation="delete",
                 )
         self._initialized_sources.add("repositories")
         self._repository_entities = current
@@ -589,7 +726,9 @@ class SourceWorkers:
 
         async def one(table: str) -> list[dict]:
             status, body = await self.system_manager_client.request(
-                "POST", "/v1/db/read", request_id=f"live-worker-{table}",
+                "POST",
+                "/v1/db/read",
+                request_id=f"live-worker-{table}",
                 json_body={"table": table, "limit": 500},
             )
             if status >= 400:
@@ -600,19 +739,25 @@ class SourceWorkers:
                 if not isinstance(row, dict) or row.get("id") in (None, ""):
                     continue
                 out.append({
-                    **row, "table": table,
+                    **row,
+                    "table": table,
                     "entity_key": f"{table}:{row['id']}",
                 })
             return out
 
-        groups = await asyncio.gather(*(one(table) for table in self._SYSTEM_MANAGER_TABLES))
+        groups = await asyncio.gather(
+            *(one(table) for table in self._SYSTEM_MANAGER_TABLES)
+        )
         return [row for group in groups for row in group]
 
     def _fp_system_manager(self, data: list[dict]) -> str:
         return fingerprint_json([
             (
-                row.get("entity_key"), row.get("observed_state"),
-                row.get("health"), row.get("enabled"), row.get("updated_at"),
+                row.get("entity_key"),
+                row.get("observed_state"),
+                row.get("health"),
+                row.get("enabled"),
+                row.get("updated_at"),
                 row.get("revision"),
             )
             for row in data
@@ -621,22 +766,34 @@ class SourceWorkers:
     async def _on_system_manager(self, data: list[dict], fp: Optional[str]) -> None:
         self._ensure_delta_state()
         current = {
-            str(row.get("entity_key")): row
-            for row in data if row.get("entity_key")
+            str(row.get("entity_key")): row for row in data if row.get("entity_key")
         }
         if "system-manager" in self._initialized_sources:
             for entity_id, row in current.items():
                 projected = project_entity("system-manager.inventory", row)
                 previous = self._system_manager_entities.get(entity_id)
-                if previous is None or project_entity("system-manager.inventory", previous) != projected:
+                if (
+                    previous is None
+                    or project_entity("system-manager.inventory", previous) != projected
+                ):
                     await self.bus.publish(
-                        "system-manager.changed", "system-manager", "inventory",
-                        entity_id, projected, coverage="polled", operation="upsert",
+                        "system-manager.changed",
+                        "system-manager",
+                        "inventory",
+                        entity_id,
+                        projected,
+                        coverage="polled",
+                        operation="upsert",
                     )
             for entity_id in set(self._system_manager_entities) - set(current):
                 await self.bus.publish(
-                    "system-manager.changed", "system-manager", "inventory",
-                    entity_id, {}, coverage="polled", operation="delete",
+                    "system-manager.changed",
+                    "system-manager",
+                    "inventory",
+                    entity_id,
+                    {},
+                    coverage="polled",
+                    operation="delete",
                 )
         self._initialized_sources.add("system-manager")
         self._system_manager_entities = current
@@ -722,7 +879,8 @@ class SourceWorkers:
             live = occupied.get(key, {})
             reservation = reserved.get(key, {})
             thread_ids = [
-                value for name, value in slot.items()
+                value
+                for name, value in slot.items()
                 if name.endswith("_thread_id") and value not in (None, "")
             ]
             bindings.append({
@@ -741,7 +899,9 @@ class SourceWorkers:
             })
 
         sessions: list[dict] = []
-        for chat_id in sorted({str(row.get("chat_id")) for row in occupancy if row.get("chat_id")}):
+        for chat_id in sorted({
+            str(row.get("chat_id")) for row in occupancy if row.get("chat_id")
+        }):
             try:
                 result = await self.adapter.room_sessions(chat_id, limit=200)
             except Exception:
@@ -755,7 +915,9 @@ class SourceWorkers:
         return bindings, sessions[:1000]
 
     def _memory_inventory(self) -> list[dict]:
-        memory_dir = getattr(getattr(self.adapter, "settings", None), "memory_dir", None)
+        memory_dir = getattr(
+            getattr(self.adapter, "settings", None), "memory_dir", None
+        )
         if memory_dir is None:
             return []
         rows = []
@@ -764,15 +926,36 @@ class SourceWorkers:
             try:
                 stat = path.stat()
                 rows.append({
-                    "file_key": file_key, "name": name, "exists": True,
-                    "size": stat.st_size, "modified_at": stat.st_mtime,
+                    "file_key": file_key,
+                    "name": name,
+                    "exists": True,
+                    "size": stat.st_size,
+                    "modified_at": stat.st_mtime,
                 })
             except OSError:
-                rows.append({"file_key": file_key, "name": name, "exists": False, "size": 0})
+                rows.append({
+                    "file_key": file_key,
+                    "name": name,
+                    "exists": False,
+                    "size": 0,
+                })
         return rows
 
     async def _fetch_inventory(self) -> dict[str, list[dict]]:
-        profiles, info, options, tools, mcp, plugins, skills, webhooks, channels, files, health, status = await asyncio.gather(
+        (
+            profiles,
+            info,
+            options,
+            tools,
+            mcp,
+            plugins,
+            skills,
+            webhooks,
+            channels,
+            files,
+            health,
+            status,
+        ) = await asyncio.gather(
             self._dashboard_body("/api/profiles"),
             self._dashboard_body("/api/model/info"),
             self._dashboard_body("/api/model/options"),
@@ -791,28 +974,52 @@ class SourceWorkers:
         current_provider = info.get("provider") or options.get("provider")
         for provider in self._list_from(options, "providers"):
             slug = provider.get("slug") or provider.get("id") or provider.get("name")
-            capabilities = provider.get("capabilities") if isinstance(provider.get("capabilities"), dict) else {}
-            for model in provider.get("models") if isinstance(provider.get("models"), list) else []:
-                model_id = str(model.get("id") or model.get("name")) if isinstance(model, dict) else str(model)
-                cap = capabilities.get(model_id, {}) if isinstance(capabilities, dict) else {}
+            capabilities = (
+                provider.get("capabilities")
+                if isinstance(provider.get("capabilities"), dict)
+                else {}
+            )
+            for model in (
+                provider.get("models")
+                if isinstance(provider.get("models"), list)
+                else []
+            ):
+                model_id = (
+                    str(model.get("id") or model.get("name"))
+                    if isinstance(model, dict)
+                    else str(model)
+                )
+                cap = (
+                    capabilities.get(model_id, {})
+                    if isinstance(capabilities, dict)
+                    else {}
+                )
                 model_rows.append({
-                    "id": f"{slug}::{model_id}", "model": model_id, "provider": slug,
+                    "id": f"{slug}::{model_id}",
+                    "model": model_id,
+                    "provider": slug,
                     "provider_name": provider.get("name") or slug,
                     "featured": model_id in (provider.get("featured_models") or []),
                     "authenticated": provider.get("authenticated") is not False,
-                    "is_current": slug == current_provider and model_id == current_model,
+                    "is_current": slug == current_provider
+                    and model_id == current_model,
                     "fast": bool(cap.get("fast")) if isinstance(cap, dict) else False,
-                    "reasoning": bool(cap.get("reasoning")) if isinstance(cap, dict) else False,
+                    "reasoning": bool(cap.get("reasoning"))
+                    if isinstance(cap, dict)
+                    else False,
                     "context": cap.get("context") if isinstance(cap, dict) else None,
                 })
         room_bindings, room_sessions = await self._fetch_room_inventory()
         command = {
-            "id": "hermes", "gateway_state": status.get("gateway_state"),
+            "id": "hermes",
+            "gateway_state": status.get("gateway_state"),
             "active_sessions": status.get("active_sessions"),
             "active_agents": status.get("active_agents"),
             "cpu_percent": health.get("cpu_percent") or status.get("cpu_percent"),
-            "memory_percent": health.get("memory_percent") or status.get("memory_percent"),
-            "version": status.get("version"), "checked_at": time.time(),
+            "memory_percent": health.get("memory_percent")
+            or status.get("memory_percent"),
+            "version": status.get("version"),
+            "checked_at": time.time(),
         }
         webhook_rows = self._list_from(webhooks, "subscriptions", "webhooks", "items")
         for row in webhook_rows:
@@ -847,14 +1054,17 @@ class SourceWorkers:
         }
         return fingerprint_json(projected)
 
-    async def _on_inventory(self, data: dict[str, list[dict]], fp: Optional[str]) -> None:
+    async def _on_inventory(
+        self, data: dict[str, list[dict]], fp: Optional[str]
+    ) -> None:
         self._ensure_delta_state()
         for resource_key, rows in data.items():
             spec = RESOURCE_SPECS[resource_key]
             current = {
                 str(projected[spec.entity_key]): projected
                 for row in rows
-                if (projected := project_entity(resource_key, row)).get(spec.entity_key) not in (None, "")
+                if (projected := project_entity(resource_key, row)).get(spec.entity_key)
+                not in (None, "")
             }
             previous = self._inventory_entities.get(resource_key, {})
             marker = f"inventory:{resource_key}"
@@ -863,13 +1073,25 @@ class SourceWorkers:
                 for entity_id, projected in current.items():
                     if previous.get(entity_id) != projected:
                         await self.bus.publish(
-                            event_type, spec.authority, resource_key, entity_id, projected,
-                            coverage="polled", resource_key=resource_key, operation="upsert",
+                            event_type,
+                            spec.authority,
+                            resource_key,
+                            entity_id,
+                            projected,
+                            coverage="polled",
+                            resource_key=resource_key,
+                            operation="upsert",
                         )
                 for entity_id in set(previous) - set(current):
                     await self.bus.publish(
-                        event_type, spec.authority, resource_key, entity_id, {},
-                        coverage="polled", resource_key=resource_key, operation="delete",
+                        event_type,
+                        spec.authority,
+                        resource_key,
+                        entity_id,
+                        {},
+                        coverage="polled",
+                        resource_key=resource_key,
+                        operation="delete",
                     )
             self._initialized_sources.add(marker)
             self._inventory_entities[resource_key] = current
@@ -883,9 +1105,15 @@ class SourceWorkers:
         marker = "signal:settings"
         if marker in self._initialized_sources:
             await self.bus.publish(
-                "settings.changed", "dashboard", "settings", "", {},
-                coverage="polled", profile_id=getattr(self.cfg, "live_default_profile", "default"),
-                resource_key="system.settings", operation="invalidate",
+                "settings.changed",
+                "dashboard",
+                "settings",
+                "",
+                {},
+                coverage="polled",
+                profile_id=getattr(self.cfg, "live_default_profile", "default"),
+                resource_key="system.settings",
+                operation="invalidate",
             )
         self._initialized_sources.add(marker)
 
@@ -896,9 +1124,15 @@ class SourceWorkers:
         marker = "signal:logs"
         if marker in self._initialized_sources:
             await self.bus.publish(
-                "logs.changed", "dashboard", "logs", "", {},
-                coverage="polled", profile_id=getattr(self.cfg, "live_default_profile", "default"),
-                resource_key="logs.tail", operation="invalidate",
+                "logs.changed",
+                "dashboard",
+                "logs",
+                "",
+                {},
+                coverage="polled",
+                profile_id=getattr(self.cfg, "live_default_profile", "default"),
+                resource_key="logs.tail",
+                operation="invalidate",
             )
         self._initialized_sources.add(marker)
 
@@ -925,10 +1159,12 @@ class SourceWorkers:
         }
 
     async def _fetch_iframe_health(self) -> list[dict]:
-        return list(await asyncio.gather(
-            self._probe_port("llama-proxy", 8082),
-            self._probe_port("9router", 20128),
-        ))
+        return list(
+            await asyncio.gather(
+                self._probe_port("llama-proxy", 8082),
+                self._probe_port("9router", 20128),
+            )
+        )
 
     def _fp_iframe_health(self, data: list[dict]) -> str:
         return fingerprint_json([
@@ -936,15 +1172,23 @@ class SourceWorkers:
         ])
 
     async def _on_iframe_health(self, data: list[dict], _fp: Optional[str]) -> None:
-        current = {str(row["service"]): project_entity("iframe.health", row) for row in data}
+        current = {
+            str(row["service"]): project_entity("iframe.health", row) for row in data
+        }
         previous = self._inventory_entities.get("iframe.health", {})
         marker = "inventory:iframe.health"
         if marker in self._initialized_sources:
             for entity_id, row in current.items():
                 if previous.get(entity_id) != row:
                     await self.bus.publish(
-                        "iframe.changed", "mission-control", "iframe", entity_id, row,
-                        coverage="polled", resource_key="iframe.health", operation="upsert",
+                        "iframe.changed",
+                        "mission-control",
+                        "iframe",
+                        entity_id,
+                        row,
+                        coverage="polled",
+                        resource_key="iframe.health",
+                        operation="upsert",
                     )
         self._initialized_sources.add(marker)
         self._inventory_entities["iframe.health"] = current
@@ -972,39 +1216,63 @@ class SourceWorkers:
         profile = getattr(self.cfg, "live_default_profile", "default")
         fingerprint = f"p{READ_MODEL_PROJECTOR_VERSION}:{fingerprint}"
         if name == "kanban":
-            model.replace_entities("kanban.tasks", data.get("tasks", []), profile_id=profile, fingerprint=fingerprint)
+            model.replace_entities(
+                "kanban.tasks",
+                data.get("tasks", []),
+                profile_id=profile,
+                fingerprint=fingerprint,
+            )
         elif name in {"permits", "issues", "cron", "sessions", "running"}:
             key = self._WORKER_RESOURCES[name][0]
-            model.replace_entities(key, data if isinstance(data, list) else [], profile_id=profile, fingerprint=fingerprint)
+            model.replace_entities(
+                key,
+                data if isinstance(data, list) else [],
+                profile_id=profile,
+                fingerprint=fingerprint,
+            )
         elif name == "health":
             rows = [
-                {"source_id": source, "healthy": bool(healthy), "checked_at": time.time()}
+                {
+                    "source_id": source,
+                    "healthy": bool(healthy),
+                    "checked_at": time.time(),
+                }
                 for source, healthy in (data.items() if isinstance(data, dict) else ())
             ]
-            model.replace_entities("source.health", rows, profile_id=profile, fingerprint=fingerprint)
+            model.replace_entities(
+                "source.health", rows, profile_id=profile, fingerprint=fingerprint
+            )
         elif name == "analytics":
             summary = dict(data) if isinstance(data, dict) else {}
             if isinstance(summary.get("totals"), dict):
                 summary = {**summary, **summary["totals"]}
-            model.replace_summary("analytics.usage", summary, profile_id=profile, fingerprint=fingerprint)
+            model.replace_summary(
+                "analytics.usage", summary, profile_id=profile, fingerprint=fingerprint
+            )
         elif name in {"repositories", "system-manager"}:
             key = self._WORKER_RESOURCES[name][0]
             model.replace_entities(
-                key, data if isinstance(data, list) else [],
-                profile_id=profile, fingerprint=fingerprint,
+                key,
+                data if isinstance(data, list) else [],
+                profile_id=profile,
+                fingerprint=fingerprint,
             )
         elif name == "inventory" and isinstance(data, dict):
             for key, rows in data.items():
                 if key not in self._INVENTORY_EVENTS:
                     continue
                 model.replace_entities(
-                    key, rows if isinstance(rows, list) else [],
-                    profile_id=profile, fingerprint=f"{fingerprint}:{key}",
+                    key,
+                    rows if isinstance(rows, list) else [],
+                    profile_id=profile,
+                    fingerprint=f"{fingerprint}:{key}",
                 )
         elif name == "iframe-health":
             model.replace_entities(
-                "iframe.health", data if isinstance(data, list) else [],
-                profile_id=profile, fingerprint=fingerprint,
+                "iframe.health",
+                data if isinstance(data, list) else [],
+                profile_id=profile,
+                fingerprint=fingerprint,
             )
 
     async def _persist_failure(self, name: str, exc: Exception) -> None:
@@ -1013,12 +1281,20 @@ class SourceWorkers:
         resources = self._WORKER_RESOURCES.get(name, ())
         if resources:
             self.read_model.record_failure(
-                resources, exc, profile_id=getattr(self.cfg, "live_default_profile", "default")
+                resources,
+                exc,
+                profile_id=getattr(self.cfg, "live_default_profile", "default"),
             )
 
-    def _worker(self, name: str, interval: int, fetch: FetchFn, on_delta, fingerprint_of) -> PollWorker:
+    def _worker(
+        self, name: str, interval: int, fetch: FetchFn, on_delta, fingerprint_of
+    ) -> PollWorker:
         return PollWorker(
-            name, interval, fetch, on_delta, fingerprint_of,
+            name,
+            interval,
+            fetch,
+            on_delta,
+            fingerprint_of,
             self.cfg.poll_backoff_max_seconds,
             on_success=lambda data, fp: self._persist_success(name, data, fp),
             on_failure=lambda exc: self._persist_failure(name, exc),
@@ -1026,51 +1302,119 @@ class SourceWorkers:
 
     # ---- setup -------------------------------------------------------------
     def build(self) -> None:
-        self.workers["kanban"] = self._worker("kanban", self.cfg.poll_kanban_seconds, self._fetch_kanban, self._on_kanban, self._fp_kanban)
-        self.workers["permits"] = self._worker("permits", self.cfg.poll_permits_seconds, self._fetch_permits, self._on_permits, self._fp_permits)
-        self.workers["issues"] = self._worker("issues", self.cfg.poll_issues_seconds, self._fetch_issues, self._on_issues, self._fp_issues)
-        self.workers["cron"] = self._worker("cron", self.cfg.poll_cron_seconds, self._fetch_cron, self._on_cron, self._fp_cron)
-        self.workers["sessions"] = self._worker("sessions", self.cfg.poll_sessions_seconds, self._fetch_sessions, self._on_sessions, self._fp_sessions)
+        self.workers["kanban"] = self._worker(
+            "kanban",
+            self.cfg.poll_kanban_seconds,
+            self._fetch_kanban,
+            self._on_kanban,
+            self._fp_kanban,
+        )
+        self.workers["permits"] = self._worker(
+            "permits",
+            self.cfg.poll_permits_seconds,
+            self._fetch_permits,
+            self._on_permits,
+            self._fp_permits,
+        )
+        self.workers["issues"] = self._worker(
+            "issues",
+            self.cfg.poll_issues_seconds,
+            self._fetch_issues,
+            self._on_issues,
+            self._fp_issues,
+        )
+        self.workers["cron"] = self._worker(
+            "cron",
+            self.cfg.poll_cron_seconds,
+            self._fetch_cron,
+            self._on_cron,
+            self._fp_cron,
+        )
+        self.workers["sessions"] = self._worker(
+            "sessions",
+            self.cfg.poll_sessions_seconds,
+            self._fetch_sessions,
+            self._on_sessions,
+            self._fp_sessions,
+        )
         # Faster than the other pollers on purpose: this drives a "running now"
         # indicator, and an indicator that lags the turn it describes by fifteen
         # seconds is worse than none. The response is a short list and costs the
         # gateway a dict walk.
-        self.workers["running"] = self._worker("running", self.cfg.poll_running_seconds, self._fetch_running, self._on_running, self._fp_running)
-        self.workers["health"] = self._worker("health", self.cfg.poll_health_seconds, self._fetch_health, self._on_health, self._fp_health)
-        self.workers["capabilities"] = PollWorker(
-            "capabilities", self.cfg.poll_adapter_health_seconds, self._fetch_capabilities,
-            self._on_capabilities, self._fp_capabilities, self.cfg.poll_backoff_max_seconds,
+        self.workers["running"] = self._worker(
+            "running",
+            self.cfg.poll_running_seconds,
+            self._fetch_running,
+            self._on_running,
+            self._fp_running,
         )
-        self.workers["analytics"] = self._worker("analytics", self.cfg.poll_analytics_seconds, self._fetch_analytics, self._on_analytics, self._fp_analytics)
+        self.workers["health"] = self._worker(
+            "health",
+            self.cfg.poll_health_seconds,
+            self._fetch_health,
+            self._on_health,
+            self._fp_health,
+        )
+        self.workers["capabilities"] = PollWorker(
+            "capabilities",
+            self.cfg.poll_adapter_health_seconds,
+            self._fetch_capabilities,
+            self._on_capabilities,
+            self._fp_capabilities,
+            self.cfg.poll_backoff_max_seconds,
+        )
+        self.workers["analytics"] = self._worker(
+            "analytics",
+            self.cfg.poll_analytics_seconds,
+            self._fetch_analytics,
+            self._on_analytics,
+            self._fp_analytics,
+        )
         if self.repository_service is not None:
             self.workers["repositories"] = self._worker(
-                "repositories", max(30, self.cfg.poll_adapter_health_seconds),
-                self._fetch_repositories, self._on_repositories,
+                "repositories",
+                max(30, self.cfg.poll_adapter_health_seconds),
+                self._fetch_repositories,
+                self._on_repositories,
                 self._fp_repositories,
             )
         if self.system_manager_client is not None:
             self.workers["system-manager"] = self._worker(
-                "system-manager", max(10, self.cfg.poll_health_seconds),
-                self._fetch_system_manager, self._on_system_manager,
+                "system-manager",
+                max(10, self.cfg.poll_health_seconds),
+                self._fetch_system_manager,
+                self._on_system_manager,
                 self._fp_system_manager,
             )
         self.workers["inventory"] = self._worker(
-            "inventory", max(30, self.cfg.poll_adapter_health_seconds),
-            self._fetch_inventory, self._on_inventory, self._fp_inventory,
+            "inventory",
+            max(30, self.cfg.poll_adapter_health_seconds),
+            self._fetch_inventory,
+            self._on_inventory,
+            self._fp_inventory,
         )
         self.workers["settings-signal"] = PollWorker(
-            "settings-signal", max(30, self.cfg.poll_adapter_health_seconds),
-            self._fetch_settings_signal, self._on_settings_signal, fingerprint_json,
+            "settings-signal",
+            max(30, self.cfg.poll_adapter_health_seconds),
+            self._fetch_settings_signal,
+            self._on_settings_signal,
+            fingerprint_json,
             self.cfg.poll_backoff_max_seconds,
         )
         self.workers["logs-signal"] = PollWorker(
-            "logs-signal", max(2, self.cfg.poll_running_seconds),
-            self._fetch_logs_signal, self._on_logs_signal, fingerprint_json,
+            "logs-signal",
+            max(2, self.cfg.poll_running_seconds),
+            self._fetch_logs_signal,
+            self._on_logs_signal,
+            fingerprint_json,
             self.cfg.poll_backoff_max_seconds,
         )
         self.workers["iframe-health"] = self._worker(
-            "iframe-health", max(10, self.cfg.poll_health_seconds),
-            self._fetch_iframe_health, self._on_iframe_health, self._fp_iframe_health,
+            "iframe-health",
+            max(10, self.cfg.poll_health_seconds),
+            self._fetch_iframe_health,
+            self._on_iframe_health,
+            self._fp_iframe_health,
         )
 
     async def start(self) -> None:

@@ -8,12 +8,18 @@ from .repository_sync import CommandResult, GitRunner, RepoSpec, RepositorySyncE
 
 
 _SSH_ARGS = [
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=10",
-    "-F", "/dev/null",
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "GlobalKnownHostsFile=/dev/null",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-F",
+    "/dev/null",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "GlobalKnownHostsFile=/dev/null",
 ]
 
 

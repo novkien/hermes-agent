@@ -78,7 +78,11 @@ class Cache:
             self._entries.pop(key, None)
             removed = 1
         elif source_id is not None:
-            for k in [k for k, e in self._entries.items() if e.meta.get("source_id") == source_id]:
+            for k in [
+                k
+                for k, e in self._entries.items()
+                if e.meta.get("source_id") == source_id
+            ]:
                 self._entries.pop(k, None)
                 removed += 1
         else:

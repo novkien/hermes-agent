@@ -22,21 +22,32 @@ settings: Settings = app.state.settings
 # logger so it applies regardless of how uvicorn was launched.
 # ---------------------------------------------------------------------------
 _REDACT_PATTERNS = [
-    (re.compile(r"(?i)(authorization|x-hermes-session-token|x-csrf-token|x-api-key)"
-                r"(\s*[:=]\s*)(?:bearer\s+)?([^\s\"']+)", re.I),
-     r"\1\2<redacted>"),
-    (re.compile(r"(?i)(set-cookie|cookie)(\s*[:=]\s*)([^\s\"']+)", re.I),
-     r"\1\2<redacted>"),
+    (
+        re.compile(
+            r"(?i)(authorization|x-hermes-session-token|x-csrf-token|x-api-key)"
+            r"(\s*[:=]\s*)(?:bearer\s+)?([^\s\"']+)",
+            re.I,
+        ),
+        r"\1\2<redacted>",
+    ),
+    (
+        re.compile(r"(?i)(set-cookie|cookie)(\s*[:=]\s*)([^\s\"']+)", re.I),
+        r"\1\2<redacted>",
+    ),
     # Inline Bearer tokens (defense-in-depth: not a normal uvicorn access-log
     # shape, but scrub them wherever they appear).
-    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-     r"Bearer <redacted>"),
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), r"Bearer <redacted>"),
     # Secret query params in logged URLs (?token=, ?key=, ?password=, ...) —
     # added with the S8 merge (SSE ?token= fallback would otherwise leak the
     # full session id into the uvicorn access log).
-    (re.compile(r"(?i)([?&](?:token|key|password|secret|code|auth|api[_-]?key)=)"
-                r"([^&\s\"']+)", re.I),
-     r"\1<redacted>"),
+    (
+        re.compile(
+            r"(?i)([?&](?:token|key|password|secret|code|auth|api[_-]?key)=)"
+            r"([^&\s\"']+)",
+            re.I,
+        ),
+        r"\1<redacted>",
+    ),
 ]
 
 

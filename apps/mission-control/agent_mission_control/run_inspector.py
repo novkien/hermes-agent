@@ -7,6 +7,7 @@ Timeline builder: merge task_events + run events + session messages metadata +
 provider requests + issue occurrences into chronological trajectory with
 per-item {source_id, coverage} labels. NEVER infers relations from timestamps.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,12 @@ def _json_meta(row: Any) -> dict:
 def _iso_or_ts(item: Any) -> int:
     """Return an epoch int for sorting; timestamps never used for correlation."""
     if isinstance(item, dict):
-        v = item.get("occurred_at") or item.get("timestamp") or item.get("created_at") or item.get("started_at")
+        v = (
+            item.get("occurred_at")
+            or item.get("timestamp")
+            or item.get("created_at")
+            or item.get("started_at")
+        )
         if v is None:
             return 0
         if isinstance(v, (int, float)):
@@ -41,7 +47,12 @@ def _iso_or_ts(item: Any) -> int:
             s2 = s.replace("Z", "+00:00")
             if s2.endswith("+07:00") or "+" in s2:
                 return int(_dt.datetime.fromisoformat(s2).timestamp())
-            return int(_dt.datetime.fromisoformat(s2).replace(tzinfo=_dt.timezone.utc).timestamp())
+            return int(
+                _dt.datetime
+                .fromisoformat(s2)
+                .replace(tzinfo=_dt.timezone.utc)
+                .timestamp()
+            )
         except Exception:
             return 0
     return 0
@@ -55,7 +66,9 @@ def _source_coverage(item: dict, default_source: str) -> dict:
 
 
 class RunInspector:
-    def __init__(self, engine: CorrelationEngine, providers: Optional[dict] = None) -> None:
+    def __init__(
+        self, engine: CorrelationEngine, providers: Optional[dict] = None
+    ) -> None:
         self.engine = engine
         self.providers = providers or {}
         self.timeline_limit = 200
@@ -87,8 +100,11 @@ class RunInspector:
                 "kind": "run",
                 "entity_type": "run",
                 "entity_id": str(run.get("id")),
-                "payload": {"status": run.get("status"), "outcome": run.get("outcome"),
-                            "profile": run.get("profile")},
+                "payload": {
+                    "status": run.get("status"),
+                    "outcome": run.get("outcome"),
+                    "profile": run.get("profile"),
+                },
                 **{"source_id": "kanban", "coverage": "native"},
             })
         for o in await self._get("issue_occurrences_by_task", task_id):
@@ -97,10 +113,15 @@ class RunInspector:
                 "kind": "issue_occurrence",
                 "entity_type": "issue",
                 "entity_id": str(o.get("issue_id")),
-                "payload": {"event_type": o.get("event_type"), "reporter": o.get("reporter")},
+                "payload": {
+                    "event_type": o.get("event_type"),
+                    "reporter": o.get("reporter"),
+                },
                 **{"source_id": "issues", "coverage": "native"},
             })
-        items.sort(key=lambda x: _iso_or_ts(x) if x.get("occurred_at") is not None else 0)
+        items.sort(
+            key=lambda x: _iso_or_ts(x) if x.get("occurred_at") is not None else 0
+        )
         return items[: self.timeline_limit]
 
     async def trajectory_for_session(self, session_id: str) -> list[dict]:
@@ -111,8 +132,11 @@ class RunInspector:
                 "kind": "message",
                 "entity_type": "message",
                 "entity_id": str(m.get("id")),
-                "payload": {"role": m.get("role"), "tool_name": m.get("tool_name"),
-                            "tool_call_id": m.get("tool_call_id")},
+                "payload": {
+                    "role": m.get("role"),
+                    "tool_name": m.get("tool_name"),
+                    "tool_call_id": m.get("tool_call_id"),
+                },
                 **{"source_id": "state.db", "coverage": "native"},
             })
         for r in await self._get("api_requests_by_session", session_id):
@@ -121,8 +145,12 @@ class RunInspector:
                 "kind": "provider_request",
                 "entity_type": "api_request",
                 "entity_id": str(r.get("api_request_id")),
-                "payload": {"provider": r.get("provider"), "model": r.get("model"),
-                            "api_mode": r.get("api_mode"), "attempt": r.get("attempt")},
+                "payload": {
+                    "provider": r.get("provider"),
+                    "model": r.get("model"),
+                    "api_mode": r.get("api_mode"),
+                    "attempt": r.get("attempt"),
+                },
                 **{"source_id": "state.db", "coverage": "native"},
             })
         for o in await self._get("issue_occurrences_by_session", session_id):
@@ -134,7 +162,9 @@ class RunInspector:
                 "payload": {"event_type": o.get("event_type")},
                 **{"source_id": "issues", "coverage": "native"},
             })
-        items.sort(key=lambda x: _iso_or_ts(x) if x.get("occurred_at") is not None else 0)
+        items.sort(
+            key=lambda x: _iso_or_ts(x) if x.get("occurred_at") is not None else 0
+        )
         return items[: self.timeline_limit]
 
     async def inspect_task(self, task_id: str) -> dict:
