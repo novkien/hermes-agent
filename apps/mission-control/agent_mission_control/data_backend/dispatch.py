@@ -68,9 +68,9 @@ def read_call(
             history=history,
         )
     if path == "/session-tips":
-        return backend.session_tips(
-            [part for part in str(values.get("ids", "")).split(",") if part]
-        )
+        return backend.session_tips([
+            part for part in str(values.get("ids", "")).split(",") if part
+        ])
     if path == "/room-cards":
         return backend.room_cards(
             str(values.get("chat_id", "")),
@@ -79,11 +79,7 @@ def read_call(
     if path == "/thread-sessions":
         return backend.thread_sessions(
             str(values.get("chat_id", "")),
-            [
-                part
-                for part in str(values.get("thread_ids", "")).split(",")
-                if part
-            ],
+            [part for part in str(values.get("thread_ids", "")).split(",") if part],
         )
     if path == "/room-binding":
         return backend.room_binding()

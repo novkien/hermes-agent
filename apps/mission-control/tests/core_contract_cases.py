@@ -130,26 +130,44 @@ async def test_system_manager_cache_and_mutation_contracts() -> None:
         )
 
         query = "profile=alpha&q=api&limit=999&host_id=h1"
-        first = await read(_request("GET", "/api/system-manager/services", query=query), "services")
+        first = await read(
+            _request("GET", "/api/system-manager/services", query=query), "services"
+        )
         assert first.status_code == 200
         assert client.calls[-1] == (
             "POST",
             "/v1/db/read",
-            {"table": "services", "limit": 500, "query": "api", "where": {"host_id": "h1"}},
+            {
+                "table": "services",
+                "limit": 500,
+                "query": "api",
+                "where": {"host_id": "h1"},
+            },
         )
         assert _json(first)["meta"]["profile_id"] == "alpha"
 
-        cached = await read(_request("GET", "/api/system-manager/services", query=query), "services")
-        assert len(client.calls) == 1, "a fresh read must be served from the profile-scoped cache"
+        cached = await read(
+            _request("GET", "/api/system-manager/services", query=query), "services"
+        )
+        assert len(client.calls) == 1, (
+            "a fresh read must be served from the profile-scoped cache"
+        )
         assert _json(cached)["data"] == _json(first)["data"]
         assert _json(cached)["meta"]["freshness"] == "live"
 
         other_profile = query.replace("alpha", "beta")
-        await read(_request("GET", "/api/system-manager/services", query=other_profile), "services")
-        assert len(client.calls) == 2, "cache entries must never cross profile boundaries"
+        await read(
+            _request("GET", "/api/system-manager/services", query=other_profile),
+            "services",
+        )
+        assert len(client.calls) == 2, (
+            "cache entries must never cross profile boundaries"
+        )
 
         duplicate = await read(
-            _request("GET", "/api/system-manager/services", query="host_id=a&host_id=b"),
+            _request(
+                "GET", "/api/system-manager/services", query="host_id=a&host_id=b"
+            ),
             "services",
         )
         assert duplicate.status_code == 400
@@ -157,10 +175,14 @@ async def test_system_manager_cache_and_mutation_contracts() -> None:
         unknown = await read(_request("GET", "/api/system-manager/nope"), "nope")
         assert unknown.status_code == 404
 
-        key = sm._system_manager_cache_key("services", "alpha", "api", 500, {"host_id": "h1"})
+        key = sm._system_manager_cache_key(
+            "services", "alpha", "api", 500, {"host_id": "h1"}
+        )
         async with sm._SYSTEM_MANAGER_CACHE_LOCK:
             sm._SYSTEM_MANAGER_TABLE_CACHE[key]["stale_after"] = 0
-        stale = await read(_request("GET", "/api/system-manager/services", query=query), "services")
+        stale = await read(
+            _request("GET", "/api/system-manager/services", query=query), "services"
+        )
         assert _json(stale)["meta"]["freshness"] == "stale"
         assert _json(stale)["meta"]["degraded_reason"] == "upstream_refresh_pending"
         await asyncio.sleep(0)
@@ -177,12 +199,18 @@ async def test_system_manager_cache_and_mutation_contracts() -> None:
             "services",
         )
         assert result.status_code == 200
-        assert sequence[:2] == ["guard", "audit"], "mutation guards and pending audit precede upstream I/O"
+        assert sequence[:2] == ["guard", "audit"], (
+            "mutation guards and pending audit precede upstream I/O"
+        )
         assert not any(
-            entry.get("table") == "services" for entry in sm._SYSTEM_MANAGER_TABLE_CACHE.values()
+            entry.get("table") == "services"
+            for entry in sm._SYSTEM_MANAGER_TABLE_CACHE.values()
         ), "successful writes must invalidate every cached view of the table"
         assert core.event_bus.events[0][0][:4] == (
-            "system-manager.changed", "system-manager", "services", "svc-1"
+            "system-manager.changed",
+            "system-manager",
+            "services",
+            "svc-1",
         )
 
         sm.SM_CACHE_MAX_ENTRIES = 1
@@ -219,11 +247,17 @@ async def test_cache_stale_while_revalidate_contracts() -> None:
 
     first.stale_after = 0
     stale = await cache.get("k", "adapter", "fp-2", fetch)
-    assert stale.payload == {"version": 1}, "stale-while-revalidate must not block the read"
+    assert stale.payload == {"version": 1}, (
+        "stale-while-revalidate must not block the read"
+    )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert cache._entries["k"].payload == {"version": 2}
-    assert cache.snapshot() == {"entries": 1, "inflight": 0, "sources_touched": ["adapter"]}
+    assert cache.snapshot() == {
+        "entries": 1,
+        "inflight": 0,
+        "sources_touched": ["adapter"],
+    }
     assert cache.invalidate(source_id="adapter") == 1
     assert cache.invalidate(key="missing") == 1
 
@@ -236,7 +270,11 @@ async def test_cache_stale_while_revalidate_contracts() -> None:
 
 
 def test_network_security_and_configuration_contracts() -> None:
-    from agent_mission_control.config import Settings, should_refuse_start, usable_secret
+    from agent_mission_control.config import (
+        Settings,
+        should_refuse_start,
+        usable_secret,
+    )
     from agent_mission_control.ip_utils import CidrList, resolve_client_ip
     from agent_mission_control.security import (
         SlidingWindowRateLimiter,
@@ -249,8 +287,14 @@ def test_network_security_and_configuration_contracts() -> None:
     )
 
     cidrs = CidrList.parse("192.168.1.99/24, 100.64.0.0/10, invalid")
-    assert len(cidrs) == 2 and cidrs.contains("192.168.1.8") and cidrs.contains("100.90.1.2")
-    assert not cidrs.contains("8.8.8.8") and not CidrList.parse(None).contains("127.0.0.1")
+    assert (
+        len(cidrs) == 2
+        and cidrs.contains("192.168.1.8")
+        and cidrs.contains("100.90.1.2")
+    )
+    assert not cidrs.contains("8.8.8.8") and not CidrList.parse(None).contains(
+        "127.0.0.1"
+    )
     assert cidrs.describe() == "192.168.1.0/24,100.64.0.0/10"
     assert resolve_client_ip("10.0.0.2", "192.168.1.8, 10.0.0.1", True) == "192.168.1.8"
     assert resolve_client_ip("10.0.0.2", "192.168.1.8", False) == "10.0.0.2"
@@ -260,17 +304,33 @@ def test_network_security_and_configuration_contracts() -> None:
     headers = redact_headers({"Authorization": "Bearer secret-token", "Accept": "json"})
     assert headers == {"Authorization": "Bearer <redacted>", "Accept": "json"}
     assert redact_query_params({"token": "secret", "limit": "5"}) == {
-        "token": "<redacted>", "limit": "5"
+        "token": "<redacted>",
+        "limit": "5",
     }
-    scrubbed = redact_text("Authorization: Bearer abcdefgh token=supersecret password=hunter2")
-    assert "abcdefgh" not in scrubbed and "supersecret" not in scrubbed and "hunter2" not in scrubbed
-    summary = build_request_summary(
-        "POST", "/x", {"token": "secret", "page": "2"}, body={"status": "open", "note": "private"}
+    scrubbed = redact_text(
+        "Authorization: Bearer abcdefgh token=supersecret password=hunter2"
     )
-    assert "secret" not in summary and "private" not in summary and "status=open" in summary
+    assert (
+        "abcdefgh" not in scrubbed
+        and "supersecret" not in scrubbed
+        and "hunter2" not in scrubbed
+    )
+    summary = build_request_summary(
+        "POST",
+        "/x",
+        {"token": "secret", "page": "2"},
+        body={"status": "open", "note": "private"},
+    )
+    assert (
+        "secret" not in summary
+        and "private" not in summary
+        and "status=open" in summary
+    )
 
     limiter = SlidingWindowRateLimiter(2, 60)
-    assert limiter.allow("owner") and limiter.allow("owner") and not limiter.allow("owner")
+    assert (
+        limiter.allow("owner") and limiter.allow("owner") and not limiter.allow("owner")
+    )
     limiter.reset("owner")
     assert limiter.allow("owner")
     limiter.reset()
@@ -287,22 +347,43 @@ def test_network_security_and_configuration_contracts() -> None:
         os.environ.clear()
         os.environ.update(old_env)
     assert usable_secret("real-secret", 8) and not usable_secret("changeme")
-    assert should_refuse_start("0.0.0.0", False) and not should_refuse_start("127.0.0.1", False)
+    assert should_refuse_start("0.0.0.0", False) and not should_refuse_start(
+        "127.0.0.1", False
+    )
 
 
 async def test_event_bus_replay_and_sse_contracts() -> None:
-    from agent_mission_control.event_bus import EventBus, sse_frame, sse_frame_named, sse_heartbeat
+    from agent_mission_control.event_bus import (
+        EventBus,
+        sse_frame,
+        sse_frame_named,
+        sse_heartbeat,
+    )
 
     class Store:
         def __init__(self) -> None:
             self.events: list[dict[str, Any]] = []
 
-        def insert_event_replay(self, event_id, event_type, occurred_at, source_id,
-                                entity_type, entity_id, payload, coverage):
+        def insert_event_replay(
+            self,
+            event_id,
+            event_type,
+            occurred_at,
+            source_id,
+            entity_type,
+            entity_id,
+            payload,
+            coverage,
+        ):
             self.events.append({
-                "event_id": event_id, "event_type": event_type, "occurred_at": occurred_at,
-                "source_id": source_id, "entity_type": entity_type, "entity_id": entity_id,
-                "payload": payload, "coverage": coverage,
+                "event_id": event_id,
+                "event_type": event_type,
+                "occurred_at": occurred_at,
+                "source_id": source_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "payload": payload,
+                "coverage": coverage,
             })
 
         def replay_latest(self, limit):
@@ -312,7 +393,7 @@ async def test_event_bus_replay_and_sse_contracts() -> None:
             ids = [event["event_id"] for event in self.events]
             if event_id not in ids:
                 return []
-            return self.events[ids.index(event_id) + 1:][:limit]
+            return self.events[ids.index(event_id) + 1 :][:limit]
 
         def replay_last_event_id(self):
             return self.events[-1]["event_id"] if self.events else ""
@@ -329,10 +410,23 @@ async def test_event_bus_replay_and_sse_contracts() -> None:
 
     bus.subscribe("*", subscriber)
     bus.subscribe("task.changed", broken)
-    assert (await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1"))["coverage"] == "polled"
-    assert await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1") is None
-    await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 2}, event_id="e2")
-    await bus.publish("task.changed", "kanban", entity_id="t1", payload={"n": 3}, event_id="e3")
+    assert (
+        await bus.publish(
+            "task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1"
+        )
+    )["coverage"] == "polled"
+    assert (
+        await bus.publish(
+            "task.changed", "kanban", entity_id="t1", payload={"n": 1}, event_id="e1"
+        )
+        is None
+    )
+    await bus.publish(
+        "task.changed", "kanban", entity_id="t1", payload={"n": 2}, event_id="e2"
+    )
+    await bus.publish(
+        "task.changed", "kanban", entity_id="t1", payload={"n": 3}, event_id="e3"
+    )
     assert delivered == ["e1", "e2", "e3"]
     assert [event["event_id"] for event in bus.ring_events()] == ["e2", "e3"]
     assert [event["event_id"] for event in await bus.replay_after("e2")] == ["e3"]
@@ -356,14 +450,20 @@ async def test_search_capabilities_alerts_and_pulse_contracts() -> None:
     class Adapter:
         async def search_sessions(self, q, limit):
             assert q == "api" and limit == 50
-            return BackendResult({"results": [{"session_id": "s1", "title": "API session"}]})
+            return BackendResult({
+                "results": [{"session_id": "s1", "title": "API session"}]
+            })
 
         async def kanban_tasks(self, limit):
             assert limit == 100
-            return BackendResult({"tasks": [{"id": "t1", "title": "Build API", "status": "running"}]})
+            return BackendResult({
+                "tasks": [{"id": "t1", "title": "Build API", "status": "running"}]
+            })
 
         async def issues(self, limit):
-            return BackendResult({"issues": [{"id": 7, "issue": "API failure", "severity": "high"}]})
+            return BackendResult({
+                "issues": [{"id": 7, "issue": "API failure", "severity": "high"}]
+            })
 
         async def permits(self, limit):
             raise RuntimeError("permits offline")
@@ -449,21 +549,43 @@ async def test_search_capabilities_alerts_and_pulse_contracts() -> None:
         alert_mutation_fail_window_seconds=600,
         alert_mutation_fail_min=3,
     )
-    engine = AlertEngine(alert_store, cfg, bus=alert_bus, source_data={
-        "health": {"adapter": False},
-        "capabilities": {"schema_fingerprint": "fp-new"},
-        "freshness": {"gateway": {"fetched_at": now - 20}},
-        "cron": [{"id": "c1", "name": "nightly", "last_status": "error"}],
-        "tasks": [{"id": "t1", "status": "failed"},
-                  {"id": "t2", "status": "running", "last_heartbeat_at": now - 20}],
-        "runs": [{"id": "r1", "outcome": "crashed"}],
-        "permits": [{"permit_id": "p1", "status": "pending_approval", "expires_at": now + 60}],
-        "issues": [{"id": 7, "status": "open", "severity": "critical"}],
-        "analytics": {"token_threshold": 100, "tokens": 101},
-    })
+    engine = AlertEngine(
+        alert_store,
+        cfg,
+        bus=alert_bus,
+        source_data={
+            "health": {"adapter": False},
+            "capabilities": {"schema_fingerprint": "fp-new"},
+            "freshness": {"gateway": {"fetched_at": now - 20}},
+            "cron": [{"id": "c1", "name": "nightly", "last_status": "error"}],
+            "tasks": [
+                {"id": "t1", "status": "failed"},
+                {"id": "t2", "status": "running", "last_heartbeat_at": now - 20},
+            ],
+            "runs": [{"id": "r1", "outcome": "crashed"}],
+            "permits": [
+                {
+                    "permit_id": "p1",
+                    "status": "pending_approval",
+                    "expires_at": now + 60,
+                }
+            ],
+            "issues": [{"id": 7, "status": "open", "severity": "critical"}],
+            "analytics": {"token_threshold": 100, "tokens": 101},
+        },
+    )
     alerts = engine.evaluate()
     assert {alert["rule_id"] for alert in alerts} == {
-        "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R10", "R11"
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R10",
+        "R11",
     }
     alert_id = alerts[0]["id"]
     assert (await engine.acknowledge(alert_id, ACK))["state"] == ACK
@@ -487,19 +609,33 @@ async def test_search_capabilities_alerts_and_pulse_contracts() -> None:
         def conn():
             return Conn()
 
-    pulse = Pulse(PulseStore(), {
-        "cron": [{"last_status": "error"}],
-        "tasks": [{"status": "running"}, {"status": "failed"}],
-        "sessions": [{"ended_at": None}, {"ended_at": "done"}],
-        "permits": [{"status": "pending_approval"}],
-        "issues": [{"status": "open"}, {"status": "resolved"}],
-        "analytics": {"tokens_in": 11, "tokens_out": 3, "cost_estimated": 1.2345678,
-                      "cost_status": "estimated"},
-    }).derive("bogus")
+    pulse = Pulse(
+        PulseStore(),
+        {
+            "cron": [{"last_status": "error"}],
+            "tasks": [{"status": "running"}, {"status": "failed"}],
+            "sessions": [{"ended_at": None}, {"ended_at": "done"}],
+            "permits": [{"status": "pending_approval"}],
+            "issues": [{"status": "open"}, {"status": "resolved"}],
+            "analytics": {
+                "tokens_in": 11,
+                "tokens_out": 3,
+                "cost_estimated": 1.2345678,
+                "cost_status": "estimated",
+            },
+        },
+    ).derive("bogus")
     assert pulse["window"] == "24h" and pulse["event_count"] == 4
-    assert (pulse["failures"], pulse["active_sessions"], pulse["running_tasks"]) == (2, 1, 1)
+    assert (pulse["failures"], pulse["active_sessions"], pulse["running_tasks"]) == (
+        2,
+        1,
+        1,
+    )
     assert (pulse["pending_permits"], pulse["open_issues"]) == (1, 1)
-    assert pulse["cost_estimated"] == 1.234568 and pulse["cost_class"] == "Hermes-calculated"
+    assert (
+        pulse["cost_estimated"] == 1.234568
+        and pulse["cost_class"] == "Hermes-calculated"
+    )
     assert cost_class_of(None, 0.5) == "estimated-from-verified-rate"
     assert cost_class_of(None, 0) == "unavailable"
 
@@ -532,7 +668,9 @@ async def test_upstream_client_contracts() -> None:
     client._client = httpx.AsyncClient(
         base_url="http://upstream.invalid", transport=httpx.MockTransport(handler)
     )
-    status, body, headers = await client.request("GET", "/json", inbound_request_id="rid")
+    status, body, headers = await client.request(
+        "GET", "/json", inbound_request_id="rid"
+    )
     assert status == 200 and body == {"ok": True} and headers["x-upstream"] == "yes"
     assert seen[-1].headers["x-request-id"] == "rid"
     assert client._timeout_for("/slow/item") == 9 and client._timeout_for("/other") == 3
@@ -549,7 +687,8 @@ async def test_upstream_client_contracts() -> None:
 
     failed = _BaseClient("http://upstream.invalid")
     failed._client = httpx.AsyncClient(
-        base_url="http://upstream.invalid", transport=httpx.MockTransport(timeout_handler)
+        base_url="http://upstream.invalid",
+        transport=httpx.MockTransport(timeout_handler),
     )
     try:
         await failed.request("GET", "/timeout")
@@ -565,7 +704,11 @@ async def test_upstream_client_contracts() -> None:
         nonlocal login_count, protected_count
         if request.url.path == "/auth/password-login":
             login_count += 1
-            return httpx.Response(200, json={"ok": True}, headers={"Set-Cookie": f"sid={login_count}; HttpOnly"})
+            return httpx.Response(
+                200,
+                json={"ok": True},
+                headers={"Set-Cookie": f"sid={login_count}; HttpOnly"},
+            )
         protected_count += 1
         if protected_count == 1:
             return httpx.Response(401, json={"error": "expired"})
@@ -574,10 +717,13 @@ async def test_upstream_client_contracts() -> None:
 
     dashboard = DashboardClient("http://dashboard.invalid", "password")
     dashboard._client = httpx.AsyncClient(
-        base_url="http://dashboard.invalid", transport=httpx.MockTransport(dashboard_handler)
+        base_url="http://dashboard.invalid",
+        transport=httpx.MockTransport(dashboard_handler),
     )
     assert (await dashboard.get("/api/health"))[:2] == (200, {"data": "ok"})
-    assert (login_count, protected_count) == (2, 2), "an expired cookie is re-authenticated exactly once"
+    assert (login_count, protected_count) == (2, 2), (
+        "an expired cookie is re-authenticated exactly once"
+    )
     await dashboard.aclose()
 
     unconfigured = DashboardClient("http://dashboard.invalid", None)
@@ -597,9 +743,12 @@ async def test_upstream_client_contracts() -> None:
             return 202, {"accepted": True}, {}
 
     gateway = GatewayRecorder("nas-secret")
-    await gateway.cron_fire({"job": "j1"}, inbound_request_id="rid", idempotency_key="idem")
+    await gateway.cron_fire(
+        {"job": "j1"}, inbound_request_id="rid", idempotency_key="idem"
+    )
     assert gateway.recorded[2]["extra_headers"] == {
-        "Authorization": "Bearer nas-secret", "Idempotency-Key": "idem"
+        "Authorization": "Bearer nas-secret",
+        "Idempotency-Key": "idem",
     }
     try:
         await GatewayRecorder(None).cron_fire({})
@@ -644,7 +793,8 @@ async def test_upstream_client_contracts() -> None:
         assert captured["init"]["base_url"] == "http://system-manager.invalid"
         assert captured["init"]["timeout"] == 1.0
         assert captured["request"][2]["headers"] == {
-            "X-Request-Id": "rid", "Authorization": "Bearer token"
+            "X-Request-Id": "rid",
+            "Authorization": "Bearer token",
         }
     finally:
         sm_client.httpx.AsyncClient = original_async_client
@@ -678,12 +828,14 @@ async def test_app_middleware_contracts() -> None:
 
     too_large = _request("POST", "/api/test")
     too_large.scope["headers"] = [(b"content-length", b"11")]
-    too_large.scope["app"] = SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(body_limit_bytes=10)
-    ))
+    too_large.scope["app"] = SimpleNamespace(
+        state=SimpleNamespace(settings=SimpleNamespace(body_limit_bytes=10))
+    )
     limited = await _body_limit_middleware(too_large, ok)
     assert limited.status_code == 413
-    error = await _api_error_handler(request, ApiError(409, "conflict", "cannot continue"))
+    error = await _api_error_handler(
+        request, ApiError(409, "conflict", "cannot continue")
+    )
     assert error.status_code == 409 and _json(error)["error"]["code"] == "conflict"
 
     class Router:
@@ -716,6 +868,7 @@ async def test_app_middleware_contracts() -> None:
     async def stream(_request):
         async def content():
             yield b"event: ready\n\n"
+
         return StreamingResponse(content(), media_type="text/event-stream")
 
     await gate(_request("GET", "/api/events"), stream)
@@ -730,7 +883,12 @@ async def test_app_middleware_contracts() -> None:
 
 
 async def test_source_worker_contracts() -> None:
-    from agent_mission_control.workers import PollWorker, SourceWorkers, fingerprint_json, fingerprint_tasks
+    from agent_mission_control.workers import (
+        PollWorker,
+        SourceWorkers,
+        fingerprint_json,
+        fingerprint_tasks,
+    )
     from agent_mission_control.data_backend import BackendResult
 
     class Bus:
@@ -752,7 +910,9 @@ async def test_source_worker_contracts() -> None:
             return BackendResult({"running": 1})
 
         async def kanban_tasks(self, limit):
-            return BackendResult([{"id": "t1", "status": "running", "current_run_id": "r1"}])
+            return BackendResult([
+                {"id": "t1", "status": "running", "current_run_id": "r1"}
+            ])
 
         async def permits(self, limit):
             return BackendResult([{"permit_id": "p1", "status": "pending_approval"}])
@@ -787,24 +947,46 @@ async def test_source_worker_contracts() -> None:
             self.data[key] = value
 
     cfg = SimpleNamespace(
-        poll_kanban_seconds=1, poll_permits_seconds=1, poll_issues_seconds=1,
-        poll_cron_seconds=1, poll_sessions_seconds=1, poll_running_seconds=1,
-        poll_health_seconds=1, poll_adapter_health_seconds=1, poll_analytics_seconds=1,
-        poll_backoff_max_seconds=8, alert_token_threshold=10,
+        poll_kanban_seconds=1,
+        poll_permits_seconds=1,
+        poll_issues_seconds=1,
+        poll_cron_seconds=1,
+        poll_sessions_seconds=1,
+        poll_running_seconds=1,
+        poll_health_seconds=1,
+        poll_adapter_health_seconds=1,
+        poll_analytics_seconds=1,
+        poll_backoff_max_seconds=8,
+        alert_token_threshold=10,
     )
     bus, store, alerts = Bus(), Store(), AlertEngine()
-    workers = SourceWorkers(bus, store, SimpleNamespace(), Dashboard(), Gateway(), Adapter(), cfg, alerts)
+    workers = SourceWorkers(
+        bus, store, SimpleNamespace(), Dashboard(), Gateway(), Adapter(), cfg, alerts
+    )
     workers.build()
     assert set(workers.workers) == {
-        "kanban", "permits", "issues", "cron", "sessions", "running", "health",
-        "capabilities", "analytics", "inventory", "settings-signal",
-        "logs-signal", "iframe-health",
+        "kanban",
+        "permits",
+        "issues",
+        "cron",
+        "sessions",
+        "running",
+        "health",
+        "capabilities",
+        "analytics",
+        "inventory",
+        "settings-signal",
+        "logs-signal",
+        "iframe-health",
     }
 
     kanban = await workers._fetch_kanban()
     await workers._on_kanban(kanban, workers._fp_kanban(kanban))
     await workers._on_kanban(
-        {"summary": {}, "tasks": [{"id": "t1", "status": "done", "current_run_id": "r1"}]},
+        {
+            "summary": {},
+            "tasks": [{"id": "t1", "status": "done", "current_run_id": "r1"}],
+        },
         None,
     )
     assert any(event[0][0] == "task.changed" for event in bus.events)
@@ -850,14 +1032,20 @@ async def test_source_worker_contracts() -> None:
         failures += 1
         raise RuntimeError("offline")
 
-    failed_worker = PollWorker("failed", 1, broken_fetch, lambda *_args: None, fingerprint_json, 4)
+    failed_worker = PollWorker(
+        "failed", 1, broken_fetch, lambda *_args: None, fingerprint_json, 4
+    )
     failed_worker.pause()
     assert failed_worker.paused
     failed_worker.resume()
     await failed_worker.tick_once()
     await failed_worker.tick_once()
     await failed_worker.tick_once()
-    assert failures == 3 and failed_worker.backoff_seconds == 4 and failed_worker.last_error == "offline"
+    assert (
+        failures == 3
+        and failed_worker.backoff_seconds == 4
+        and failed_worker.last_error == "offline"
+    )
 
 
 def test_store_crud_and_replay_contracts() -> None:
@@ -868,8 +1056,15 @@ def test_store_crud_and_replay_contracts() -> None:
         try:
             assert store.schema_version() == 4
             assert set(store.table_names()) == {
-                "action_audit", "alert_acknowledgements", "alert_rules", "cache_metadata",
-                "event_replay", "preferences", "saved_views", "schema_fingerprints", "sessions",
+                "action_audit",
+                "alert_acknowledgements",
+                "alert_rules",
+                "cache_metadata",
+                "event_replay",
+                "preferences",
+                "saved_views",
+                "schema_fingerprints",
+                "sessions",
             }
             store.create_session("sid", "csrf", 60)
             assert store.get_session("sid")["csrf_token"] == "csrf"
@@ -877,7 +1072,9 @@ def test_store_crud_and_replay_contracts() -> None:
             store.delete_session("sid")
             assert store.get_session("sid") is None
 
-            store.append_audit("rid", "owner", "update", "/x", None, "POST /x", None, "pending")
+            store.append_audit(
+                "rid", "owner", "update", "/x", None, "POST /x", None, "pending"
+            )
             store.complete_audit("rid", 503, "upstream:503")
             assert store.list_audit()[0]["upstream_status"] == 503
             assert store.count_audit() == 1 and store.audit_failures_since(60, 1)
@@ -904,14 +1101,28 @@ def test_store_crud_and_replay_contracts() -> None:
 
             for event_id in ("e1", "e2", "e3"):
                 assert store.insert_event_replay(
-                    event_id, "changed", 1, "adapter", "task", event_id, {"id": event_id}, "native"
+                    event_id,
+                    "changed",
+                    1,
+                    "adapter",
+                    "task",
+                    event_id,
+                    {"id": event_id},
+                    "native",
                 )
             assert not store.insert_event_replay(
                 "e1", "changed", 1, "adapter", "task", "e1", {}, "native"
             )
-            assert [event["event_id"] for event in store.replay_events_after("e1", 10)] == ["e2", "e3"]
-            assert [event["event_id"] for event in store.replay_latest(2)] == ["e2", "e3"]
-            assert store.replay_last_event_id() == "e3" and store.event_replay_count() == 3
+            assert [
+                event["event_id"] for event in store.replay_events_after("e1", 10)
+            ] == ["e2", "e3"]
+            assert [event["event_id"] for event in store.replay_latest(2)] == [
+                "e2",
+                "e3",
+            ]
+            assert (
+                store.replay_last_event_id() == "e3" and store.event_replay_count() == 3
+            )
         finally:
             store.close()
 

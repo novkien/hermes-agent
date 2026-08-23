@@ -48,7 +48,9 @@ def _head_sha(body: dict[str, Any]) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
-    if not 7 <= len(text) <= 64 or any(ch not in "0123456789abcdefABCDEF" for ch in text):
+    if not 7 <= len(text) <= 64 or any(
+        ch not in "0123456789abcdefABCDEF" for ch in text
+    ):
         raise RepositorySyncError("invalid_body", "invalid expected_head_sha")
     return text
 
@@ -222,7 +224,12 @@ def build_repository_router(core: Any) -> APIRouter:
         try:
             limit = max(1, min(int(request.query_params.get("limit", "100")), 200))
         except ValueError:
-            return _json_error(400, "invalid_query", "limit must be an integer", request.state.request_id)
+            return _json_error(
+                400,
+                "invalid_query",
+                "limit must be an integer",
+                request.state.request_id,
+            )
         return envelope({"operations": service.store.recent(repo, limit)}, request)
 
     @router.post("/api/repositories/{repo}/initialize")
@@ -330,7 +337,9 @@ def build_repository_router(core: Any) -> APIRouter:
         )
 
     @router.post("/api/repositories/{repo}/pulls/{number}/merge-and-pull")
-    async def legacy_merge_and_pull(request: Request, repo: str, number: int) -> Response:
+    async def legacy_merge_and_pull(
+        request: Request, repo: str, number: int
+    ) -> Response:
         """Compatibility route: merge GitHub only; never pull a local child repo."""
         invalid = known(repo, request.state.request_id)
         if invalid:
@@ -340,7 +349,10 @@ def build_repository_router(core: Any) -> APIRouter:
             action="repository.merge_pr",
             target=f"/api/repositories/{repo}/pulls/{number}/merge-and-pull",
             call=lambda expected: service.merge_pr(
-                repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
+                repo,
+                number,
+                expected_head_sha=expected,
+                trigger="dashboard:legacy-route",
             ),
             parse_body=lambda: _parse_expected_head(request),
         )
@@ -355,7 +367,10 @@ def build_repository_router(core: Any) -> APIRouter:
             action="repository.merge_pr",
             target=f"/api/repositories/{repo}/pulls/{number}/rebase-merge",
             call=lambda expected: service.merge_pr(
-                repo, number, expected_head_sha=expected, trigger="dashboard:legacy-route"
+                repo,
+                number,
+                expected_head_sha=expected,
+                trigger="dashboard:legacy-route",
             ),
             parse_body=lambda: _parse_expected_head(request),
         )

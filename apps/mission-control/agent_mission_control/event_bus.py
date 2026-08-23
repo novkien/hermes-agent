@@ -135,8 +135,12 @@ class EventBus:
         """Publish one event. Dedup by (source_id, event_id); returns None if dropped."""
         profile_id = str(profile_id or "")
         if event_id is None:
-            event_id = f"{int(time.time()*1000)}-{uuid.uuid4().hex[:12]}"
-        if event_type == "cache.invalidated" and self.cache is not None and _publish is None:
+            event_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
+        if (
+            event_type == "cache.invalidated"
+            and self.cache is not None
+            and _publish is None
+        ):
             # Derived event: invalidate the backend cache for the source and
             # only emit when something was actually dropped. The client uses
             # this to clear its own prefetch cache (app.js).
@@ -145,8 +149,15 @@ class EventBus:
                 return None
             payload = {**(payload or {}), "removed": removed}
             return await self.publish(
-                event_type, source_id, entity_type, entity_id,
-                payload, "derived", profile_id, event_id, _publish=object(),
+                event_type,
+                source_id,
+                entity_type,
+                entity_id,
+                payload,
+                "derived",
+                profile_id,
+                event_id,
+                _publish=object(),
             )
         dedup_key = (source_id, event_id)
         if dedup_key in self._seen:
@@ -162,7 +173,10 @@ class EventBus:
         revision = int(revision or 0)
         state_key = (profile_id, resource_key, entity_id, operation)
         state_fingerprint = json.dumps(payload or {}, sort_keys=True, default=str)
-        if operation != "resync-required" and self._state_fingerprints.get(state_key) == state_fingerprint:
+        if (
+            operation != "resync-required"
+            and self._state_fingerprints.get(state_key) == state_fingerprint
+        ):
             return None
         event = {
             "event_id": event_id,
@@ -188,22 +202,35 @@ class EventBus:
                 oldest = next(iter(self._state_fingerprints))
                 self._state_fingerprints.pop(oldest, None)
             if len(self._seen) > self._seen_max:
-                self._seen = set(list(self._seen)[-self._seen_max:])
+                self._seen = set(list(self._seen)[-self._seen_max :])
             self._ring.append(event)
             try:
                 self.store.insert_event_replay(
-                    event["event_id"], event["event_type"], event["occurred_at"],
-                    event["source_id"], event["entity_type"], event["entity_id"],
-                    event["payload"], event["coverage"], event["profile_id"],
-                    event["resource_key"], event["operation"], event["revision"],
+                    event["event_id"],
+                    event["event_type"],
+                    event["occurred_at"],
+                    event["source_id"],
+                    event["entity_type"],
+                    event["entity_id"],
+                    event["payload"],
+                    event["coverage"],
+                    event["profile_id"],
+                    event["resource_key"],
+                    event["operation"],
+                    event["revision"],
                 )
             except TypeError:
                 # Frozen test doubles and rollback stores can still expose the
                 # v2 signature during a mixed-version canary.
                 self.store.insert_event_replay(
-                    event["event_id"], event["event_type"], event["occurred_at"],
-                    event["source_id"], event["entity_type"], event["entity_id"],
-                    event["payload"], event["coverage"],
+                    event["event_id"],
+                    event["event_type"],
+                    event["occurred_at"],
+                    event["source_id"],
+                    event["entity_type"],
+                    event["entity_id"],
+                    event["payload"],
+                    event["coverage"],
                 )
             subs = list(self._subscribers.get(event_type, ())) + list(
                 self._subscribers.get("*", ())
@@ -238,9 +265,16 @@ class EventBus:
         """
         try:
             await self.publish(
-                event_type, source_id, entity_type, entity_id,
-                payload, coverage=coverage, profile_id=profile_id,
-                resource_key=resource_key, operation=operation, revision=revision,
+                event_type,
+                source_id,
+                entity_type,
+                entity_id,
+                payload,
+                coverage=coverage,
+                profile_id=profile_id,
+                resource_key=resource_key,
+                operation=operation,
+                revision=revision,
             )
         except Exception:
             pass
@@ -275,7 +309,7 @@ class EventBus:
         ring = list(self._ring)
         for i, e in enumerate(ring):
             if e["event_id"] == last_event_id:
-                return self._profile_events(ring[i + 1:], profile_id)
+                return self._profile_events(ring[i + 1 :], profile_id)
         # The cursor fell out of the ring, so the DB is the complete ordered
         # source of truth after that cursor. Do not remove rows merely because
         # they are also still present in the ring: replay_after() returns one
@@ -283,7 +317,9 @@ class EventBus:
         replay = self.store.replay_events_after(last_event_id, self.db_replay_limit)
         if replay:
             return self._profile_events(replay, profile_id)
-        has_cursor = getattr(self.store, "event_replay_has", lambda _event_id: False)(last_event_id)
+        has_cursor = getattr(self.store, "event_replay_has", lambda _event_id: False)(
+            last_event_id
+        )
         if has_cursor:
             return []
         return [self._resync_event(profile_id or "", "cursor-not-found")]
@@ -293,7 +329,8 @@ class EventBus:
         if profile_id is None:
             return events
         return [
-            event for event in events
+            event
+            for event in events
             if not event.get("profile_id") or event.get("profile_id") == profile_id
         ]
 
@@ -301,11 +338,17 @@ class EventBus:
     def _resync_event(profile_id: str, reason: str) -> dict:
         return {
             "event_id": f"resync-{int(time.time() * 1000)}",
-            "event_type": "state.resync", "resource_key": "*",
-            "operation": "resync-required", "profile_id": profile_id,
-            "entity_type": "", "entity_id": "", "source_id": "event-bus",
-            "revision": 0, "occurred_at": int(time.time()),
-            "payload": {"reason": reason}, "coverage": "derived",
+            "event_type": "state.resync",
+            "resource_key": "*",
+            "operation": "resync-required",
+            "profile_id": profile_id,
+            "entity_type": "",
+            "entity_id": "",
+            "source_id": "event-bus",
+            "revision": 0,
+            "occurred_at": int(time.time()),
+            "payload": {"reason": reason},
+            "coverage": "derived",
         }
 
     def last_event_id(self) -> str:

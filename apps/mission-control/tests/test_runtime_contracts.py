@@ -51,7 +51,9 @@ from agent_mission_control.routes import (  # noqa: E402
 
 
 class FakeDashboard:
-    def __init__(self, *, status: int = 200, body=None, error: UpstreamError | None = None):
+    def __init__(
+        self, *, status: int = 200, body=None, error: UpstreamError | None = None
+    ):
         self.status = status
         self.body = body
         self.error = error
@@ -69,7 +71,9 @@ class FakeDashboard:
 
 
 class FakeAdapter:
-    def __init__(self, *, status: int = 200, body=None, error: UpstreamError | None = None):
+    def __init__(
+        self, *, status: int = 200, body=None, error: UpstreamError | None = None
+    ):
         self.status = status
         self.body = body
         self.error = error
@@ -98,13 +102,18 @@ class FakeAdapter:
 
 class WorkerContextDashboard:
     """Exact route fixture: worker seed, never task.creator_session_id."""
+
     async def get(self, path, *, params=None, inbound_request_id=None):
         if path == "/api/sessions/worker_1":
             return 200, {"session": {"id": "worker_1", "source": "kanban"}}, {}
         if path == "/api/sessions/creator_1":
             return 200, {"session": {"id": "creator_1", "source": "chat"}}, {}
         if path.endswith("/messages"):
-            return 200, {"messages": [{"role": "user", "content": "work kanban task t_right"}]}, {}
+            return (
+                200,
+                {"messages": [{"role": "user", "content": "work kanban task t_right"}]},
+                {},
+            )
         return 404, {}, {}
 
 
@@ -112,7 +121,14 @@ class WorkerContextAdapter:
     async def kanban_task(self, task_id):
         assert task_id == "t_right"
         # Deliberate conflicting creator id proves it cannot be substituted.
-        return BackendResult({"task": {"id": task_id, "status": "running", "session_id": "creator_1", "last_heartbeat_at": 44}})
+        return BackendResult({
+            "task": {
+                "id": task_id,
+                "status": "running",
+                "session_id": "creator_1",
+                "last_heartbeat_at": 44,
+            }
+        })
 
 
 def make_request(query: str) -> Request:
@@ -145,17 +161,30 @@ def response_json(response) -> dict:
 
 
 async def test_kanban_worker_context_uses_canonical_seed_only() -> None:
-    router = bare_router(dashboard=WorkerContextDashboard(), adapter=WorkerContextAdapter())
-    response = await router.kanban_worker_context(make_request("profile=default&session_ids=worker_1,creator_1"))
+    router = bare_router(
+        dashboard=WorkerContextDashboard(), adapter=WorkerContextAdapter()
+    )
+    response = await router.kanban_worker_context(
+        make_request("profile=default&session_ids=worker_1,creator_1")
+    )
     body = response_json(response)
     assert body["data"]["links"] == {
         "worker_1": {
-            "kind": "kanban_worker", "resolution": "verified", "task_id": "t_right",
-            "status": "running", "current_run_id": None, "last_heartbeat_at": 44,
-            "board": None, "assignee": None,
+            "kind": "kanban_worker",
+            "resolution": "verified",
+            "task_id": "t_right",
+            "status": "running",
+            "current_run_id": None,
+            "last_heartbeat_at": 44,
+            "board": None,
+            "assignee": None,
         }
     }
-    too_many = await router.kanban_worker_context(make_request("profile=default&session_ids=" + ",".join(f"s{i}" for i in range(51))))
+    too_many = await router.kanban_worker_context(
+        make_request(
+            "profile=default&session_ids=" + ",".join(f"s{i}" for i in range(51))
+        )
+    )
     assert too_many.status_code == 400
 
 
@@ -182,22 +211,28 @@ def test_adapter_allowlist() -> None:
         "/sql",
     ]
     for path in accepted:
-        assert is_allowed_adapter_path(path), f"expected adapter route to be accepted: {path}"
+        assert is_allowed_adapter_path(path), (
+            f"expected adapter route to be accepted: {path}"
+        )
     for path in rejected:
-        assert not is_allowed_adapter_path(path), f"expected adapter route to be rejected: {path}"
+        assert not is_allowed_adapter_path(path), (
+            f"expected adapter route to be rejected: {path}"
+        )
 
 
 def test_room_slot_reset_is_topology_scoped_and_plugin_owned() -> None:
     """A browser slot number must never become arbitrary plugin arguments."""
     topology = {
         "room_chat_id": "-100123",
-        "room_slots": [{
-            "slot": 1,
-            "ceo_thread_id": "32857",
-            "coder_thread_id": "36319",
-            "research_thread_id": "41644",
-            "system_thread_id": "47243",
-        }],
+        "room_slots": [
+            {
+                "slot": 1,
+                "ceo_thread_id": "32857",
+                "coder_thread_id": "36319",
+                "research_thread_id": "41644",
+                "system_thread_id": "47243",
+            }
+        ],
     }
     arguments, error = room_slot_force_reset_arguments(topology, 1)
     assert error is None
@@ -207,9 +242,15 @@ def test_room_slot_reset_is_topology_scoped_and_plugin_owned() -> None:
     }
     assert ROOM_SLOT_SEAT_ROLES == ("ceo", "coder", "research", "system")
     assert SESSION_INJECTOR_FORCE_RESET_ACTION == "agent2agent_force_reset"
-    assert SESSION_INJECTOR_FORCE_RESET_ROUTE == "/v1/operator/actions/agent2agent_force_reset"
+    assert (
+        SESSION_INJECTOR_FORCE_RESET_ROUTE
+        == "/v1/operator/actions/agent2agent_force_reset"
+    )
     missing, missing_error = room_slot_force_reset_arguments(
-        {**topology, "room_slots": [{**topology["room_slots"][0], "system_thread_id": ""}]},
+        {
+            **topology,
+            "room_slots": [{**topology["room_slots"][0], "system_thread_id": ""}],
+        },
         1,
     )
     assert missing is None
@@ -221,7 +262,10 @@ def test_room_slot_reset_is_topology_scoped_and_plugin_owned() -> None:
 
 
 def test_envelope_split() -> None:
-    data, meta = split_upstream_envelope({"data": [1, 2], "meta": {"source": "adapter"}})
+    data, meta = split_upstream_envelope({
+        "data": [1, 2],
+        "meta": {"source": "adapter"},
+    })
     assert data == [1, 2]
     assert meta == {"source": "adapter"}
 
@@ -239,10 +283,12 @@ def test_error_status() -> None:
 
 
 async def test_dashboard_profile_forward_and_flatten() -> None:
-    dashboard = FakeDashboard(body={
-        "data": {"sessions": [{"id": "s1"}], "total": 1},
-        "meta": {"source_id": "hermes-dashboard", "schema_fingerprint": "abc"},
-    })
+    dashboard = FakeDashboard(
+        body={
+            "data": {"sessions": [{"id": "s1"}], "total": 1},
+            "meta": {"source_id": "hermes-dashboard", "schema_fingerprint": "abc"},
+        }
+    )
     router = bare_router(dashboard=dashboard)
     response = await Router.proxy_dashboard_read(
         router,
@@ -250,23 +296,31 @@ async def test_dashboard_profile_forward_and_flatten() -> None:
         "api/sessions",
     )
     assert response.status_code == 200
-    assert dashboard.calls == [{
-        "path": "/api/sessions",
-        "params": {"profile": "management", "limit": "5", "offset": "0"},
-        "request_id": "test-request-id",
-    }]
+    assert dashboard.calls == [
+        {
+            "path": "/api/sessions",
+            "params": {"profile": "management", "limit": "5", "offset": "0"},
+            "request_id": "test-request-id",
+        }
+    ]
     payload = response_json(response)
     assert payload["data"] == {"sessions": [{"id": "s1"}], "total": 1}
-    assert not (isinstance(payload["data"], dict) and "data" in payload["data"] and "meta" in payload["data"])
+    assert not (
+        isinstance(payload["data"], dict)
+        and "data" in payload["data"]
+        and "meta" in payload["data"]
+    )
     assert payload["meta"]["profile_id"] == "management"
     assert payload["meta"]["upstream_meta"]["source_id"] == "hermes-dashboard"
 
 
 async def test_adapter_profile_is_provenance_not_filter() -> None:
-    adapter = FakeAdapter(body={
-        "data": {"tasks": [{"id": "t1"}]},
-        "meta": {"source_id": "adapter"},
-    })
+    adapter = FakeAdapter(
+        body={
+            "data": {"tasks": [{"id": "t1"}]},
+            "meta": {"source_id": "adapter"},
+        }
+    )
     router = bare_router(adapter=adapter)
     response = await Router.proxy_adapter_read(
         router,
@@ -274,20 +328,24 @@ async def test_adapter_profile_is_provenance_not_filter() -> None:
         "kanban/tasks",
     )
     assert response.status_code == 200
-    assert adapter.calls == [{
-        "method": "kanban_tasks",
-        "params": {"status": "running", "limit": 10},
-    }]
+    assert adapter.calls == [
+        {
+            "method": "kanban_tasks",
+            "params": {"status": "running", "limit": 10},
+        }
+    ]
     payload = response_json(response)
     assert payload["data"] == {"tasks": [{"id": "t1"}]}
     assert payload["meta"]["profile_id"] == "management"
 
 
 async def test_adapter_issues_defaults_limit() -> None:
-    adapter = FakeAdapter(body={
-        "data": {"issues": [{"id": "i1"}]},
-        "meta": {"source_id": "adapter"},
-    })
+    adapter = FakeAdapter(
+        body={
+            "data": {"issues": [{"id": "i1"}]},
+            "meta": {"source_id": "adapter"},
+        }
+    )
     router = bare_router(adapter=adapter)
     response = await Router.proxy_adapter_read(
         router,
@@ -295,10 +353,12 @@ async def test_adapter_issues_defaults_limit() -> None:
         "issues",
     )
     assert response.status_code == 200
-    assert adapter.calls == [{
-        "method": "issues",
-        "params": {"limit": 25},
-    }]
+    assert adapter.calls == [
+        {
+            "method": "issues",
+            "params": {"limit": 25},
+        }
+    ]
 
     response = await Router.proxy_adapter_read(
         router,
@@ -309,10 +369,12 @@ async def test_adapter_issues_defaults_limit() -> None:
 
 
 async def test_adapter_issues_limit_is_bounded() -> None:
-    adapter = FakeAdapter(body={
-        "data": {"issues": [{"id": "i1"}]},
-        "meta": {"source_id": "adapter"},
-    })
+    adapter = FakeAdapter(
+        body={
+            "data": {"issues": [{"id": "i1"}]},
+            "meta": {"source_id": "adapter"},
+        }
+    )
     router = bare_router(adapter=adapter)
     response = await Router.proxy_adapter_read(
         router,
@@ -454,7 +516,9 @@ async def test_skill_read_advertises_write_capabilities() -> None:
     dashboard = FakeDashboard(body=[{"name": "jarvis-report", "enabled": True}])
     router = bare_router(dashboard=dashboard)
     response = await Router.proxy_dashboard_direct(
-        router, make_request("profile=default"), "skills",
+        router,
+        make_request("profile=default"),
+        "skills",
     )
     meta = response_json(response)["meta"]
     assert meta["mutations_supported"] == ["save", "enable", "disable", "delete"]
@@ -469,7 +533,9 @@ async def test_unadvertised_read_stays_read_only() -> None:
     dashboard = FakeDashboard(body={"logs": []})
     router = bare_router(dashboard=dashboard)
     response = await Router.proxy_dashboard_direct(
-        router, make_request(""), "logs",
+        router,
+        make_request(""),
+        "logs",
     )
     meta = response_json(response)["meta"]
     assert meta["mutations_supported"] == []
@@ -487,7 +553,9 @@ async def test_session_read_advertises_its_real_writes() -> None:
     dashboard = FakeDashboard(body={"sessions": []})
     router = bare_router(dashboard=dashboard)
     response = await Router.proxy_dashboard_direct(
-        router, make_request(""), "sessions",
+        router,
+        make_request(""),
+        "sessions",
     )
     meta = response_json(response)["meta"]
     assert meta["read_only"] is False
@@ -510,9 +578,9 @@ async def test_chat_relay_forwards_bytes_as_they_arrive() -> None:
     from agent_mission_control import chat_proxy
 
     chunks = [
-        b"event: run.started\ndata: {\"run_id\": \"run_1\"}\n\n",
-        b"event: assistant.delta\nda",           # split mid-field on purpose
-        b"ta: {\"delta\": \"hel\"}\n\n",
+        b'event: run.started\ndata: {"run_id": "run_1"}\n\n',
+        b"event: assistant.delta\nda",  # split mid-field on purpose
+        b'ta: {"delta": "hel"}\n\n',
         b": keepalive\n\n",
     ]
 
@@ -549,7 +617,7 @@ async def test_chat_relay_closes_upstream_when_the_client_hangs_up() -> None:
 
         async def aiter_bytes(self):
             while True:
-                yield b"event: assistant.delta\ndata: {\"delta\": \"x\"}\n\n"
+                yield b'event: assistant.delta\ndata: {"delta": "x"}\n\n'
                 await asyncio.sleep(0)
 
         async def aclose(self):
@@ -612,8 +680,10 @@ async def test_session_frame_relay_resumes_after_the_last_live_sequence() -> Non
     try:
         router = bare_router()
         router.gateway = object()
+
         async def gateway_for_watch(_profile):
             return router.gateway
+
         router._gateway_client_for_watch_profile = gateway_for_watch
         queue: asyncio.Queue[dict] = asyncio.Queue()
         task = asyncio.create_task(router._pump_session_frames("session-1", queue))
@@ -664,8 +734,10 @@ async def test_session_frame_relay_resets_cursor_after_a_terminal_frame() -> Non
     try:
         router = bare_router()
         router.gateway = object()
+
         async def gateway_for_watch(_profile):
             return router.gateway
+
         router._gateway_client_for_watch_profile = gateway_for_watch
         queue: asyncio.Queue[dict] = asyncio.Queue()
         task = asyncio.create_task(router._pump_session_frames("session-1", queue))
@@ -714,9 +786,13 @@ async def test_session_frame_relay_uses_the_resolved_worker_profile() -> None:
         router = bare_router()
         router._gateway_client_for_watch_profile = gateway_for_watch
         queue: asyncio.Queue[dict] = asyncio.Queue()
-        task = asyncio.create_task(router._pump_session_frames(
-            "worker-session", queue, profile_name="comfyui-worker",
-        ))
+        task = asyncio.create_task(
+            router._pump_session_frames(
+                "worker-session",
+                queue,
+                profile_name="comfyui-worker",
+            )
+        )
         await asyncio.wait_for(queue.get(), timeout=1)
         assert selected == ["comfyui-worker"]
         assert seen_gateways == [worker_gateway]
@@ -765,9 +841,15 @@ def test_created_session_id_reads_the_nested_gateway_shape() -> None:
     Reading only the top level produced an empty id, so the bus event for a new
     session carried entity_id "" and no subscriber could act on it.
     """
-    assert Router._created_session_id(  # noqa: SLF001
-        {"object": "hermes.session", "session": {"id": "api_1", "source": "api_server"}}
-    ) == "api_1"
+    assert (
+        Router._created_session_id(  # noqa: SLF001
+            {
+                "object": "hermes.session",
+                "session": {"id": "api_1", "source": "api_server"},
+            }
+        )
+        == "api_1"
+    )
     # Older/flat gateways still resolve.
     assert Router._created_session_id({"id": "flat"}) == "flat"  # noqa: SLF001
     assert Router._created_session_id({"session_key": "k"}) == "k"  # noqa: SLF001
@@ -790,8 +872,12 @@ def test_gateway_read_allowlist_is_exact_not_prefix() -> None:
     assert "/v1/toolsets" in GATEWAY_READ_PATHS
     assert "/v1/skills" in GATEWAY_READ_PATHS
     assert "/v1/capabilities" in GATEWAY_READ_PATHS
-    for forbidden in ("/v1/runs", "/v1/chat/completions", "/api/sessions",
-                      "/v1/toolsets/../runs"):
+    for forbidden in (
+        "/v1/runs",
+        "/v1/chat/completions",
+        "/api/sessions",
+        "/v1/toolsets/../runs",
+    ):
         assert forbidden not in GATEWAY_READ_PATHS
 
 
@@ -870,11 +956,22 @@ async def test_alert_acknowledge_publishes_alert_changed() -> None:
     published: list[dict] = []
 
     class FakeBus:
-        async def publish(self, event_type, source_id, entity_type="", entity_id="",
-                          payload=None, coverage="polled", profile_id="", event_id=None):
+        async def publish(
+            self,
+            event_type,
+            source_id,
+            entity_type="",
+            entity_id="",
+            payload=None,
+            coverage="polled",
+            profile_id="",
+            event_id=None,
+        ):
             published.append({
-                "event_type": event_type, "source_id": source_id,
-                "entity_id": entity_id, "payload": payload,
+                "event_type": event_type,
+                "source_id": source_id,
+                "entity_id": entity_id,
+                "payload": payload,
             })
             return {"event_id": "e1"}
 
@@ -883,10 +980,16 @@ async def test_alert_acknowledge_publishes_alert_changed() -> None:
             pass
 
     engine = alerts_mod.AlertEngine(FakeStore(), object(), bus=FakeBus())
-    engine.alerts["a1"] = {"rule_id": "R1", "severity": "critical",
-                           "source_id": "health", "entity_type": "source",
-                           "entity_id": "gateway", "reason": "down",
-                           "first_seen_at": 1, "last_seen_at": 1}
+    engine.alerts["a1"] = {
+        "rule_id": "R1",
+        "severity": "critical",
+        "source_id": "health",
+        "entity_type": "source",
+        "entity_id": "gateway",
+        "reason": "down",
+        "first_seen_at": 1,
+        "last_seen_at": 1,
+    }
 
     result = await engine.acknowledge("a1", alerts_mod.ACK)
     assert result["state"] == alerts_mod.ACK
@@ -924,8 +1027,14 @@ async def test_event_bus_cache_invalidated_emits_only_on_drop() -> None:
             return ""
 
     bus = EventBus(FakeStore(), cache=DropCache())
-    ev = await bus.publish("cache.invalidated", "adapter", "schema", "adapter",
-                           {"fingerprint": "fp"}, coverage="derived")
+    ev = await bus.publish(
+        "cache.invalidated",
+        "adapter",
+        "schema",
+        "adapter",
+        {"fingerprint": "fp"},
+        coverage="derived",
+    )
     assert ev is not None
     assert ev["coverage"] == "derived"
     assert ev["payload"]["removed"] == 1
@@ -950,7 +1059,7 @@ def test_redaction_regex_matches_the_frontend_copy() -> None:
     js = (APP_ROOT / "frontend/dist/tabs/settings.js").read_text(encoding="utf-8")
     marker = "const REDACTED_KEYS = /"
     start = js.index(marker) + len(marker)
-    js_pattern = js[start:js.index("/i;", start)]
+    js_pattern = js[start : js.index("/i;", start)]
     assert js_pattern == redact_mod.REDACTED_KEY_PATTERN, (
         f"frontend regex {js_pattern!r} != backend {redact_mod.REDACTED_KEY_PATTERN!r}"
     )
@@ -999,7 +1108,7 @@ def test_path_tokens_cannot_span_a_slash() -> None:
 
 
 def test_literal_specs_win_over_token_specs() -> None:
-    """"active" is a route, not a profile name — declaration order guarantees it."""
+    """ "active" is a route, not a profile name — declaration order guarantees it."""
     spec, _ = match_upstream_mutation("/api/profiles/active", "POST")
     assert spec["summary"] == "upstream.profile.activate"
 
@@ -1034,7 +1143,8 @@ def test_destructive_specs_are_confirm_gated() -> None:
         assert matched is not None, f"{method} {path} is not allowlisted"
         gate = matched[0].get("require_confirm")
         covered = gate is True or (
-            isinstance(gate, (tuple, list, set, frozenset)) and method in gate)
+            isinstance(gate, (tuple, list, set, frozenset)) and method in gate
+        )
         assert covered, f"{method} {path} is destructive but not confirm-gated"
 
     # A non-destructive verb on a shared path must NOT be gated, or every edit
@@ -1085,24 +1195,37 @@ def test_config_write_tree_excludes_every_credential_branch() -> None:
     # channel_overrides is a per-thread dict, so a single-thread edit prunes to
     # exactly that thread and cannot disturb its neighbours.
     assert _prune_to_allow_tree(
-        {"platforms": {"telegram": {"channel_overrides": {"1497": {"system_prompt": "x"}}}}},
+        {
+            "platforms": {
+                "telegram": {"channel_overrides": {"1497": {"system_prompt": "x"}}}
+            }
+        },
         CONFIG_WRITE_ALLOW_TREE,
-    ) == {"platforms": {"telegram": {"channel_overrides": {"1497": {"system_prompt": "x"}}}}}
+    ) == {
+        "platforms": {
+            "telegram": {"channel_overrides": {"1497": {"system_prompt": "x"}}}
+        }
+    }
     # The legacy branch is writable, but only that one key under it.
     assert _prune_to_allow_tree(
         {"telegram": {"extra": {"group_topics": [], "room_slots": [{"slot": 1}]}}},
         CONFIG_WRITE_ALLOW_TREE,
     ) == {"telegram": {"extra": {"group_topics": []}}}
     # Anything outside the tree is dropped rather than forwarded.
-    assert _prune_to_allow_tree(
-        {"providers": {"9router": {"api_key": "sk-live"}}}, CONFIG_WRITE_ALLOW_TREE
-    ) == {}
+    assert (
+        _prune_to_allow_tree(
+            {"providers": {"9router": {"api_key": "sk-live"}}}, CONFIG_WRITE_ALLOW_TREE
+        )
+        == {}
+    )
     assert _prune_to_allow_tree(
         {"agent": {"disabled_toolsets": ["image_gen"], "model": "override"}},
         CONFIG_WRITE_ALLOW_TREE,
     ) == {"agent": {"disabled_toolsets": ["image_gen"]}}
     # A named-but-empty branch collapses so the upstream merge stays a no-op.
-    assert _prune_to_allow_tree({"agent": {"model": "x"}}, CONFIG_WRITE_ALLOW_TREE) == {}
+    assert (
+        _prune_to_allow_tree({"agent": {"model": "x"}}, CONFIG_WRITE_ALLOW_TREE) == {}
+    )
     assert _prune_to_allow_tree(
         {"skills": {"mode": {"prune": ["research"]}, "disabled": ["leave-alone"]}},
         CONFIG_WRITE_ALLOW_TREE,
@@ -1113,9 +1236,12 @@ def test_config_write_tree_excludes_every_credential_branch() -> None:
 
 
 def test_config_skills_modes_fail_closed_before_upstream() -> None:
-    assert _invalid_skills_mode_in_patch({
-        "skills": {"mode": {"prune": ["research"], "invisible": ["private"]}}
-    }) is None
+    assert (
+        _invalid_skills_mode_in_patch({
+            "skills": {"mode": {"prune": ["research"], "invisible": ["private"]}}
+        })
+        is None
+    )
     assert _invalid_skills_mode_in_patch({"skills": {"mode": "prune"}})
     assert _invalid_skills_mode_in_patch({
         "skills": {"mode": {"visible": ["research"]}}
@@ -1123,28 +1249,37 @@ def test_config_skills_modes_fail_closed_before_upstream() -> None:
     assert _invalid_skills_mode_in_patch({
         "skills": {"mode": {"prune": ["same"], "invisible": ["same"]}}
     })
-    assert _invalid_skills_mode_in_patch({
-        "platforms": {
-            "telegram": {
-                "extra": {
-                    "group_topics": [{
-                        "chat_id": "-100",
-                        "topics": [{
-                            "thread_id": "20",
-                            "skills_mode": {"invisible": ["private"]},
-                        }],
-                    }],
+    assert (
+        _invalid_skills_mode_in_patch({
+            "platforms": {
+                "telegram": {
+                    "extra": {
+                        "group_topics": [
+                            {
+                                "chat_id": "-100",
+                                "topics": [
+                                    {
+                                        "thread_id": "20",
+                                        "skills_mode": {"invisible": ["private"]},
+                                    }
+                                ],
+                            }
+                        ],
+                    },
                 },
             },
-        },
-    }) is None
+        })
+        is None
+    )
     assert _invalid_skills_mode_in_patch({
         "telegram": {
             "extra": {
-                "group_topics": [{
-                    "chat_id": "-100",
-                    "topics": [{"thread_id": "20", "skills_mode": None}],
-                }],
+                "group_topics": [
+                    {
+                        "chat_id": "-100",
+                        "topics": [{"thread_id": "20", "skills_mode": None}],
+                    }
+                ],
             },
         },
     })
@@ -1154,9 +1289,16 @@ def test_new_write_surfaces_are_advertised_to_the_ui() -> None:
     """meta.mutations_supported is the UI's gate, so it must not drift."""
     for read_path in READ_PATH_MUTATIONS:
         assert is_allowed_read_path(read_path), f"{read_path} advertised but unreadable"
-    for group in ("/api/cron/jobs", "/api/profiles", "/api/mcp/servers",
-                  "/api/tools/toolsets", "/api/webhooks", "/api/memory",
-                  "/api/dashboard/agent-plugins", "/api/messaging/platforms"):
+    for group in (
+        "/api/cron/jobs",
+        "/api/profiles",
+        "/api/mcp/servers",
+        "/api/tools/toolsets",
+        "/api/webhooks",
+        "/api/memory",
+        "/api/dashboard/agent-plugins",
+        "/api/messaging/platforms",
+    ):
         assert READ_PATH_MUTATIONS.get(group), f"{group} has no advertised writes"
 
 
@@ -1164,7 +1306,8 @@ def test_plugin_toggles_flag_the_restart_requirement() -> None:
     """Toggling writes config.yaml but does not reload the live gateway."""
     for action in ("enable", "disable"):
         spec, _ = match_upstream_mutation(
-            f"/api/dashboard/agent-plugins/permits/{action}", "POST")
+            f"/api/dashboard/agent-plugins/permits/{action}", "POST"
+        )
         assert spec["response_meta"]["restart_required"] is True
 
 
@@ -1180,7 +1323,10 @@ async def test_preferences_are_profile_scoped_and_key_gated() -> None:
         store.set_preference("theme", "deck", None)
         store.set_preference("density", "compact", "work")
 
-        assert store.list_preferences(None) == {"density": "comfortable", "theme": "deck"}
+        assert store.list_preferences(None) == {
+            "density": "comfortable",
+            "theme": "deck",
+        }
         # Profile value wins over the global one; unscoped keys still show up.
         assert store.list_preferences("work") == {"density": "compact", "theme": "deck"}
 
@@ -1235,8 +1381,10 @@ async def test_session_persona_stores_only_the_profile_name() -> None:
         # serves. execution_mode ('gateway'/'runner') is the one other fact
         # only the BFF knows — it decided which path the session runs on.
         columns = {
-            row[1] for row in
-            store._conn.execute("PRAGMA table_info(session_persona)").fetchall()
+            row[1]
+            for row in store._conn.execute(
+                "PRAGMA table_info(session_persona)"
+            ).fetchall()
         }
         assert columns == {"session_id", "profile_name", "created_at", "execution_mode"}
         assert store.get_execution_mode("s1") == "gateway"
@@ -1322,14 +1470,18 @@ async def test_runner_manager_shares_one_spawn_per_profile() -> None:
     try:
         manager = RunnerManager(
             hermes_executable="fake-hermes",
-            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+            port_announce_timeout_seconds=2,
+            health_probe_timeout_seconds=2,
         )
         c1 = await manager.ensure_profile_gateway("alpha")
         c2 = await manager.ensure_profile_gateway("alpha")
         assert c1 is c2
         assert len(spawned) == 1
         assert spawned[0][-4:] == [
-            "gateway", "run", "--force", "--external-supervisor",
+            "gateway",
+            "run",
+            "--force",
+            "--external-supervisor",
         ]
         assert "serve" not in spawned[0]
         assert "--profile" not in spawned[0]
@@ -1344,6 +1496,7 @@ async def test_runner_manager_shares_one_spawn_per_profile() -> None:
     finally:
         asyncio.create_subprocess_exec = original_spawn
         from agent_mission_control.clients import GatewayClient
+
         GatewayClient.get = original_get
 
 
@@ -1358,7 +1511,8 @@ async def test_runner_manager_fails_closed_when_the_process_exits_early() -> Non
     original_spawn = _patch_runner_spawn(spawned, ready=False)
     try:
         manager = RunnerManager(
-            hermes_executable="fake-hermes", port_announce_timeout_seconds=2,
+            hermes_executable="fake-hermes",
+            port_announce_timeout_seconds=2,
         )
         raised = False
         try:
@@ -1442,14 +1596,18 @@ async def test_runner_manager_lru_eviction_spares_fresh_backends() -> None:
     stopped: list[str] = []
     spawned: list[list[str]] = []
     original_spawn = _patch_runner_spawn(
-        spawned, on_stop=None,
+        spawned,
+        on_stop=None,
     )
     original_get = _patch_runner_health()
     try:
         manager = RunnerManager(
-            hermes_executable="fake-hermes", pool_max=1,
-            keepalive_fresh_seconds=90.0, idle_seconds=900.0,
-            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+            hermes_executable="fake-hermes",
+            pool_max=1,
+            keepalive_fresh_seconds=90.0,
+            idle_seconds=900.0,
+            port_announce_timeout_seconds=2,
+            health_probe_timeout_seconds=2,
         )
         await manager.ensure_profile_gateway("alpha")
         # alpha was just touched (fresh) — spawning beta over the pool_max=1
@@ -1466,6 +1624,7 @@ async def test_runner_manager_lru_eviction_spares_fresh_backends() -> None:
     finally:
         asyncio.create_subprocess_exec = original_spawn
         from agent_mission_control.clients import GatewayClient
+
         GatewayClient.get = original_get
 
 
@@ -1480,8 +1639,10 @@ async def test_runner_manager_idle_reap_allows_a_clean_respawn() -> None:
     original_get = _patch_runner_health()
     try:
         manager = RunnerManager(
-            hermes_executable="fake-hermes", idle_seconds=900.0,
-            port_announce_timeout_seconds=2, health_probe_timeout_seconds=2,
+            hermes_executable="fake-hermes",
+            idle_seconds=900.0,
+            port_announce_timeout_seconds=2,
+            health_probe_timeout_seconds=2,
         )
         await manager.ensure_profile_gateway("alpha")
         assert len(spawned) == 1
@@ -1497,6 +1658,7 @@ async def test_runner_manager_idle_reap_allows_a_clean_respawn() -> None:
     finally:
         asyncio.create_subprocess_exec = original_spawn
         from agent_mission_control.clients import GatewayClient
+
         GatewayClient.get = original_get
 
 
@@ -1562,10 +1724,14 @@ async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
         router = bare_router(dashboard=FakeDashboard(body=[{"name": "jarvis"}]))
         router.gateway = object()
         router.dashboard_store = store
-        router.store = type("S", (), {
-            "append_audit": lambda self, **kw: None,
-            "update_audit_result": lambda self, **kw: None,
-        })()
+        router.store = type(
+            "S",
+            (),
+            {
+                "append_audit": lambda self, **kw: None,
+                "update_audit_result": lambda self, **kw: None,
+            },
+        )()
         router._require_session = lambda request: {"id": "sess"}
         router._require_csrf = lambda request, session: None
         router._origin_allowed = lambda request: True
@@ -1599,14 +1765,19 @@ async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
         try:
             request = make_request("")
             request._body = json.dumps({
-                "message": "hi", "profile_name": "jarvis",
+                "message": "hi",
+                "profile_name": "jarvis",
             }).encode("utf-8")
             response = await Router.chat_create_session(router, request)
         finally:
             chat_proxy.create_session = original_create
 
-        assert ensure_calls == ["jarvis"], "an unrecognized/no-op profile must never spawn"
-        assert seen["gateway"] == "runner-client", "must create the session on the runner, not the default gateway"
+        assert ensure_calls == ["jarvis"], (
+            "an unrecognized/no-op profile must never spawn"
+        )
+        assert seen["gateway"] == "runner-client", (
+            "must create the session on the runner, not the default gateway"
+        )
         payload = response_json(response)
         assert payload["session"]["id"] == "sess-1"
         assert payload["profile_name"] == "jarvis"
@@ -1618,7 +1789,8 @@ async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
         router.dashboard = FakeDashboard(body=[])
         request2 = make_request("")
         request2._body = json.dumps({
-            "message": "hi", "profile_name": "not-a-real-profile",
+            "message": "hi",
+            "profile_name": "not-a-real-profile",
         }).encode("utf-8")
         response2 = await Router.chat_create_session(router, request2)
         assert response2.status_code == 400
@@ -1644,8 +1816,9 @@ async def test_persona_write_never_downgrades_a_runner_session() -> None:
         # The still-live POST /api/sessions/{id}/persona route's call shape.
         store.set_persona("s-runner", "renamed")
         assert store.get_persona("s-runner") == "renamed"
-        assert store.get_execution_mode("s-runner") == "runner", \
+        assert store.get_execution_mode("s-runner") == "runner", (
             "a plain persona write must not downgrade a runner-backed session"
+        )
 
         # A brand new row still defaults to the legacy shared gateway.
         store.set_persona("s-new", "jarvis")
@@ -1714,7 +1887,9 @@ async def test_chat_create_session_audits_before_any_upstream_effect() -> None:
     router._host_allowed = lambda request: True
     router._request_profile = lambda request: None
     router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
-    router._record_audit_result = lambda rid, status, result: order.append(f"result:{result}")
+    router._record_audit_result = lambda rid, status, result: order.append(
+        f"result:{result}"
+    )
     router.event_bus = None
 
     spawned: list[str] = []
@@ -1727,13 +1902,15 @@ async def test_chat_create_session_audits_before_any_upstream_effect() -> None:
     router.runner_manager = _FakeRunnerManager()
 
     request = make_request("")
-    request._body = json.dumps({"message": "hi", "profile_name": "ghost"}).encode("utf-8")
+    request._body = json.dumps({"message": "hi", "profile_name": "ghost"}).encode(
+        "utf-8"
+    )
     response = await Router.chat_create_session(router, request)
 
     assert response.status_code == 400
     assert spawned == [], "an unknown profile must never reach a spawn"
     assert order == [
-        "audit:pending",          # BEFORE any upstream call, not after
+        "audit:pending",  # BEFORE any upstream call, not after
         "upstream:profiles",
         "result:error:runner_profile_missing",
     ], f"audit must precede every upstream effect, got {order}"
@@ -1747,7 +1924,8 @@ async def test_runner_manager_hit_path_cannot_race_eviction() -> None:
     from agent_mission_control.runner_manager import RunnerManager
 
     manager = RunnerManager(
-        hermes_executable="hermes", pool_max=2,
+        hermes_executable="hermes",
+        pool_max=2,
         idle_seconds=0.0,  # anything in the pool is instantly reapable
     )
     spawned: list[list[str]] = []
@@ -1780,15 +1958,18 @@ async def test_runner_manager_hit_path_cannot_race_eviction() -> None:
         client, _ = await asyncio.gather(hit(), manager._reap_once())
 
         assert client is not None
-        assert observed_mid_teardown == [False], \
+        assert observed_mid_teardown == [False], (
             "a caller was handed an entry while its teardown was still in flight"
+        )
         assert len(spawned) == 2, "the reaped entry must respawn, not resurrect"
     finally:
         manager._stop = real_stop
         await manager.stop_all()
         import agent_mission_control.runner_manager as rm
+
         rm.asyncio.create_subprocess_exec = original_spawn
         from agent_mission_control.clients import GatewayClient
+
         GatewayClient.get = original_get
 
 
@@ -1802,11 +1983,15 @@ async def test_events_recent_is_bounded_and_separate_from_the_audit_ledger() -> 
         store = Store(Path(tmp) / "events.db")
         for index in range(12):
             store.insert_event_replay(
-                event_id=f"e{index}", event_type="task.changed",
+                event_id=f"e{index}",
+                event_type="task.changed",
                 # epoch seconds, exactly what EventBus.publish writes.
-                occurred_at=1786400000 + index, source_id="kanban",
-                entity_type="task", entity_id=f"t{index}",
-                payload={"status": "running"}, coverage="native",
+                occurred_at=1786400000 + index,
+                source_id="kanban",
+                entity_type="task",
+                entity_id=f"t{index}",
+                payload={"status": "running"},
+                coverage="native",
             )
 
         router = bare_router()
@@ -1829,7 +2014,10 @@ async def test_events_recent_is_bounded_and_separate_from_the_audit_ledger() -> 
         # the table, so the bound is observed where it is actually applied.
         seen: list[int] = []
         real = store.replay_latest
-        store.replay_latest = lambda limit=2000: (seen.append(limit), real(limit=limit))[1]
+        store.replay_latest = lambda limit=2000: (
+            seen.append(limit),
+            real(limit=limit),
+        )[1]
 
         await Router.events_recent_endpoint(router, make_request("limit=99999"))
         await Router.events_recent_endpoint(router, make_request("limit=abc"))
@@ -1847,27 +2035,55 @@ async def test_run_inspector_returns_real_edges_not_an_empty_graph() -> None:
 
     class Adapter:
         async def kanban_task(self, task_id):
-            return BackendResult({"task": {"id": task_id, "session_id": "s-1",
-                                            "assignee": "coder", "current_run_id": 7}})
+            return BackendResult({
+                "task": {
+                    "id": task_id,
+                    "session_id": "s-1",
+                    "assignee": "coder",
+                    "current_run_id": 7,
+                }
+            })
 
         async def kanban_task_runs(self, task_id, limit=50):
-            return BackendResult({"runs": [{"id": 7, "status": "done", "outcome": "ok",
-                                             "started_at": "2026-08-10T01:00:00Z"}]})
+            return BackendResult({
+                "runs": [
+                    {
+                        "id": 7,
+                        "status": "done",
+                        "outcome": "ok",
+                        "started_at": "2026-08-10T01:00:00Z",
+                    }
+                ]
+            })
 
         async def kanban_task_events(self, task_id, cursor=0, limit=200):
-            return BackendResult({"events": [{"kind": "moved", "created_at": "2026-08-10T00:00:00Z"}]})
+            return BackendResult({
+                "events": [{"kind": "moved", "created_at": "2026-08-10T00:00:00Z"}]
+            })
 
         async def kanban_task_attachments(self, task_id, limit=20):
             return BackendResult({"attachments": [{"id": 3, "filename": "log.txt"}]})
 
         async def issues(self, limit=100, **params):
-            return BackendResult({"issues": [
-                {"id": 148, "occurrences": [{"task_ref": "t-1", "event_type": "observed"}]},
-            ]})
+            return BackendResult({
+                "issues": [
+                    {
+                        "id": 148,
+                        "occurrences": [{"task_ref": "t-1", "event_type": "observed"}],
+                    },
+                ]
+            })
 
         async def permits(self, limit=100, **params):
-            return BackendResult({"permits": [{"id": "p-1", "issue_title": "Issue 148",
-                                                "status": "pending_approval"}]})
+            return BackendResult({
+                "permits": [
+                    {
+                        "id": "p-1",
+                        "issue_title": "Issue 148",
+                        "status": "pending_approval",
+                    }
+                ]
+            })
 
         async def issue(self, issue_id, occurrence_limit=50):
             return BackendResult({"issue": {"id": issue_id, "occurrences": []}})
@@ -1925,7 +2141,9 @@ async def test_run_inspector_returns_real_edges_not_an_empty_graph() -> None:
     previous = provider_log.propagate
     provider_log.propagate = False
     try:
-        broken = CorrelationEngine(providers=build_correlation_providers(Broken(), Dash()))
+        broken = CorrelationEngine(
+            providers=build_correlation_providers(Broken(), Dash())
+        )
         assert (await broken.correlate("task", "t-1"))["coverage"] == "unsupported"
     finally:
         provider_log.removeHandler(handler)
@@ -1945,8 +2163,15 @@ def test_alert_rules_receive_the_data_they_evaluate() -> None:
         for name in re.findall(r'_feed_alerts\(\s*"([a-z_]+)"', src)
     }
     # Every source_data key the rules read must have a writer.
-    for key in ("health", "capabilities", "cron", "tasks", "permits", "issues",
-                "analytics"):
+    for key in (
+        "health",
+        "capabilities",
+        "cron",
+        "tasks",
+        "permits",
+        "issues",
+        "analytics",
+    ):
         assert key in fed, f"no worker feeds alert source_data[{key!r}]"
 
     # The tick loop must not write "health" too — two writers with different
@@ -1955,10 +2180,11 @@ def test_alert_rules_receive_the_data_they_evaluate() -> None:
 
     tick_src = _inspect.getsource(app_mod._alert_tick_loop)
     assert 'set_source_data("health"' not in tick_src
-    assert 'set_source_data(\n' in tick_src or 'set_source_data(' in tick_src
+    assert "set_source_data(\n" in tick_src or "set_source_data(" in tick_src
     assert "freshness" in tick_src, "tick loop must still supply the R3 feed"
-    assert not hasattr(app_mod, "_snapshot_health"), \
+    assert not hasattr(app_mod, "_snapshot_health"), (
         "the conflicting health snapshot should be gone, not just unused"
+    )
 
 
 async def test_poll_workers_record_success_time_not_delta_time() -> None:
@@ -2000,10 +2226,14 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     from agent_mission_control import chat_proxy
 
     router = bare_router()
-    router.store = type("S", (), {
-        "append_audit": lambda self, **kw: None,
-        "update_audit_result": lambda self, **kw: None,
-    })()
+    router.store = type(
+        "S",
+        (),
+        {
+            "append_audit": lambda self, **kw: None,
+            "update_audit_result": lambda self, **kw: None,
+        },
+    )()
     router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
     router.gateway = object()
     router.dashboard_store = None
@@ -2026,22 +2256,39 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     chat_proxy.stream_chat = fake_stream_chat
     try:
         sent = {
-            "session_id": "s1", "message": "hi", "model": "normal",
-            "provider": "9router", "model_options": {"reasoning": {"effort": "xhigh"}},
+            "session_id": "s1",
+            "message": "hi",
+            "model": "normal",
+            "provider": "9router",
+            "model_options": {"reasoning": {"effort": "xhigh"}},
             "require_model_lock": True,
-            "attachments": [{
-                "name": "notes.json", "mime_type": "application/json",
-                "size": 2, "kind": "file", "data": "data:application/json;base64,e30=",
-                "not_allowed": "drop me",
-            }],
+            "attachments": [
+                {
+                    "name": "notes.json",
+                    "mime_type": "application/json",
+                    "size": 2,
+                    "kind": "file",
+                    "data": "data:application/json;base64,e30=",
+                    "not_allowed": "drop me",
+                }
+            ],
             "not_allowed": "drop me",
         }
 
         async def receive():
-            return {"type": "http.request", "body": json.dumps(sent).encode(), "more_body": False}
+            return {
+                "type": "http.request",
+                "body": json.dumps(sent).encode(),
+                "more_body": False,
+            }
 
         request = Request(
-            {"type": "http", "method": "POST", "path": "/api/chat/stream", "headers": []},
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/chat/stream",
+                "headers": [],
+            },
             receive,
         )
         request.state.request_id = "rid-1"
@@ -2055,7 +2302,9 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     assert body["model_options"] == {"reasoning": {"effort": "xhigh"}}
     attachment = body["attachments"][0]
     assert attachment["name"] == attachment["fileName"] == "notes.json"
-    assert attachment["type"] == "file" and attachment["contentType"] == "application/json"
+    assert (
+        attachment["type"] == "file" and attachment["contentType"] == "application/json"
+    )
     assert attachment["content"] == attachment["data"] == attachment["base64"] == "e30="
     assert attachment["dataUrl"] == "data:application/json;base64,e30="
     assert "not_allowed" not in attachment
@@ -2064,13 +2313,22 @@ async def test_chat_stream_forwards_the_model_lock_flag() -> None:
     assert "session_id" not in body, "the id travels in the path, not the body"
 
     invalid = dict(sent)
-    invalid["attachments"] = [{
-        "name": "broken.pdf", "mime_type": "application/pdf",
-        "size": 99, "kind": "pdf", "data": "JVBERi0=",
-    }]
+    invalid["attachments"] = [
+        {
+            "name": "broken.pdf",
+            "mime_type": "application/pdf",
+            "size": 99,
+            "kind": "pdf",
+            "data": "JVBERi0=",
+        }
+    ]
 
     async def receive_invalid():
-        return {"type": "http.request", "body": json.dumps(invalid).encode(), "more_body": False}
+        return {
+            "type": "http.request",
+            "body": json.dumps(invalid).encode(),
+            "more_body": False,
+        }
 
     invalid_request = Request(
         {"type": "http", "method": "POST", "path": "/api/chat/stream", "headers": []},
@@ -2094,8 +2352,16 @@ async def test_session_changed_names_the_session_that_moved() -> None:
     published: list[tuple] = []
 
     class FakeBus:
-        async def publish(self, event_type, source_id, entity_type, entity_id,
-                          payload, coverage=None, **_kwargs):
+        async def publish(
+            self,
+            event_type,
+            source_id,
+            entity_type,
+            entity_id,
+            payload,
+            coverage=None,
+            **_kwargs,
+        ):
             published.append((event_type, entity_id, payload))
 
     workers = SourceWorkers.__new__(SourceWorkers)
@@ -2132,8 +2398,16 @@ async def test_session_changed_burst_is_capped() -> None:
     published: list[tuple[str, str | None]] = []
 
     class FakeBus:
-        async def publish(self, event_type, source_id, entity_type, entity_id,
-                          payload, coverage=None, **kwargs):
+        async def publish(
+            self,
+            event_type,
+            source_id,
+            entity_type,
+            entity_id,
+            payload,
+            coverage=None,
+            **kwargs,
+        ):
             published.append((entity_id, kwargs.get("operation")))
 
     workers = SourceWorkers.__new__(SourceWorkers)
@@ -2145,10 +2419,20 @@ async def test_session_changed_burst_is_capped() -> None:
     }
 
     await workers._on_sessions(
-        [{"id": f"s{i}", "last_activity_at": 5, "message_count": 1} for i in range(200)],
+        [
+            {"id": f"s{i}", "last_activity_at": 5, "message_count": 1}
+            for i in range(200)
+        ],
         None,
     )
-    assert len([entity for entity, operation in published if entity and operation != "delete"]) == 100
+    assert (
+        len([
+            entity
+            for entity, operation in published
+            if entity and operation != "delete"
+        ])
+        == 100
+    )
     assert ("", "resync-required") in published
 
 
@@ -2167,15 +2451,26 @@ def test_issue_transition_rules_match_the_upstream_script() -> None:
     router = bare_router()
 
     assert validate(router, {"status": "bogus"}).startswith("status must be one of")
-    assert validate(router, {"event_type": "nope"}).startswith("event_type must be one of")
+    assert validate(router, {"event_type": "nope"}).startswith(
+        "event_type must be one of"
+    )
     # resolved needs both fields; dismissed needs a reason; merged needs a target.
     assert validate(router, {"status": "resolved", "resolution": "fixed"})
     assert validate(router, {"status": "resolved", "verification": "checked"})
     assert validate(router, {"status": "dismissed"})
     assert validate(router, {"status": "merged"})
     # Valid transitions pass.
-    assert validate(router, {
-        "status": "resolved", "resolution": "fixed", "verification": "rerun green"}) is None
+    assert (
+        validate(
+            router,
+            {
+                "status": "resolved",
+                "resolution": "fixed",
+                "verification": "rerun green",
+            },
+        )
+        is None
+    )
     assert validate(router, {"status": "merged", "merge_into_id": 12}) is None
     assert validate(router, {"event_type": "recurred"}) is None
 
@@ -2193,7 +2488,9 @@ def test_issue_delete_rides_the_update_path() -> None:
     assert validate(router, {"delete": True, "reason": 12}) == "reason is required"
     assert validate(router, {"delete": True, "reason": "duplicate of issue 82"}) is None
     # A delete does not need to also satisfy the status-transition rules.
-    assert validate(router, {"delete": True, "reason": "dup", "status": "bogus"}) is None
+    assert (
+        validate(router, {"delete": True, "reason": "dup", "status": "bogus"}) is None
+    )
 
 
 def test_decision_field_allowlists_are_closed() -> None:
@@ -2203,14 +2500,21 @@ def test_decision_field_allowlists_are_closed() -> None:
     # The issue set matches the upstream update payload exactly, including the
     # delete/reason pair folded in from the removed issue_delete tool.
     assert Router.ISSUE_UPDATE_FIELDS == frozenset({
-        "status", "resolution", "verification", "merge_into_id", "event_type",
-        "context", "severity", "delete", "reason",
+        "status",
+        "resolution",
+        "verification",
+        "merge_into_id",
+        "event_type",
+        "context",
+        "severity",
+        "delete",
+        "reason",
     })
     assert set(Router.ISSUE_STATUSES) == {"open", "resolved", "dismissed", "merged"}
 
 
 def test_audit_summary_logs_decisions_but_never_free_text() -> None:
-    """"permit approved" is a useful audit line; "permit touched" is not.
+    """ "permit approved" is a useful audit line; "permit touched" is not.
 
     Only the short closed-vocabulary fields render their values. Free-text
     fields contribute their key name and nothing else, so an operator note or a
@@ -2219,7 +2523,9 @@ def test_audit_summary_logs_decisions_but_never_free_text() -> None:
     from agent_mission_control.security import AUDIT_VALUE_FIELDS, build_request_summary
 
     summary = build_request_summary(
-        "POST", "/permits/p-1/decision", None,
+        "POST",
+        "/permits/p-1/decision",
+        None,
         body={
             "status": "approved",
             "approved": True,
@@ -2236,12 +2542,14 @@ def test_audit_summary_logs_decisions_but_never_free_text() -> None:
 
     # An allowlisted key still cannot carry free text through by being long.
     smuggled = build_request_summary(
-        "POST", "/issues/1/update", None, body={"status": "x" * 200})
+        "POST", "/issues/1/update", None, body={"status": "x" * 200}
+    )
     assert "x" * 50 not in smuggled
 
     # The credential-shaped names are not in the value allowlist.
-    assert not (AUDIT_VALUE_FIELDS & {
-        "api_key", "token", "secret", "password", "env", "value"})
+    assert not (
+        AUDIT_VALUE_FIELDS & {"api_key", "token", "secret", "password", "env", "value"}
+    )
 
 
 async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> None:
@@ -2261,10 +2569,13 @@ async def test_every_typed_adapter_method_accepts_request_id_by_keyword() -> Non
     assert not hasattr(settings, "adapter_token")
     assert not hasattr(settings, "data_backend_mode")
     required = {
-        name for name, value in DataBackend.__dict__.items()
+        name
+        for name, value in DataBackend.__dict__.items()
         if not name.startswith("_") and _inspect.isfunction(value)
     }
-    assert len(required) >= 25 and {"health", "capabilities", "room_binding"} <= required
+    assert (
+        len(required) >= 25 and {"health", "capabilities", "room_binding"} <= required
+    )
 
 
 def test_repository_surface_advertises_owner_mutations() -> None:
@@ -2326,13 +2637,23 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
         async def safe_publish(self, event_type, *_args, **_kw):
             order.append(f"publish:{event_type}")
 
-    def _envelope(data, *, source_id, profile_id, freshness, request_id,
-                  read_only=True, mutations_supported=None):
+    def _envelope(
+        data,
+        *,
+        source_id,
+        profile_id,
+        freshness,
+        request_id,
+        read_only=True,
+        mutations_supported=None,
+    ):
         return {
             "data": data,
             "meta": {
-                "source_id": source_id, "profile_id": profile_id,
-                "freshness": freshness, "read_only": read_only,
+                "source_id": source_id,
+                "profile_id": profile_id,
+                "freshness": freshness,
+                "read_only": read_only,
                 "mutations_supported": list(mutations_supported or []),
                 "request_id": request_id,
             },
@@ -2345,27 +2666,37 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
     core._envelope = _envelope
     core.store = _AuditStore()
     core.event_bus = _Bus()
-    core._record_audit_result = lambda rid, status, result: order.append(f"result:{result}")
+    core._record_audit_result = lambda rid, status, result: order.append(
+        f"result:{result}"
+    )
 
-    with patch.object(repository_routes_module, "RepositorySyncService", lambda **_kw: _FakeService()), \
-         patch.object(repository_routes_module, "RepositoryGitRunner", lambda: object()):
+    with (
+        patch.object(
+            repository_routes_module,
+            "RepositorySyncService",
+            lambda **_kw: _FakeService(),
+        ),
+        patch.object(repository_routes_module, "RepositoryGitRunner", lambda: object()),
+    ):
         router = build_repository_router(core)
 
     def endpoint_for(path: str, method: str):
         for route in router.routes:
-            if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+            if getattr(route, "path", None) == path and method in getattr(
+                route, "methods", set()
+            ):
                 return route.endpoint
         raise AssertionError(f"missing {method} {path}")
 
     merge_path = "/api/repositories/{repo}/pulls/{number}/merge"
     merge = endpoint_for(merge_path, "POST")
-    prepare = endpoint_for(
-        "/api/repositories/{repo}/prepare-superproject-pin", "POST"
-    )
+    prepare = endpoint_for("/api/repositories/{repo}/prepare-superproject-pin", "POST")
 
     def post_request(body: bytes):
         request = Request({
-            "type": "http", "http_version": "1.1", "method": "POST",
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
             "scheme": "http",
             "path": "/api/repositories/repo-a/pulls/5/merge",
             "raw_path": b"/api/repositories/repo-a/pulls/5/merge",
@@ -2382,14 +2713,16 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
     # 1. The guard runs before anything else — even a malformed body cannot
     #    skip past session/CSRF validation to a 400 of its own choosing.
     core._guard_mutation = lambda request: (_ for _ in ()).throw(
-        ApiError(403, "csrf_missing", "CSRF token missing"))
+        ApiError(403, "csrf_missing", "CSRF token missing")
+    )
     try:
         await merge(post_request(b"{not-json"), "repo-a", 5)
         raise AssertionError("guard did not reject the request")
     except ApiError as exc:
         assert exc.status == 403 and exc.code == "csrf_missing"
-    assert service_calls == [] and order == [], \
+    assert service_calls == [] and order == [], (
         f"a rejected request must leave no ledger row and no upstream call: {order}"
+    )
 
     # 2. Guard passes, body is valid JSON but not an object: 400 before any
     #    audit write or upstream call. (Malformed JSON stays a lenient {},
@@ -2399,15 +2732,17 @@ async def test_repository_mutations_guard_before_body_and_audit() -> None:
     assert response.status_code == 400
     payload = response_json(response)
     assert payload["error"]["code"] == "invalid_body"
-    assert order == [] and service_calls == [], \
+    assert order == [] and service_calls == [], (
         "invalid body must precede both the pending audit write and the upstream"
+    )
 
     # 3. Valid request: audit pending BEFORE the call, completion + publish
     #    after; the parsed expected_head_sha reaches the service untouched.
     sha = "abcdef0123456"
     response = await merge(
         post_request(json.dumps({"expected_head_sha": sha}).encode("utf-8")),
-        "repo-a", 5,
+        "repo-a",
+        5,
     )
     assert response.status_code == 200
     body = response_json(response)

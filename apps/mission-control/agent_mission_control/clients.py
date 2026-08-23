@@ -213,7 +213,8 @@ class DashboardClient(_BaseClient):
     async def _ensure_auth(self) -> None:
         if not self._basic_auth_password:
             raise UpstreamError(
-                503, {"error": "dashboard_auth_unconfigured"},
+                503,
+                {"error": "dashboard_auth_unconfigured"},
                 "DASHBOARD_BASIC_AUTH_PASSWORD not configured",
             )
         if self._cookie:
@@ -226,7 +227,11 @@ class DashboardClient(_BaseClient):
             try:
                 resp = await client.post(
                     "/auth/password-login",
-                    json={"provider": "basic", "username": "admin", "password": self._basic_auth_password},
+                    json={
+                        "provider": "basic",
+                        "username": "admin",
+                        "password": self._basic_auth_password,
+                    },
                 )
             except httpx.HTTPError as e:
                 raise UpstreamError(
@@ -234,7 +239,8 @@ class DashboardClient(_BaseClient):
                 ) from e
             if resp.status_code != 200:
                 raise UpstreamError(
-                    resp.status_code, {"error": "dashboard login failed"},
+                    resp.status_code,
+                    {"error": "dashboard login failed"},
                     "dashboard login rejected",
                 )
             self._set_cookie_from_response(resp)
@@ -264,9 +270,15 @@ class DashboardClient(_BaseClient):
         # Call the BASE client request directly so we never recurse back
         # into _authed_request.
         status, body, resp_headers = await super().request(
-            method, path, params=params, json_body=json_body, content=content,
-            inbound_request_id=inbound_request_id, extra_headers=headers,
-            follow_redirects=follow_redirects, raw=raw,
+            method,
+            path,
+            params=params,
+            json_body=json_body,
+            content=content,
+            inbound_request_id=inbound_request_id,
+            extra_headers=headers,
+            follow_redirects=follow_redirects,
+            raw=raw,
         )
         if status == 401 and not _retried:
             # Cookie expired: drop it, re-login, retry exactly once.
@@ -275,9 +287,15 @@ class DashboardClient(_BaseClient):
             headers = dict(extra_headers or {})
             headers.update(self._auth_headers())
             status, body, resp_headers = await super().request(
-                method, path, params=params, json_body=json_body, content=content,
-                inbound_request_id=inbound_request_id, extra_headers=headers,
-                follow_redirects=follow_redirects, raw=raw,
+                method,
+                path,
+                params=params,
+                json_body=json_body,
+                content=content,
+                inbound_request_id=inbound_request_id,
+                extra_headers=headers,
+                follow_redirects=follow_redirects,
+                raw=raw,
             )
         return status, body, resp_headers
 
@@ -307,9 +325,15 @@ class DashboardClient(_BaseClient):
         raw: bool = False,
     ) -> tuple[int, Any, dict[str, str]]:
         return await self._authed_request(
-            method, path, params=params, json_body=json_body, content=content,
-            inbound_request_id=inbound_request_id, extra_headers=extra_headers,
-            follow_redirects=follow_redirects, raw=raw,
+            method,
+            path,
+            params=params,
+            json_body=json_body,
+            content=content,
+            inbound_request_id=inbound_request_id,
+            extra_headers=extra_headers,
+            follow_redirects=follow_redirects,
+            raw=raw,
         )
 
 
@@ -336,8 +360,11 @@ class GatewayClient(_BaseClient):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         super().__init__(
-            base_url, timeout=timeout, route_timeouts=route_timeouts,
-            stream_read_timeout=stream_read_timeout, headers=headers,
+            base_url,
+            timeout=timeout,
+            route_timeouts=route_timeouts,
+            stream_read_timeout=stream_read_timeout,
+            headers=headers,
         )
         self._nas_jwt_secret = nas_jwt_secret
 
@@ -350,14 +377,20 @@ class GatewayClient(_BaseClient):
     ) -> tuple[int, Any, dict[str, str]]:
         """POST /api/cron/fire — NAS-minted JWT credential, not the API key."""
         if not self._nas_jwt_secret:
-            raise UpstreamError(503, {"error": "cron_fire_unconfigured"},
-                                "NAS_JWT_SECRET not configured")
+            raise UpstreamError(
+                503,
+                {"error": "cron_fire_unconfigured"},
+                "NAS_JWT_SECRET not configured",
+            )
         extra = {"Authorization": f"Bearer {self._nas_jwt_secret}"}
         if idempotency_key:
             extra["Idempotency-Key"] = idempotency_key
         return await self.request(
-            "POST", "/api/cron/fire", json_body=body,
-            inbound_request_id=inbound_request_id, extra_headers=extra,
+            "POST",
+            "/api/cron/fire",
+            json_body=body,
+            inbound_request_id=inbound_request_id,
+            extra_headers=extra,
         )
 
     async def get(
@@ -369,5 +402,6 @@ class GatewayClient(_BaseClient):
         raw: bool = False,
     ) -> tuple[int, Any, dict[str, str]]:
         """GET helper (source workers poll /health, /v1/models, ...)."""
-        return await self.request("GET", path, params=params,
-                                  inbound_request_id=inbound_request_id, raw=raw)
+        return await self.request(
+            "GET", path, params=params, inbound_request_id=inbound_request_id, raw=raw
+        )

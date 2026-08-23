@@ -56,7 +56,9 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
     if value is None or value == []:
         return None
     if not isinstance(value, list):
-        raise AttachmentValidationError("invalid_attachments", "attachments must be an array")
+        raise AttachmentValidationError(
+            "invalid_attachments", "attachments must be an array"
+        )
     if len(value) > CHAT_ATTACHMENT_MAX_COUNT:
         raise AttachmentValidationError(
             "too_many_attachments",
@@ -68,7 +70,9 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
     for index, item in enumerate(value):
         label = f"attachment {index + 1}"
         if not isinstance(item, dict):
-            raise AttachmentValidationError("invalid_attachment", f"{label} must be an object")
+            raise AttachmentValidationError(
+                "invalid_attachment", f"{label} must be an object"
+            )
 
         name = item.get("name")
         mime_type = item.get("mime_type")
@@ -76,23 +80,45 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
         declared_size = item.get("size")
         data = item.get("data")
         if not isinstance(name, str) or not name.strip() or len(name) > 255:
-            raise AttachmentValidationError("invalid_attachment_name", f"{label} has an invalid name")
+            raise AttachmentValidationError(
+                "invalid_attachment_name", f"{label} has an invalid name"
+            )
         name = name.strip()
         if any(ord(char) < 32 for char in name) or "/" in name or "\\" in name:
-            raise AttachmentValidationError("invalid_attachment_name", f"{label} name must be a filename")
-        if not isinstance(mime_type, str) or not _MIME_TYPE_RE.fullmatch(mime_type.strip()):
-            raise AttachmentValidationError("invalid_attachment_mime", f"{label} has an invalid mime_type")
+            raise AttachmentValidationError(
+                "invalid_attachment_name", f"{label} name must be a filename"
+            )
+        if not isinstance(mime_type, str) or not _MIME_TYPE_RE.fullmatch(
+            mime_type.strip()
+        ):
+            raise AttachmentValidationError(
+                "invalid_attachment_mime", f"{label} has an invalid mime_type"
+            )
         mime_type = mime_type.strip().lower()
         if kind not in _ATTACHMENT_KINDS:
-            raise AttachmentValidationError("invalid_attachment_kind", f"{label} has an invalid kind")
+            raise AttachmentValidationError(
+                "invalid_attachment_kind", f"{label} has an invalid kind"
+            )
         if kind == "image" and not mime_type.startswith("image/"):
-            raise AttachmentValidationError("invalid_attachment_kind", f"{label} image kind requires image MIME")
+            raise AttachmentValidationError(
+                "invalid_attachment_kind", f"{label} image kind requires image MIME"
+            )
         if kind == "pdf" and mime_type != "application/pdf":
-            raise AttachmentValidationError("invalid_attachment_kind", f"{label} pdf kind requires application/pdf")
-        if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size <= 0:
-            raise AttachmentValidationError("invalid_attachment_size", f"{label} has an invalid size")
+            raise AttachmentValidationError(
+                "invalid_attachment_kind", f"{label} pdf kind requires application/pdf"
+            )
+        if (
+            isinstance(declared_size, bool)
+            or not isinstance(declared_size, int)
+            or declared_size <= 0
+        ):
+            raise AttachmentValidationError(
+                "invalid_attachment_size", f"{label} has an invalid size"
+            )
         if not isinstance(data, str) or not data.strip():
-            raise AttachmentValidationError("attachment_data_required", f"{label} data is required")
+            raise AttachmentValidationError(
+                "attachment_data_required", f"{label} data is required"
+            )
 
         encoded = data.strip()
         match = _DATA_URL_RE.fullmatch(encoded)
@@ -100,7 +126,8 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
             data_mime = match.group(1).strip().lower()
             if data_mime and data_mime != mime_type:
                 raise AttachmentValidationError(
-                    "attachment_mime_mismatch", f"{label} data MIME does not match mime_type"
+                    "attachment_mime_mismatch",
+                    f"{label} data MIME does not match mime_type",
                 )
             encoded = match.group(2)
         encoded = re.sub(r"\s+", "", encoded)
@@ -116,10 +143,14 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
                 "attachment_size_mismatch", f"{label} size does not match decoded data"
             )
         if size > CHAT_ATTACHMENT_MAX_BYTES:
-            raise AttachmentValidationError("attachment_too_large", f"{label} exceeds 700 KB")
+            raise AttachmentValidationError(
+                "attachment_too_large", f"{label} exceeds 700 KB"
+            )
         total_bytes += size
         if total_bytes > CHAT_ATTACHMENTS_TOTAL_BYTES:
-            raise AttachmentValidationError("attachments_too_large", "combined attachments exceed 700 KB")
+            raise AttachmentValidationError(
+                "attachments_too_large", "combined attachments exceed 700 KB"
+            )
 
         data_url = f"data:{mime_type};base64,{encoded}"
         normalized.append({
@@ -138,7 +169,9 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]] | None:
     return normalized
 
 
-async def create_session(gateway: GatewayClient, body: dict, idempotency_key: Optional[str] = None) -> dict:
+async def create_session(
+    gateway: GatewayClient, body: dict, idempotency_key: Optional[str] = None
+) -> dict:
     """Passthrough POST /api/sessions; returns the upstream JSON.
 
     S4 GatewayClient.request returns (status, body, headers).
@@ -148,7 +181,9 @@ async def create_session(gateway: GatewayClient, body: dict, idempotency_key: Op
         extra_headers["Idempotency-Key"] = idempotency_key
     try:
         status, data, _ = await gateway.request(
-            "POST", UPSTREAM_SESSION_CREATE, json_body=body,
+            "POST",
+            UPSTREAM_SESSION_CREATE,
+            json_body=body,
             extra_headers=extra_headers or None,
         )
     except ClientUpstreamError as exc:
@@ -176,7 +211,10 @@ async def _open_stream(
     request_id = uuid.uuid4().hex[:16]
     try:
         resp = await gateway.stream(
-            method, path, json_body=json_body, params=params,
+            method,
+            path,
+            json_body=json_body,
+            params=params,
             extra_headers={"X-Request-Id": request_id},
         )
     except ClientUpstreamError as exc:
@@ -199,7 +237,9 @@ async def stream_chat(
 ) -> tuple[httpx.Response, str]:
     """Start a turn and stream it back. Returns (response, request_id)."""
     return await _open_stream(
-        gateway, "POST", UPSTREAM_CHAT_PATH.format(session_id=session_id),
+        gateway,
+        "POST",
+        UPSTREAM_CHAT_PATH.format(session_id=session_id),
         json_body=body,
     )
 
@@ -221,7 +261,9 @@ async def open_session_events(
     not replay text the reader already has.
     """
     return await _open_stream(
-        gateway, "GET", UPSTREAM_SESSION_EVENTS.format(session_id=session_id),
+        gateway,
+        "GET",
+        UPSTREAM_SESSION_EVENTS.format(session_id=session_id),
         params={"after_seq": after_seq} if after_seq else None,
     )
 
@@ -280,14 +322,19 @@ def open_frame(request_id: str, upstream_request_id: Optional[str] = None) -> st
     agent" from "the request is still in flight", so the composer can show a
     real state instead of freezing.
     """
-    data = json.dumps({"request_id": request_id,
-                       "upstream_request_id": upstream_request_id})
+    data = json.dumps({
+        "request_id": request_id,
+        "upstream_request_id": upstream_request_id,
+    })
     return f"event: bff.open\ndata: {data}\n\n"
 
 
-def error_frame(message: str, request_id: str, upstream_status: Optional[int] = None) -> str:
-    data = json.dumps(
-        {"error": message, "request_id": request_id,
-         "upstream_status": upstream_status}
-    )
+def error_frame(
+    message: str, request_id: str, upstream_status: Optional[int] = None
+) -> str:
+    data = json.dumps({
+        "error": message,
+        "request_id": request_id,
+        "upstream_status": upstream_status,
+    })
     return f"event: error\ndata: {data}\n\n"

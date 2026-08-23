@@ -61,102 +61,396 @@ CREATE TABLE IF NOT EXISTS source_state (
 
 # Fields are intentionally explicit. Unknown upstream keys are dropped.
 PROJECTOR_FIELDS: dict[str, frozenset[str]] = {
-    "source.health": frozenset({"source_id", "healthy", "status", "previous", "checked_at", "message"}),
-    "sessions": frozenset({"id", "session_id", "title", "profile", "platform", "source", "model", "message_count", "created_at", "updated_at", "last_activity_at", "last_active", "ended_at", "end_reason", "archived", "is_active"}),
-    "sessions.running": frozenset({"session_id", "run_id", "started_at", "platform", "profile"}),
-    "kanban.tasks": frozenset({"id", "title", "status", "assignee", "priority", "board", "profile", "current_run_id", "created_at", "updated_at", "started_at", "completed_at", "last_heartbeat_at"}),
-    "permits": frozenset({"permit_id", "id", "title", "status", "severity", "approved", "executed", "created_at", "updated_at", "expires_at"}),
-    "issues": frozenset({"id", "issue", "title", "summary", "status", "severity", "occurrence_count", "first_seen_at", "last_seen_at", "updated_at"}),
-    "cron.jobs": frozenset({"id", "name", "state", "enabled", "schedule", "last_run_at", "next_run_at", "last_status", "profile"}),
-    "alerts": frozenset({"id", "rule_id", "title", "state", "severity", "created_at", "updated_at", "snoozed_until"}),
+    "source.health": frozenset({
+        "source_id",
+        "healthy",
+        "status",
+        "previous",
+        "checked_at",
+        "message",
+    }),
+    "sessions": frozenset({
+        "id",
+        "session_id",
+        "title",
+        "profile",
+        "platform",
+        "source",
+        "model",
+        "message_count",
+        "created_at",
+        "updated_at",
+        "last_activity_at",
+        "last_active",
+        "ended_at",
+        "end_reason",
+        "archived",
+        "is_active",
+    }),
+    "sessions.running": frozenset({
+        "session_id",
+        "run_id",
+        "started_at",
+        "platform",
+        "profile",
+    }),
+    "kanban.tasks": frozenset({
+        "id",
+        "title",
+        "status",
+        "assignee",
+        "priority",
+        "board",
+        "profile",
+        "current_run_id",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "completed_at",
+        "last_heartbeat_at",
+    }),
+    "permits": frozenset({
+        "permit_id",
+        "id",
+        "title",
+        "status",
+        "severity",
+        "approved",
+        "executed",
+        "created_at",
+        "updated_at",
+        "expires_at",
+    }),
+    "issues": frozenset({
+        "id",
+        "issue",
+        "title",
+        "summary",
+        "status",
+        "severity",
+        "occurrence_count",
+        "first_seen_at",
+        "last_seen_at",
+        "updated_at",
+    }),
+    "cron.jobs": frozenset({
+        "id",
+        "name",
+        "state",
+        "enabled",
+        "schedule",
+        "last_run_at",
+        "next_run_at",
+        "last_status",
+        "profile",
+    }),
+    "alerts": frozenset({
+        "id",
+        "rule_id",
+        "title",
+        "state",
+        "severity",
+        "created_at",
+        "updated_at",
+        "snoozed_until",
+    }),
     "repositories": frozenset({
-        "name", "repo_full_name", "branch", "transport", "host", "fork",
-        "upstream_repo", "private", "ok", "state", "current_branch",
-        "local_sha", "remote_sha", "ahead", "behind", "last_commit_at",
-        "last_fetch_at", "updated_at",
+        "name",
+        "repo_full_name",
+        "branch",
+        "transport",
+        "host",
+        "fork",
+        "upstream_repo",
+        "private",
+        "ok",
+        "state",
+        "current_branch",
+        "local_sha",
+        "remote_sha",
+        "ahead",
+        "behind",
+        "last_commit_at",
+        "last_fetch_at",
+        "updated_at",
     }),
     "system-manager.inventory": frozenset({
-        "entity_key", "table", "id", "name", "display_name", "type",
-        "host_id", "manager", "unit", "management_mode", "desired_state",
-        "observed_state", "observed_substate", "health", "restart_count",
-        "last_seen_at", "service", "base_url", "description", "provider",
-        "username", "enabled", "title", "key", "category", "scope_type",
-        "created_at", "updated_at", "revision",
+        "entity_key",
+        "table",
+        "id",
+        "name",
+        "display_name",
+        "type",
+        "host_id",
+        "manager",
+        "unit",
+        "management_mode",
+        "desired_state",
+        "observed_state",
+        "observed_substate",
+        "health",
+        "restart_count",
+        "last_seen_at",
+        "service",
+        "base_url",
+        "description",
+        "provider",
+        "username",
+        "enabled",
+        "title",
+        "key",
+        "category",
+        "scope_type",
+        "created_at",
+        "updated_at",
+        "revision",
     }),
     "action.audit": frozenset({
-        "id", "request_id", "actor", "action", "target", "profile_id",
-        "timestamp", "request_summary", "upstream_status", "result",
+        "id",
+        "request_id",
+        "actor",
+        "action",
+        "target",
+        "profile_id",
+        "timestamp",
+        "request_summary",
+        "upstream_status",
+        "result",
     }),
     "catalog.profiles": frozenset({
-        "name", "is_active", "is_default", "gateway_state", "gateway_running",
-        "description", "model", "provider", "skill_count", "has_env",
+        "name",
+        "is_active",
+        "is_default",
+        "gateway_state",
+        "gateway_running",
+        "description",
+        "model",
+        "provider",
+        "skill_count",
+        "has_env",
     }),
     "catalog.models": frozenset({
-        "id", "model", "provider", "provider_name", "featured", "authenticated",
-        "is_current", "fast", "reasoning", "context", "context_window",
+        "id",
+        "model",
+        "provider",
+        "provider_name",
+        "featured",
+        "authenticated",
+        "is_current",
+        "fast",
+        "reasoning",
+        "context",
+        "context_window",
     }),
     "catalog.tools": frozenset({
-        "name", "label", "enabled", "available", "configured", "state",
-        "description", "tool_count", "tools", "provider", "selected_provider",
+        "name",
+        "label",
+        "enabled",
+        "available",
+        "configured",
+        "state",
+        "description",
+        "tool_count",
+        "tools",
+        "provider",
+        "selected_provider",
     }),
     "catalog.mcp": frozenset({
-        "name", "enabled", "state", "status", "transport", "type", "description",
-        "connected", "tool_count", "url", "command",
+        "name",
+        "enabled",
+        "state",
+        "status",
+        "transport",
+        "type",
+        "description",
+        "connected",
+        "tool_count",
+        "url",
+        "command",
     }),
     "catalog.plugins": frozenset({
-        "name", "enabled", "active", "runtime_status", "state", "version",
-        "description", "summary", "source", "has_dashboard_manifest", "kind",
+        "name",
+        "enabled",
+        "active",
+        "runtime_status",
+        "state",
+        "version",
+        "description",
+        "summary",
+        "source",
+        "has_dashboard_manifest",
+        "kind",
     }),
     "catalog.skills": frozenset({
-        "name", "status", "state", "enabled", "category", "group", "description",
-        "summary", "version", "usage", "provenance", "path", "author",
+        "name",
+        "status",
+        "state",
+        "enabled",
+        "category",
+        "group",
+        "description",
+        "summary",
+        "version",
+        "usage",
+        "provenance",
+        "path",
+        "author",
     }),
     "memory.inventory": frozenset({
-        "file_key", "name", "exists", "size", "modified_at",
+        "file_key",
+        "name",
+        "exists",
+        "size",
+        "modified_at",
     }),
     "config.webhooks": frozenset({
-        "name", "enabled", "state", "deliver", "target", "events", "description",
-        "last_delivery", "last_delivery_at", "last_status",
+        "name",
+        "enabled",
+        "state",
+        "deliver",
+        "target",
+        "events",
+        "description",
+        "last_delivery",
+        "last_delivery_at",
+        "last_status",
     }),
     "config.channels": frozenset({
-        "id", "platform_id", "platform", "name", "label", "enabled", "configured",
-        "connected", "state", "description", "error_code", "gateway_state",
+        "id",
+        "platform_id",
+        "platform",
+        "name",
+        "label",
+        "enabled",
+        "configured",
+        "connected",
+        "state",
+        "description",
+        "error_code",
+        "gateway_state",
     }),
     "artifacts.metadata": frozenset({
-        "id", "attachment_id", "name", "filename", "size", "byte_size", "mime",
-        "content_type", "kind", "task_id", "task_title", "created_at", "uploaded_at",
+        "id",
+        "attachment_id",
+        "name",
+        "filename",
+        "size",
+        "byte_size",
+        "mime",
+        "content_type",
+        "kind",
+        "task_id",
+        "task_title",
+        "created_at",
+        "uploaded_at",
     }),
     "files.metadata": frozenset({
-        "path", "name", "size", "kind", "content_type", "mime", "is_directory",
-        "modified_at", "updated_at",
+        "path",
+        "name",
+        "size",
+        "kind",
+        "content_type",
+        "mime",
+        "is_directory",
+        "modified_at",
+        "updated_at",
     }),
     "command.status": frozenset({
-        "id", "gateway_state", "active_sessions", "active_agents", "cpu_percent",
-        "memory_percent", "disk_percent", "version", "update_available", "checked_at",
+        "id",
+        "gateway_state",
+        "active_sessions",
+        "active_agents",
+        "cpu_percent",
+        "memory_percent",
+        "disk_percent",
+        "version",
+        "update_available",
+        "checked_at",
     }),
     "iframe.health": frozenset({
-        "service", "healthy", "status", "checked_at", "latency_ms",
+        "service",
+        "healthy",
+        "status",
+        "checked_at",
+        "latency_ms",
     }),
     "rooms.binding": frozenset({
-        "slot", "state", "status", "task_id", "chat_id", "thread_ids", "held_since",
-        "bound_at", "occupied", "reserved", "reserved_task", "seat_count",
+        "slot",
+        "state",
+        "status",
+        "task_id",
+        "chat_id",
+        "thread_ids",
+        "held_since",
+        "bound_at",
+        "occupied",
+        "reserved",
+        "reserved_task",
+        "seat_count",
     }),
     "rooms.sessions": frozenset({
-        "session_id", "id", "chat_id", "thread_id", "profile", "title",
-        "last_activity_at", "updated_at", "is_active", "status",
+        "session_id",
+        "id",
+        "chat_id",
+        "thread_id",
+        "profile",
+        "title",
+        "last_activity_at",
+        "updated_at",
+        "is_active",
+        "status",
     }),
 }
 
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
-    "overview.summary": frozenset({"total", "running", "ready", "blocked", "done", "pending_permits", "open_issues"}),
-    "analytics.usage": frozenset({"total_tokens", "tokens", "token_count", "input_tokens", "output_tokens", "cost", "currency", "period", "period_days", "from", "to", "daily", "by_model", "by_task", "tools", "skills", "totals"}),
+    "overview.summary": frozenset({
+        "total",
+        "running",
+        "ready",
+        "blocked",
+        "done",
+        "pending_permits",
+        "open_issues",
+    }),
+    "analytics.usage": frozenset({
+        "total_tokens",
+        "tokens",
+        "token_count",
+        "input_tokens",
+        "output_tokens",
+        "cost",
+        "currency",
+        "period",
+        "period_days",
+        "from",
+        "to",
+        "daily",
+        "by_model",
+        "by_task",
+        "tools",
+        "skills",
+        "totals",
+    }),
     "iframe.health": frozenset({"service", "healthy", "status", "checked_at"}),
 }
 
 FORBIDDEN_KEYS = frozenset({
-    "authorization", "cookie", "cookies", "token", "access_token", "api_key",
-    "password", "secret", "headers", "content", "messages", "transcript",
-    "stored_path", "attachment_path", "env", ".env",
+    "authorization",
+    "cookie",
+    "cookies",
+    "token",
+    "access_token",
+    "api_key",
+    "password",
+    "secret",
+    "headers",
+    "content",
+    "messages",
+    "transcript",
+    "stored_path",
+    "attachment_path",
+    "env",
+    ".env",
 })
 
 
@@ -166,7 +460,9 @@ def _safe_scalar(value: Any) -> Any:
     if isinstance(value, str):
         return value[:4096]
     if isinstance(value, list):
-        return [_safe_scalar(item) for item in value[:200] if not isinstance(item, dict)]
+        return [
+            _safe_scalar(item) for item in value[:200] if not isinstance(item, dict)
+        ]
     return str(value)[:4096]
 
 
@@ -185,13 +481,39 @@ def project_entity(resource_key: str, value: dict[str, Any]) -> dict[str, Any]:
 def project_summary(resource_key: str, value: dict[str, Any]) -> dict[str, Any]:
     if resource_key == "analytics.usage":
         metric_keys = {
-            "day", "model", "model_id", "provider", "task", "tool", "skill",
-            "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens",
-            "total_tokens", "tokens", "token_count", "estimated_cost", "actual_cost",
-            "cost", "currency", "sessions", "api_calls", "tool_calls", "last_used_at",
-            "avg_tokens_per_session", "count", "percentage", "models", "view_count",
-            "manage_count", "manage_calls", "total_skill_loads", "total_skill_edits",
-            "total_skill_actions", "distinct_skills_used",
+            "day",
+            "model",
+            "model_id",
+            "provider",
+            "task",
+            "tool",
+            "skill",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "tokens",
+            "token_count",
+            "estimated_cost",
+            "actual_cost",
+            "cost",
+            "currency",
+            "sessions",
+            "api_calls",
+            "tool_calls",
+            "last_used_at",
+            "avg_tokens_per_session",
+            "count",
+            "percentage",
+            "models",
+            "view_count",
+            "manage_count",
+            "manage_calls",
+            "total_skill_loads",
+            "total_skill_edits",
+            "total_skill_actions",
+            "distinct_skills_used",
         }
 
         def analytics_value(child: Any, depth: int = 0) -> Any:
@@ -222,7 +544,9 @@ def project_summary(resource_key: str, value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _json(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     if len(encoded.encode("utf-8")) > MAX_PROJECTED_JSON_BYTES:
         raise ValueError("projected resource exceeds persistence bound")
     return encoded
@@ -273,13 +597,16 @@ class ReadModel:
             # every currently-global resource so health/replay state cannot
             # expose a second authority after restart.
             global_keys = tuple(
-                key for key, spec in RESOURCE_SPECS.items()
+                key
+                for key, spec in RESOURCE_SPECS.items()
                 if spec.profile_scope == "global"
             )
             if global_keys:
                 marks = ",".join("?" for _ in global_keys)
                 for table in (
-                    "resource_entities", "resource_snapshots", "source_state"
+                    "resource_entities",
+                    "resource_snapshots",
+                    "source_state",
                 ):
                     self._conn.execute(
                         f"DELETE FROM {table} WHERE profile_id<>? "
@@ -301,7 +628,9 @@ class ReadModel:
             raise ValueError("invalid profile id")
         return value
 
-    def _next_revision(self, conn: sqlite3.Connection, profile_id: str, resource_key: str) -> int:
+    def _next_revision(
+        self, conn: sqlite3.Connection, profile_id: str, resource_key: str
+    ) -> int:
         row = conn.execute(
             "SELECT revision FROM source_state WHERE profile_id=? AND resource_key=?",
             (profile_id, resource_key),
@@ -310,7 +639,11 @@ class ReadModel:
 
     @classmethod
     def _scope(cls, resource_key: str, profile_id: str | None) -> str:
-        return "__global__" if RESOURCE_SPECS[resource_key].profile_scope == "global" else cls._profile(profile_id)
+        return (
+            "__global__"
+            if RESOURCE_SPECS[resource_key].profile_scope == "global"
+            else cls._profile(profile_id)
+        )
 
     def replace_entities(
         self,
@@ -348,7 +681,11 @@ class ReadModel:
                     "SELECT revision,fingerprint FROM resource_snapshots WHERE profile_id=? AND resource_key=?",
                     (profile, resource_key),
                 ).fetchone()
-                if existing is not None and fingerprint and existing["fingerprint"] == fingerprint:
+                if (
+                    existing is not None
+                    and fingerprint
+                    and existing["fingerprint"] == fingerprint
+                ):
                     conn.execute(
                         "UPDATE resource_snapshots SET fetched_at=? WHERE profile_id=? AND resource_key=?",
                         (now, profile, resource_key),
@@ -420,7 +757,11 @@ class ReadModel:
                     "SELECT revision,fingerprint FROM resource_snapshots WHERE profile_id=? AND resource_key=?",
                     (profile, resource_key),
                 ).fetchone()
-                if existing is not None and fingerprint and existing["fingerprint"] == fingerprint:
+                if (
+                    existing is not None
+                    and fingerprint
+                    and existing["fingerprint"] == fingerprint
+                ):
                     conn.execute(
                         "UPDATE resource_snapshots SET fetched_at=? WHERE profile_id=? AND resource_key=?",
                         (now, profile, resource_key),
@@ -439,7 +780,14 @@ class ReadModel:
                     "VALUES (?,?,?,?,?,?) ON CONFLICT(profile_id,resource_key) DO UPDATE SET "
                     "revision=excluded.revision,fingerprint=excluded.fingerprint,"
                     "fetched_at=excluded.fetched_at,payload_json=excluded.payload_json",
-                    (profile, resource_key, revision, fingerprint, now, _json(projected)),
+                    (
+                        profile,
+                        resource_key,
+                        revision,
+                        fingerprint,
+                        now,
+                        _json(projected),
+                    ),
                 )
                 conn.execute(
                     "INSERT INTO source_state (profile_id,resource_key,revision,last_success_at,last_error_at,last_error,health) "
@@ -454,9 +802,17 @@ class ReadModel:
             return 0
 
     def record_failure(
-        self, resource_keys: Iterable[str], error: Exception | str, *, profile_id: str = "default"
+        self,
+        resource_keys: Iterable[str],
+        error: Exception | str,
+        *,
+        profile_id: str = "default",
     ) -> None:
-        message = f"{type(error).__name__}: {error}" if isinstance(error, Exception) else str(error)
+        message = (
+            f"{type(error).__name__}: {error}"
+            if isinstance(error, Exception)
+            else str(error)
+        )
         message = message[:500]
         try:
             with self._lock:
@@ -518,10 +874,12 @@ class ReadModel:
                     "revision=excluded.revision,occurred_at=excluded.occurred_at,payload_json=excluded.payload_json",
                     (profile, resource_key, entity_id, revision, now, encoded),
                 )
-                count = int(conn.execute(
-                    "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
-                    (profile, resource_key),
-                ).fetchone()[0])
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
+                        (profile, resource_key),
+                    ).fetchone()[0]
+                )
                 conn.execute(
                     "INSERT INTO resource_snapshots "
                     "(profile_id,resource_key,revision,fingerprint,fetched_at,payload_json) "
@@ -565,10 +923,12 @@ class ReadModel:
                     "DELETE FROM resource_entities WHERE profile_id=? AND resource_key=? AND entity_id=?",
                     (profile, resource_key, str(entity_id)),
                 )
-                count = int(conn.execute(
-                    "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
-                    (profile, resource_key),
-                ).fetchone()[0])
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM resource_entities WHERE profile_id=? AND resource_key=?",
+                        (profile, resource_key),
+                    ).fetchone()[0]
+                )
                 conn.execute(
                     "UPDATE resource_snapshots SET revision=?,fetched_at=?,payload_json=? "
                     "WHERE profile_id=? AND resource_key=?",
@@ -590,10 +950,15 @@ class ReadModel:
         if not self.available:
             return 0
         with self._lock:
-            row = self._connection().execute(
-                "SELECT revision FROM source_state WHERE profile_id=? AND resource_key=?",
-                (profile, resource_key),
-            ).fetchone()
+            row = (
+                self
+                ._connection()
+                .execute(
+                    "SELECT revision FROM source_state WHERE profile_id=? AND resource_key=?",
+                    (profile, resource_key),
+                )
+                .fetchone()
+            )
         return int(row[0] if row else 0)
 
     def _degrade(self, exc: Exception) -> None:
@@ -613,7 +978,14 @@ class ReadModel:
             raise KeyError(resource_key)
         profile = self._scope(resource_key, profile_id)
         if not self.available:
-            return {"resource_key": resource_key, "revision": 0, "entities": [], "snapshot": None, "provenance": "unavailable", "error": self.error}
+            return {
+                "resource_key": resource_key,
+                "revision": 0,
+                "entities": [],
+                "snapshot": None,
+                "provenance": "unavailable",
+                "error": self.error,
+            }
         with self._lock:
             conn = self._connection()
             state = conn.execute(
@@ -622,7 +994,13 @@ class ReadModel:
             ).fetchone()
             revision = int(state["revision"] if state else 0)
             if after_revision and revision <= after_revision:
-                return {"resource_key": resource_key, "revision": revision, "entities": [], "snapshot": None, "provenance": "unchanged"}
+                return {
+                    "resource_key": resource_key,
+                    "revision": revision,
+                    "entities": [],
+                    "snapshot": None,
+                    "provenance": "unchanged",
+                }
             snapshot_row = conn.execute(
                 "SELECT payload_json,fetched_at,fingerprint FROM resource_snapshots "
                 "WHERE profile_id=? AND resource_key=?",
@@ -643,14 +1021,22 @@ class ReadModel:
             "resource_key": resource_key,
             "revision": revision,
             "entities": [
-                {"entity_id": row["entity_id"], "revision": int(row["revision"]), "payload": json.loads(row["payload_json"])}
+                {
+                    "entity_id": row["entity_id"],
+                    "revision": int(row["revision"]),
+                    "payload": json.loads(row["payload_json"]),
+                }
                 for row in entity_rows
             ],
-            "snapshot": json.loads(snapshot_row["payload_json"]) if snapshot_row else None,
+            "snapshot": json.loads(snapshot_row["payload_json"])
+            if snapshot_row
+            else None,
             "fetched_at": float(snapshot_row["fetched_at"]) if snapshot_row else None,
             "fingerprint": str(snapshot_row["fingerprint"]) if snapshot_row else "",
             "provenance": "stale" if stale else ("live" if last_success else "missing"),
-            "last_error": str(state["last_error"]) if state and state["last_error"] else None,
+            "last_error": str(state["last_error"])
+            if state and state["last_error"]
+            else None,
         }
 
     def bootstrap(self, route: str, *, profile_id: str = "default") -> dict[str, Any]:
@@ -660,12 +1046,19 @@ class ReadModel:
         return {
             "profile_id": self._profile(profile_id),
             "route": route,
-            "resources": {key: self.resource(key, profile_id=profile_id) for key in resources},
+            "resources": {
+                key: self.resource(key, profile_id=profile_id) for key in resources
+            },
         }
 
     def health(self) -> dict[str, Any]:
         if not self.available:
-            return {"status": "unavailable", "schema_version": 0, "error": self.error, "sources": []}
+            return {
+                "status": "unavailable",
+                "schema_version": 0,
+                "error": self.error,
+                "sources": [],
+            }
         with self._lock:
             conn = self._connection()
             rows = conn.execute(
@@ -674,7 +1067,9 @@ class ReadModel:
             ).fetchall()
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         return {
-            "status": "healthy" if all(row["health"] != "stale" for row in rows) else "degraded",
+            "status": "healthy"
+            if all(row["health"] != "stale" for row in rows)
+            else "degraded",
             "schema_version": version,
             "sources": [dict(row) for row in rows],
         }

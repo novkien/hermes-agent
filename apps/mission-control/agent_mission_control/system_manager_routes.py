@@ -20,7 +20,16 @@ from .security import build_request_summary
 from .system_manager_client import SystemManagerClient
 
 TABLES = frozenset({"hosts", "services", "api", "accounts", "notes"})
-SERVICE_ACTIONS = frozenset({"start", "stop", "restart", "enable", "disable", "refresh"})
+SERVICE_ACTIONS = frozenset({
+    "start",
+    "stop",
+    "restart",
+    "enable",
+    "disable",
+    "refresh",
+})
+
+
 def _sm_cache_ttl() -> float:
     value = os.getenv("SYSTEM_MANAGER_CACHE_TTL_SECONDS", "90") or "90"
     try:
@@ -63,7 +72,10 @@ def _system_manager_cache_key(
 
 
 def _system_manager_cache_is_stale(entry: dict[str, Any], now: float) -> bool:
-    return bool(entry.get("stale_after") is not None and now >= float(entry.get("stale_after", 0.0)))
+    return bool(
+        entry.get("stale_after") is not None
+        and now >= float(entry.get("stale_after", 0.0))
+    )
 
 
 async def _system_manager_cache_get(cache_key: str) -> dict[str, Any] | None:
@@ -90,7 +102,9 @@ async def _system_manager_cache_set(cache_key: str, table: str, payload: Any) ->
                 _SYSTEM_MANAGER_TABLE_CACHE.items(),
                 key=lambda item: float(item[1].get("fetched_at", 0.0)),
             )
-            for key, _ in ordered[: len(_SYSTEM_MANAGER_TABLE_CACHE) - SM_CACHE_MAX_ENTRIES]:
+            for key, _ in ordered[
+                : len(_SYSTEM_MANAGER_TABLE_CACHE) - SM_CACHE_MAX_ENTRIES
+            ]:
                 _SYSTEM_MANAGER_TABLE_CACHE.pop(key, None)
 
 
@@ -115,14 +129,15 @@ async def _refresh_system_manager_cache_entry(
         return
     _SYSTEM_MANAGER_REFRESHING.add(cache_key)
     try:
-        status, body = await client.request("POST", "/v1/db/read", request_id=request_id, json_body=query_payload)
+        status, body = await client.request(
+            "POST", "/v1/db/read", request_id=request_id, json_body=query_payload
+        )
         if status < 400:
             await _system_manager_cache_set(cache_key, table, body)
     except Exception:
         pass
     finally:
         _SYSTEM_MANAGER_REFRESHING.discard(cache_key)
-
 
 
 def _json_error(status: int, code: str, message: str, request_id: str) -> JSONResponse:
@@ -164,7 +179,12 @@ def build_system_manager_router(core: Any) -> APIRouter:
         try:
             status, body = await client.request("GET", "/health", request_id=rid)
         except UpstreamError as exc:
-            return _json_error(_upstream_status(exc.status), "system_manager_unavailable", exc.detail or "unavailable", rid)
+            return _json_error(
+                _upstream_status(exc.status),
+                "system_manager_unavailable",
+                exc.detail or "unavailable",
+                rid,
+            )
         freshness = "live" if status < 400 else "unavailable"
         return JSONResponse(
             core._envelope(  # noqa: SLF001 - same package composition boundary
@@ -181,7 +201,9 @@ def build_system_manager_router(core: Any) -> APIRouter:
     async def table_read(request: Request, table: str) -> Response:
         rid = request.state.request_id
         if table not in TABLES:
-            return _json_error(404, "system_manager_table_unknown", "unknown table", rid)
+            return _json_error(
+                404, "system_manager_table_unknown", "unknown table", rid
+            )
         try:
             where = _where_from_query(request)
             limit = max(1, min(int(request.query_params.get("limit", "100")), 500))
@@ -222,7 +244,9 @@ def build_system_manager_router(core: Any) -> APIRouter:
             )
         if cached is not None and _system_manager_cache_is_stale(cached, now):
             asyncio.create_task(
-                _refresh_system_manager_cache_entry(client, cache_key, table, payload, rid)
+                _refresh_system_manager_cache_entry(
+                    client, cache_key, table, payload, rid
+                )
             )
             return JSONResponse(
                 core._envelope(  # noqa: SLF001
@@ -241,7 +265,9 @@ def build_system_manager_router(core: Any) -> APIRouter:
             )
 
         try:
-            status, body = await client.request("POST", "/v1/db/read", request_id=rid, json_body=payload)
+            status, body = await client.request(
+                "POST", "/v1/db/read", request_id=rid, json_body=payload
+            )
         except UpstreamError as exc:
             if cached is not None:
                 return JSONResponse(
@@ -259,7 +285,12 @@ def build_system_manager_router(core: Any) -> APIRouter:
                     ),
                     status_code=200,
                 )
-            return _json_error(_upstream_status(exc.status), "system_manager_unavailable", exc.detail or "unavailable", rid)
+            return _json_error(
+                _upstream_status(exc.status),
+                "system_manager_unavailable",
+                exc.detail or "unavailable",
+                rid,
+            )
         if status >= 400:
             if cached is not None:
                 return JSONResponse(
@@ -277,7 +308,13 @@ def build_system_manager_router(core: Any) -> APIRouter:
                     ),
                     status_code=200,
                 )
-            return _json_error(_upstream_status(status), "system_manager_unavailable", (body.get("error") if isinstance(body, dict) else None) or "unavailable", rid)
+            return _json_error(
+                _upstream_status(status),
+                "system_manager_unavailable",
+                (body.get("error") if isinstance(body, dict) else None)
+                or "unavailable",
+                rid,
+            )
 
         await _system_manager_cache_set(cache_key, table, body)
         freshness = "live" if status < 400 else "unavailable"
@@ -298,14 +335,18 @@ def build_system_manager_router(core: Any) -> APIRouter:
     async def table_update(request: Request, table: str) -> Response:
         rid = request.state.request_id
         if table not in TABLES:
-            return _json_error(404, "system_manager_table_unknown", "unknown table", rid)
+            return _json_error(
+                404, "system_manager_table_unknown", "unknown table", rid
+            )
         core._guard_mutation(request)  # noqa: SLF001
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001
             return _json_error(400, "invalid_body", "JSON body required", rid)
         if not isinstance(body, dict) or not isinstance(body.get("values"), dict):
-            return _json_error(400, "invalid_body", "body must contain values object", rid)
+            return _json_error(
+                400, "invalid_body", "body must contain values object", rid
+            )
         payload = {"table": table, "values": body["values"]}
         if isinstance(body.get("where"), dict):
             payload["where"] = body["where"]
@@ -318,19 +359,32 @@ def build_system_manager_router(core: Any) -> APIRouter:
                 action="system_manager.db_update",
                 target=target,
                 profile_id=core._request_profile(request),  # noqa: SLF001
-                request_summary=build_request_summary(request.method, target, dict(request.query_params)),
+                request_summary=build_request_summary(
+                    request.method, target, dict(request.query_params)
+                ),
                 upstream_status=None,
                 result="pending",
             )
         except Exception as exc:  # noqa: BLE001
-            return _json_error(503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid
+            )
 
         try:
-            status, upstream = await client.request("POST", "/v1/db/update", request_id=rid, json_body=payload)
+            status, upstream = await client.request(
+                "POST", "/v1/db/update", request_id=rid, json_body=payload
+            )
         except UpstreamError as exc:
             core._record_audit_result(rid, exc.status, f"error:{exc.detail}")  # noqa: SLF001
-            return _json_error(_upstream_status(exc.status), "system_manager_unavailable", exc.detail or "unavailable", rid)
-        core._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")  # noqa: SLF001
+            return _json_error(
+                _upstream_status(exc.status),
+                "system_manager_unavailable",
+                exc.detail or "unavailable",
+                rid,
+            )
+        core._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )  # noqa: SLF001
         if status < 400:
             entity = upstream.get("row") if isinstance(upstream, dict) else None
             entity_id = str(entity.get("id") or "") if isinstance(entity, dict) else ""
@@ -340,7 +394,11 @@ def build_system_manager_router(core: Any) -> APIRouter:
                 "system-manager",
                 table,
                 entity_id,
-                {"event": upstream.get("operation", "updated") if isinstance(upstream, dict) else "updated"},
+                {
+                    "event": upstream.get("operation", "updated")
+                    if isinstance(upstream, dict)
+                    else "updated"
+                },
                 coverage="native",
                 profile_id=core._request_profile(request) or "",  # noqa: SLF001
             )
@@ -365,9 +423,13 @@ def build_system_manager_router(core: Any) -> APIRouter:
             body = await request.json()
         except Exception:  # noqa: BLE001
             return _json_error(400, "invalid_body", "JSON body required", rid)
-        action = str(body.get("action") if isinstance(body, dict) else "").lower().strip()
+        action = (
+            str(body.get("action") if isinstance(body, dict) else "").lower().strip()
+        )
         if action not in SERVICE_ACTIONS:
-            return _json_error(400, "unsupported_action", "unsupported service action", rid)
+            return _json_error(
+                400, "unsupported_action", "unsupported service action", rid
+            )
 
         target = f"/api/system-manager/services/{service_id}/action"
         try:
@@ -377,21 +439,35 @@ def build_system_manager_router(core: Any) -> APIRouter:
                 action=f"system_manager.service.{action}",
                 target=target,
                 profile_id=core._request_profile(request),  # noqa: SLF001
-                request_summary=build_request_summary(request.method, target, dict(request.query_params)),
+                request_summary=build_request_summary(
+                    request.method, target, dict(request.query_params)
+                ),
                 upstream_status=None,
                 result="pending",
             )
         except Exception as exc:  # noqa: BLE001
-            return _json_error(503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid
+            )
 
         try:
             status, upstream = await client.request(
-                "POST", f"/v1/services/{service_id}/action", request_id=rid, json_body={"action": action}
+                "POST",
+                f"/v1/services/{service_id}/action",
+                request_id=rid,
+                json_body={"action": action},
             )
         except UpstreamError as exc:
             core._record_audit_result(rid, exc.status, f"error:{exc.detail}")  # noqa: SLF001
-            return _json_error(_upstream_status(exc.status), "system_manager_unavailable", exc.detail or "unavailable", rid)
-        core._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")  # noqa: SLF001
+            return _json_error(
+                _upstream_status(exc.status),
+                "system_manager_unavailable",
+                exc.detail or "unavailable",
+                rid,
+            )
+        core._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )  # noqa: SLF001
         if status < 400:
             await _system_manager_cache_invalidate(table="services")
             await core.event_bus.safe_publish(
@@ -428,23 +504,40 @@ def build_system_manager_router(core: Any) -> APIRouter:
                 action="system_manager.sync",
                 target=target,
                 profile_id=core._request_profile(request),  # noqa: SLF001
-                request_summary=build_request_summary(request.method, target, dict(request.query_params)),
+                request_summary=build_request_summary(
+                    request.method, target, dict(request.query_params)
+                ),
                 upstream_status=None,
                 result="pending",
             )
         except Exception as exc:  # noqa: BLE001
-            return _json_error(503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(exc).__name__}", rid
+            )
         try:
-            status, upstream = await client.request("POST", "/v1/sync", request_id=rid, json_body={})
+            status, upstream = await client.request(
+                "POST", "/v1/sync", request_id=rid, json_body={}
+            )
         except UpstreamError as exc:
             core._record_audit_result(rid, exc.status, f"error:{exc.detail}")  # noqa: SLF001
-            return _json_error(_upstream_status(exc.status), "system_manager_unavailable", exc.detail or "unavailable", rid)
-        core._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")  # noqa: SLF001
+            return _json_error(
+                _upstream_status(exc.status),
+                "system_manager_unavailable",
+                exc.detail or "unavailable",
+                rid,
+            )
+        core._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )  # noqa: SLF001
         await _system_manager_cache_invalidate()
         if status < 400:
             await core.event_bus.safe_publish(
-                "system-manager.changed", "system-manager", "inventory", "all",
-                {"event": "sync"}, coverage="native",
+                "system-manager.changed",
+                "system-manager",
+                "inventory",
+                "all",
+                {"event": "sync"},
+                coverage="native",
                 profile_id=core._request_profile(request) or "",  # noqa: SLF001
             )
         return JSONResponse(
@@ -463,7 +556,11 @@ def build_system_manager_router(core: Any) -> APIRouter:
 
     router.add_api_route("/api/system-manager/health", health, methods=["GET"])
     router.add_api_route("/api/system-manager/sync", sync_now, methods=["POST"])
-    router.add_api_route("/api/system-manager/services/{service_id}/action", service_action, methods=["POST"])
+    router.add_api_route(
+        "/api/system-manager/services/{service_id}/action",
+        service_action,
+        methods=["POST"],
+    )
     router.add_api_route("/api/system-manager/{table}", table_read, methods=["GET"])
     router.add_api_route("/api/system-manager/{table}", table_update, methods=["PUT"])
     return router

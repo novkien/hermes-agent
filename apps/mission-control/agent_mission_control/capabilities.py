@@ -124,7 +124,9 @@ class CapabilityRegistry:
         # Auth-required proof: /v1/models without valid key must 401.
         try:
             s2, _, _ = await self._gateway.request("GET", "/v1/models")
-            routes_checked.append(f"GET /v1/models -> {s2} (expect 401 = auth gate active)")
+            routes_checked.append(
+                f"GET /v1/models -> {s2} (expect 401 = auth gate active)"
+            )
         except UpstreamError as e:
             s2 = e.status
             routes_checked.append(f"GET /v1/models -> error {s2}")

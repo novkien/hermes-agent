@@ -39,7 +39,11 @@ SUPERPROJECT_BRANCH_PREFIX = "mission-control/hermes-gitlinks-"
 _CODEX_LOGIN = "chatgpt-codex-connector"
 _CODEX_REVIEW_RE = re.compile(r"Reviewed commit:\*{0,2}\s*`([0-9a-fA-F]{7,64})`")
 _FAILED_CONCLUSIONS = {
-    "failure", "timed_out", "cancelled", "action_required", "startup_failure",
+    "failure",
+    "timed_out",
+    "cancelled",
+    "action_required",
+    "startup_failure",
     "stale",
 }
 
@@ -86,7 +90,9 @@ class CommandResult:
 
 
 class RepositorySyncError(RuntimeError):
-    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None):
+    def __init__(
+        self, code: str, message: str, *, details: dict[str, Any] | None = None
+    ):
         super().__init__(message)
         self.code = code
         self.details = details or {}
@@ -116,7 +122,8 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         import yaml
     except ImportError as exc:  # pragma: no cover - Hermes runtime ships PyYAML
         raise RepositorySyncError(
-            "registry_dependency_missing", "PyYAML is required to load repositories.yaml"
+            "registry_dependency_missing",
+            "PyYAML is required to load repositories.yaml",
         ) from exc
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -127,7 +134,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     except (OSError, ValueError, TypeError) as exc:
         raise RepositorySyncError("registry_invalid", str(exc)) from exc
     if not isinstance(payload, dict):
-        raise RepositorySyncError("registry_invalid", "repository registry must be a mapping")
+        raise RepositorySyncError(
+            "registry_invalid", "repository registry must be a mapping"
+        )
     return payload
 
 
@@ -141,21 +150,27 @@ def _clean_name(value: Any, *, field: str) -> str:
 def _clean_repo(value: Any) -> str:
     text = str(value or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text):
-        raise RepositorySyncError("registry_invalid", f"invalid GitHub repository: {value!r}")
+        raise RepositorySyncError(
+            "registry_invalid", f"invalid GitHub repository: {value!r}"
+        )
     return text
 
 
 def _join_home(home: str, template: str, repository: str) -> str:
     relative = template.format(repository=repository).strip().lstrip("/")
     if ".." in PurePosixPath(relative).parts:
-        raise RepositorySyncError("registry_invalid", f"unsafe registry layout: {template!r}")
+        raise RepositorySyncError(
+            "registry_invalid", f"unsafe registry layout: {template!r}"
+        )
     return f"{home.rstrip('/')}/{relative}"
 
 
 def _live_path(home: str, value: Any, *, repository: str) -> str:
     relative = str(value or "").strip()
     if not relative:
-        raise RepositorySyncError("registry_invalid", f"repository {repository} has no work_tree")
+        raise RepositorySyncError(
+            "registry_invalid", f"repository {repository} has no work_tree"
+        )
     if relative in {".", "./"}:
         return home.rstrip("/")
     if relative == "~":
@@ -166,7 +181,9 @@ def _live_path(home: str, value: Any, *, repository: str) -> str:
         relative = relative[6:]
     path = PurePosixPath(relative)
     if ".." in path.parts:
-        raise RepositorySyncError("registry_invalid", f"unsafe work_tree for {repository}: {relative!r}")
+        raise RepositorySyncError(
+            "registry_invalid", f"unsafe work_tree for {repository}: {relative!r}"
+        )
     if path.is_absolute():
         return str(path)
     if not str(path):
@@ -178,13 +195,17 @@ def _scope_paths(value: Any, *, repository: str) -> tuple[str, ...]:
     if value in (None, []):
         return ()
     if not isinstance(value, list):
-        raise RepositorySyncError("registry_invalid", f"repository {repository} paths must be a list")
+        raise RepositorySyncError(
+            "registry_invalid", f"repository {repository} paths must be a list"
+        )
     rows: list[str] = []
     for raw in value:
         item = str(raw or "").strip().strip("/")
         path = PurePosixPath(item)
         if not item or path.is_absolute() or ".." in path.parts or item == ".":
-            raise RepositorySyncError("registry_invalid", f"unsafe scoped path for {repository}: {raw!r}")
+            raise RepositorySyncError(
+                "registry_invalid", f"unsafe scoped path for {repository}: {raw!r}"
+            )
         rows.append(str(path))
     return tuple(dict.fromkeys(rows))
 
@@ -205,14 +226,21 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
     source = Path(path).expanduser() if path is not None else _registry_path()
     payload = _load_yaml(source)
     if int(payload.get("version") or 0) != 1:
-        raise RepositorySyncError("registry_invalid", "repositories.yaml version must be 1")
+        raise RepositorySyncError(
+            "registry_invalid", "repositories.yaml version must be 1"
+        )
 
     layout = payload.get("layout")
     hosts_raw = payload.get("hosts")
     repos_raw = payload.get("repositories")
-    if not isinstance(layout, dict) or not isinstance(hosts_raw, dict) or not isinstance(repos_raw, dict):
+    if (
+        not isinstance(layout, dict)
+        or not isinstance(hosts_raw, dict)
+        or not isinstance(repos_raw, dict)
+    ):
         raise RepositorySyncError(
-            "registry_invalid", "registry requires layout, hosts, and repositories mappings"
+            "registry_invalid",
+            "registry requires layout, hosts, and repositories mappings",
         )
 
     git_template = str(layout.get("git_dir") or "repos/{repository}.git")
@@ -220,33 +248,47 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
     for raw_name, raw_spec in hosts_raw.items():
         name = _clean_name(raw_name, field="host name")
         if not isinstance(raw_spec, dict):
-            raise RepositorySyncError("registry_invalid", f"host {name} must be a mapping")
+            raise RepositorySyncError(
+                "registry_invalid", f"host {name} must be a mapping"
+            )
         transport = str(raw_spec.get("transport") or "local").strip().lower()
         if transport not in {"local", "ssh"}:
-            raise RepositorySyncError("registry_invalid", f"unsupported transport for {name}")
+            raise RepositorySyncError(
+                "registry_invalid", f"unsupported transport for {name}"
+            )
         ssh_target = str(raw_spec.get("ssh_target") or "").strip() or None
         env_name = f"HERMES_REPOSITORY_HOST_{name.upper().replace('-', '_')}_SSH"
         ssh_target = (os.getenv(env_name) or ssh_target or "").strip() or None
         if transport == "ssh" and not ssh_target:
-            raise RepositorySyncError("registry_invalid", f"SSH host {name} has no ssh_target")
+            raise RepositorySyncError(
+                "registry_invalid", f"SSH host {name} has no ssh_target"
+            )
         home = str(raw_spec.get("hermes_home") or "~/.hermes").strip()
         if not home:
-            raise RepositorySyncError("registry_invalid", f"host {name} has no hermes_home")
+            raise RepositorySyncError(
+                "registry_invalid", f"host {name} has no hermes_home"
+            )
         hosts[name] = HostSpec(name, transport, ssh_target, home)
 
     registry: dict[str, RepoSpec] = {}
     for raw_name, raw_spec in repos_raw.items():
         name = _clean_name(raw_name, field="repository name")
         if not isinstance(raw_spec, dict):
-            raise RepositorySyncError("registry_invalid", f"repository {name} must be a mapping")
+            raise RepositorySyncError(
+                "registry_invalid", f"repository {name} must be a mapping"
+            )
         repo_full_name = _clean_repo(raw_spec.get("github"))
         branch = _clean_name(raw_spec.get("branch"), field=f"{name} branch")
         host_name = _clean_name(raw_spec.get("host"), field=f"{name} host")
         if host_name not in hosts:
-            raise RepositorySyncError("registry_invalid", f"unknown host {host_name!r} for {name}")
+            raise RepositorySyncError(
+                "registry_invalid", f"unknown host {host_name!r} for {name}"
+            )
         host = hosts[host_name]
         visibility = str(raw_spec.get("visibility") or "private").strip().lower()
-        work_tree = _live_path(host.hermes_home, raw_spec.get("work_tree"), repository=name)
+        work_tree = _live_path(
+            host.hermes_home, raw_spec.get("work_tree"), repository=name
+        )
         local_mode = str(raw_spec.get("local_mode") or "canonical").strip().lower()
         if local_mode not in {"canonical", "superproject", "remote_only"}:
             raise RepositorySyncError(
@@ -282,7 +324,9 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
             raw_spec.get("origin_url") or f"https://github.com/{repo_full_name}.git"
         ).strip()
         if not origin_url or any(ch in origin_url for ch in "\r\n\x00"):
-            raise RepositorySyncError("registry_invalid", f"invalid origin URL for {name}")
+            raise RepositorySyncError(
+                "registry_invalid", f"invalid origin URL for {name}"
+            )
         registry[name] = RepoSpec(
             name=name,
             repo_full_name=repo_full_name,
@@ -305,7 +349,9 @@ def load_repository_registry(path: str | Path | None = None) -> dict[str, RepoSp
         )
     if not registry:
         raise RepositorySyncError("registry_invalid", "repository registry is empty")
-    superprojects = [spec for spec in registry.values() if spec.local_mode == "superproject"]
+    superprojects = [
+        spec for spec in registry.values() if spec.local_mode == "superproject"
+    ]
     if len(superprojects) != 1:
         raise RepositorySyncError(
             "registry_invalid", "registry requires exactly one superproject repository"
@@ -320,9 +366,13 @@ def default_repository_registry() -> dict[str, RepoSpec]:
 class OperationStore:
     """One bounded append-only owner-operation log under HERMES_HOME/state."""
 
-    def __init__(self, root: str | Path | None = None, *, rotate_bytes: int = 2_000_000):
+    def __init__(
+        self, root: str | Path | None = None, *, rotate_bytes: int = 2_000_000
+    ):
         configured = root or os.getenv("HERMES_REPOSITORY_STATE_DIR")
-        self.root = Path(configured or "~/.hermes/state/repository-control").expanduser()
+        self.root = Path(
+            configured or "~/.hermes/state/repository-control"
+        ).expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "operations.jsonl"
         self.rotate_bytes = max(100_000, int(rotate_bytes))
@@ -334,7 +384,9 @@ class OperationStore:
                 previous.unlink()
             self.path.replace(previous)
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+            handle.write(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            )
 
     def recent(self, repo: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -347,9 +399,11 @@ class OperationStore:
                         item = json.loads(raw)
                     except (json.JSONDecodeError, TypeError):
                         continue
-                    if isinstance(item, dict) and (not repo or item.get("repo") == repo):
+                    if isinstance(item, dict) and (
+                        not repo or item.get("repo") == repo
+                    ):
                         rows.append(item)
-        return rows[-max(1, min(int(limit), 200)):][::-1]
+        return rows[-max(1, min(int(limit), 200)) :][::-1]
 
     def last(self, repo: str) -> dict[str, Any] | None:
         rows = self.recent(repo, 1)
@@ -379,7 +433,9 @@ class OperationStore:
 
 class GitHubRestClient:
     def __init__(self, token: str | None = None, *, timeout: int = 30):
-        self.token = token or os.getenv("AGENTOS_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+        self.token = (
+            token or os.getenv("AGENTOS_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+        )
         self.timeout = max(5, int(timeout))
 
     def request(
@@ -419,17 +475,22 @@ class GitHubRestClient:
             ) from exc
         except URLError as exc:
             raise GitHubApiError(
-                "github_unavailable", f"GitHub API unavailable: {exc.reason}",
+                "github_unavailable",
+                f"GitHub API unavailable: {exc.reason}",
                 details={"path": path},
             ) from exc
 
     def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        payload = self.request("POST", "/graphql", {"query": query, "variables": variables})
+        payload = self.request(
+            "POST", "/graphql", {"query": query, "variables": variables}
+        )
         if not isinstance(payload, dict) or payload.get("errors"):
             message = "GitHub GraphQL request failed"
             if isinstance(payload, dict) and payload.get("errors"):
                 message = str(payload["errors"][0].get("message") or message)
-            raise GitHubApiError("github_graphql_error", message, details={"response": payload})
+            raise GitHubApiError(
+                "github_graphql_error", message, details={"response": payload}
+            )
         return payload
 
     @staticmethod
@@ -437,18 +498,24 @@ class GitHubRestClient:
         return tuple(spec.repo_full_name.split("/", 1))  # type: ignore[return-value]
 
     def pull_detail(self, spec: RepoSpec, number: int) -> dict[str, Any]:
-        payload = self.request("GET", f"/repos/{spec.repo_full_name}/pulls/{int(number)}")
+        payload = self.request(
+            "GET", f"/repos/{spec.repo_full_name}/pulls/{int(number)}"
+        )
         if not isinstance(payload, dict):
-            raise GitHubApiError("github_response_invalid", "invalid pull request response")
+            raise GitHubApiError(
+                "github_response_invalid", "invalid pull request response"
+            )
         return payload
 
     def _checks(self, spec: RepoSpec, head_sha: str) -> dict[str, Any]:
         runs = self.request(
-            "GET", f"/repos/{spec.repo_full_name}/commits/{head_sha}/check-runs?per_page=100",
+            "GET",
+            f"/repos/{spec.repo_full_name}/commits/{head_sha}/check-runs?per_page=100",
             accept="application/vnd.github+json",
         )
         statuses = self.request(
-            "GET", f"/repos/{spec.repo_full_name}/commits/{head_sha}/status?per_page=100"
+            "GET",
+            f"/repos/{spec.repo_full_name}/commits/{head_sha}/status?per_page=100",
         )
         check_rows = runs.get("check_runs", []) if isinstance(runs, dict) else []
         status_rows = statuses.get("statuses", []) if isinstance(statuses, dict) else []
@@ -468,8 +535,11 @@ class GitHubRestClient:
             elif conclusion in {"success", "neutral", "skipped"}:
                 passed += 1
             normalized.append({
-                "name": row.get("name"), "status": status, "conclusion": conclusion,
-                "url": row.get("html_url"), "completed_at": row.get("completed_at"),
+                "name": row.get("name"),
+                "status": status,
+                "conclusion": conclusion,
+                "url": row.get("html_url"),
+                "completed_at": row.get("completed_at"),
             })
         for row in status_rows if isinstance(status_rows, list) else []:
             if not isinstance(row, dict):
@@ -482,8 +552,11 @@ class GitHubRestClient:
             elif state == "success":
                 passed += 1
             normalized.append({
-                "name": row.get("context"), "status": state, "conclusion": state,
-                "url": row.get("target_url"), "completed_at": row.get("updated_at"),
+                "name": row.get("context"),
+                "status": state,
+                "conclusion": state,
+                "url": row.get("target_url"),
+                "completed_at": row.get("updated_at"),
             })
         if failed:
             state = "failed"
@@ -494,8 +567,12 @@ class GitHubRestClient:
         else:
             state = "none"
         return {
-            "state": state, "total": len(normalized), "passed": passed,
-            "pending": pending, "failed": failed, "items": normalized,
+            "state": state,
+            "total": len(normalized),
+            "passed": passed,
+            "pending": pending,
+            "failed": failed,
+            "items": normalized,
         }
 
     def _review_threads(self, spec: RepoSpec, number: int) -> list[dict[str, Any]]:
@@ -518,28 +595,37 @@ class GitHubRestClient:
         }
         """
         try:
-            payload = self.graphql(query, {"owner": owner, "repo": repo, "number": int(number)})
+            payload = self.graphql(
+                query, {"owner": owner, "repo": repo, "number": int(number)}
+            )
         except RepositorySyncError:
             return []
-        nodes = (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get(
-            "reviewThreads", {}
-        ).get("nodes", [])
+        nodes = (
+            (
+                ((payload.get("data") or {}).get("repository") or {}).get("pullRequest")
+                or {}
+            )
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
         rows: list[dict[str, Any]] = []
         for node in nodes if isinstance(nodes, list) else []:
             if not isinstance(node, dict):
                 continue
-            comments = ((node.get("comments") or {}).get("nodes") or [])
+            comments = (node.get("comments") or {}).get("nodes") or []
             rows.append({
                 "id": node.get("id"),
                 "resolved": bool(node.get("isResolved")),
                 "comments": [
                     {
                         "author": ((comment.get("author") or {}).get("login")),
-                        "body": comment.get("body"), "created_at": comment.get("createdAt"),
+                        "body": comment.get("body"),
+                        "created_at": comment.get("createdAt"),
                         "url": comment.get("url"),
                         "commit_sha": ((comment.get("commit") or {}).get("oid")),
                     }
-                    for comment in comments if isinstance(comment, dict)
+                    for comment in comments
+                    if isinstance(comment, dict)
                 ],
             })
         return rows
@@ -548,37 +634,59 @@ class GitHubRestClient:
         self, spec: RepoSpec, number: int, head_sha: str, updated_at: str | None
     ) -> dict[str, Any]:
         reviews = self.request(
-            "GET", f"/repos/{spec.repo_full_name}/pulls/{int(number)}/reviews?per_page=100"
+            "GET",
+            f"/repos/{spec.repo_full_name}/pulls/{int(number)}/reviews?per_page=100",
         )
         comments = self.request(
-            "GET", f"/repos/{spec.repo_full_name}/issues/{int(number)}/comments?per_page=100"
+            "GET",
+            f"/repos/{spec.repo_full_name}/issues/{int(number)}/comments?per_page=100",
         )
         threads = self._review_threads(spec, number)
-        codex_reviews = [
-            row for row in reviews if isinstance(row, dict)
-            and ((row.get("user") or {}).get("login") == _CODEX_LOGIN)
-        ] if isinstance(reviews, list) else []
+        codex_reviews = (
+            [
+                row
+                for row in reviews
+                if isinstance(row, dict)
+                and ((row.get("user") or {}).get("login") == _CODEX_LOGIN)
+            ]
+            if isinstance(reviews, list)
+            else []
+        )
         latest = codex_reviews[-1] if codex_reviews else None
         reviewed_sha = None
         if latest:
             body = str(latest.get("body") or "")
             match = _CODEX_REVIEW_RE.search(body)
-            reviewed_sha = match.group(1) if match else str(latest.get("commit_id") or "") or None
+            reviewed_sha = (
+                match.group(1) if match else str(latest.get("commit_id") or "") or None
+            )
         current = bool(
             reviewed_sha
             and (head_sha.startswith(reviewed_sha) or reviewed_sha.startswith(head_sha))
         )
         codex_threads = [
-            row for row in threads
-            if any(comment.get("author") == _CODEX_LOGIN for comment in row.get("comments", []))
+            row
+            for row in threads
+            if any(
+                comment.get("author") == _CODEX_LOGIN
+                for comment in row.get("comments", [])
+            )
         ]
         unresolved = [row for row in codex_threads if not row.get("resolved")]
-        requests = [
-            row for row in comments if isinstance(row, dict)
-            and "@codex review" in str(row.get("body") or "").lower()
-        ] if isinstance(comments, list) else []
+        requests = (
+            [
+                row
+                for row in comments
+                if isinstance(row, dict)
+                and "@codex review" in str(row.get("body") or "").lower()
+            ]
+            if isinstance(comments, list)
+            else []
+        )
         latest_review_at = str(latest.get("submitted_at") or "") if latest else ""
-        latest_request_at = str(requests[-1].get("created_at") or "") if requests else ""
+        latest_request_at = (
+            str(requests[-1].get("created_at") or "") if requests else ""
+        )
         review_requested_after_latest = bool(
             requests and (not latest or latest_request_at > latest_review_at)
         )
@@ -622,14 +730,19 @@ class GitHubRestClient:
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
             "html_url": row.get("html_url"),
-            "checks": self._checks(spec, head_sha) if head_sha else {"state": "none", "items": []},
+            "checks": self._checks(spec, head_sha)
+            if head_sha
+            else {"state": "none", "items": []},
             "codex": self._codex_state(spec, number, head_sha, row.get("updated_at")),
         }
 
     def open_pulls(self, spec: RepoSpec, *, limit: int = 20) -> list[dict[str, Any]]:
         query = urlencode({
-            "state": "open", "base": spec.branch, "sort": "updated",
-            "direction": "desc", "per_page": min(max(1, limit), 30),
+            "state": "open",
+            "base": spec.branch,
+            "sort": "updated",
+            "direction": "desc",
+            "per_page": min(max(1, limit), 30),
         })
         rows = self.request("GET", f"/repos/{spec.repo_full_name}/pulls?{query}")
         out: list[dict[str, Any]] = []
@@ -640,7 +753,8 @@ class GitHubRestClient:
                     out.append(self.pull_control_state(spec, number))
                 except RepositorySyncError as exc:
                     out.append({
-                        "number": number, "title": row.get("title"),
+                        "number": number,
+                        "title": row.get("title"),
                         "draft": bool(row.get("draft")),
                         "head": (row.get("head") or {}).get("ref"),
                         "head_sha": (row.get("head") or {}).get("sha"),
@@ -657,21 +771,29 @@ class GitHubRestClient:
         head_sha = str((pull.get("head") or {}).get("sha") or "")
         if expected_head_sha and head_sha != expected_head_sha:
             raise GitHubApiError(
-                "pull_head_moved", "pull request head changed before review request",
+                "pull_head_moved",
+                "pull request head changed before review request",
                 details={"expected": expected_head_sha, "actual": head_sha},
             )
         comment = self.request(
-            "POST", f"/repos/{spec.repo_full_name}/issues/{int(number)}/comments",
+            "POST",
+            f"/repos/{spec.repo_full_name}/issues/{int(number)}/comments",
             {"body": "@codex review"},
         )
         return {"requested": True, "head_sha": head_sha, "comment": comment}
 
-    def _draft_mutation(self, spec: RepoSpec, number: int, *, ready: bool) -> dict[str, Any]:
+    def _draft_mutation(
+        self, spec: RepoSpec, number: int, *, ready: bool
+    ) -> dict[str, Any]:
         pull = self.pull_detail(spec, number)
         node_id = str(pull.get("node_id") or "")
         if not node_id:
-            raise GitHubApiError("github_draft_change_failed", "GitHub did not return a PR node id")
-        field = "markPullRequestReadyForReview" if ready else "convertPullRequestToDraft"
+            raise GitHubApiError(
+                "github_draft_change_failed", "GitHub did not return a PR node id"
+            )
+        field = (
+            "markPullRequestReadyForReview" if ready else "convertPullRequestToDraft"
+        )
         query = f"""
         mutation ChangeDraft($id: ID!) {{
           {field}(input: {{pullRequestId: $id}}) {{ pullRequest {{ id isDraft }} }}
@@ -680,7 +802,9 @@ class GitHubRestClient:
         payload = self.graphql(query, {"id": node_id})
         changed = ((payload.get("data") or {}).get(field) or {}).get("pullRequest")
         if not isinstance(changed, dict):
-            raise GitHubApiError("github_draft_change_failed", "GitHub did not change PR draft state")
+            raise GitHubApiError(
+                "github_draft_change_failed", "GitHub did not change PR draft state"
+            )
         return changed
 
     def mark_ready(self, spec: RepoSpec, number: int) -> dict[str, Any]:
@@ -696,7 +820,8 @@ class GitHubRestClient:
         actual_head = str((pull.get("head") or {}).get("sha") or "")
         if expected_head_sha and actual_head != expected_head_sha:
             raise GitHubApiError(
-                "pull_head_moved", "pull request head changed before merge",
+                "pull_head_moved",
+                "pull request head changed before merge",
                 details={"expected": expected_head_sha, "actual": actual_head},
             )
         body: dict[str, Any] = {"merge_method": "rebase"}
@@ -714,7 +839,8 @@ class GitHubRestClient:
         confirmed = self.pull_detail(spec, number)
         if not confirmed.get("merged"):
             raise GitHubApiError(
-                "github_merge_unconfirmed", "GitHub returned merged=true but PR confirmation is not merged",
+                "github_merge_unconfirmed",
+                "GitHub returned merged=true but PR confirmation is not merged",
                 details={"response": confirmed},
             )
         return {
@@ -770,8 +896,11 @@ class GitHubRestClient:
 
     def _open_gitlink_pull(self, spec: RepoSpec) -> dict[str, Any] | None:
         query = urlencode({
-            "state": "open", "base": spec.branch, "sort": "created",
-            "direction": "asc", "per_page": 100,
+            "state": "open",
+            "base": spec.branch,
+            "sort": "created",
+            "direction": "asc",
+            "per_page": 100,
         })
         rows = self.request("GET", f"/repos/{spec.repo_full_name}/pulls?{query}")
         owner = spec.repo_full_name.split("/", 1)[0]
@@ -782,9 +911,8 @@ class GitHubRestClient:
             branch = str(head.get("ref") or "")
             head_repo = str(((head.get("repo") or {}).get("full_name")) or "")
             label = str(head.get("label") or "")
-            if (
-                branch.startswith(SUPERPROJECT_BRANCH_PREFIX)
-                and (head_repo == spec.repo_full_name or label.startswith(f"{owner}:"))
+            if branch.startswith(SUPERPROJECT_BRANCH_PREFIX) and (
+                head_repo == spec.repo_full_name or label.startswith(f"{owner}:")
             ):
                 return row
         return None
@@ -824,17 +952,16 @@ class GitHubRestClient:
             pull_url = current.get("html_url")
             state = "updated"
         else:
-            branch = (
-                f"{SUPERPROJECT_BRANCH_PREFIX}{child.name}-{target[:12]}-{time.time_ns()}"
-            )
+            branch = f"{SUPERPROJECT_BRANCH_PREFIX}{child.name}-{target[:12]}-{time.time_ns()}"
             branch_sha = self._branch_sha(superproject, superproject.branch)
             pull_number = 0
             pull_url = None
             state = "created"
 
         current_pin = self._content_sha(
-            superproject, child.superproject_path, ref=branch
-            if current else superproject.branch
+            superproject,
+            child.superproject_path,
+            ref=branch if current else superproject.branch,
         )
         if current_pin == target:
             return {
@@ -856,12 +983,14 @@ class GitHubRestClient:
             f"/repos/{superproject.repo_full_name}/git/trees",
             {
                 "base_tree": base_tree,
-                "tree": [{
-                    "path": child.superproject_path,
-                    "mode": "160000",
-                    "type": "commit",
-                    "sha": target,
-                }],
+                "tree": [
+                    {
+                        "path": child.superproject_path,
+                        "mode": "160000",
+                        "type": "commit",
+                        "sha": target,
+                    }
+                ],
             },
         )
         tree_sha = str((tree or {}).get("sha") or "")
@@ -881,7 +1010,8 @@ class GitHubRestClient:
         commit_sha = str((commit or {}).get("sha") or "")
         if not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit_sha):
             raise GitHubApiError(
-                "github_response_invalid", "GitHub did not create the superproject commit"
+                "github_response_invalid",
+                "GitHub did not create the superproject commit",
             )
         commit_sha = commit_sha.lower()
 
@@ -916,12 +1046,11 @@ class GitHubRestClient:
             pull_url = (pull or {}).get("html_url")
             if not pull_number:
                 raise GitHubApiError(
-                    "github_response_invalid", "GitHub did not create the gitlink pull request"
+                    "github_response_invalid",
+                    "GitHub did not create the gitlink pull request",
                 )
 
-        verified = self._content_sha(
-            superproject, child.superproject_path, ref=branch
-        )
+        verified = self._content_sha(superproject, child.superproject_path, ref=branch)
         if verified != target:
             raise GitHubApiError(
                 "superproject_pin_unverified",
@@ -947,7 +1076,9 @@ class GitHubRestClient:
         }
 
     def sync_fork(self, _spec: RepoSpec) -> dict[str, Any]:
-        raise RepositorySyncError("upstream_disabled", "upstream synchronization is disabled")
+        raise RepositorySyncError(
+            "upstream_disabled", "upstream synchronization is disabled"
+        )
 
     def fork_drift(self, _spec: RepoSpec) -> None:
         return None
@@ -960,7 +1091,9 @@ class GitRunner:
         self.timeout = max(5, int(timeout))
         self._homes: dict[str, str] = {}
 
-    def _run_process(self, argv: list[str], *, timeout: int | None = None) -> CommandResult:
+    def _run_process(
+        self, argv: list[str], *, timeout: int | None = None
+    ) -> CommandResult:
         started = time.monotonic()
         try:
             proc = subprocess.run(
@@ -973,17 +1106,21 @@ class GitRunner:
             )
         except subprocess.TimeoutExpired as exc:
             raise RepositorySyncError(
-                "command_timeout", f"command timed out after {timeout or self.timeout}s",
+                "command_timeout",
+                f"command timed out after {timeout or self.timeout}s",
                 details={"argv": argv, "stdout": exc.stdout, "stderr": exc.stderr},
             ) from exc
         except OSError as exc:
             raise RepositorySyncError(
-                "command_unavailable", f"unable to execute {argv[0]}: {exc}",
+                "command_unavailable",
+                f"unable to execute {argv[0]}: {exc}",
                 details={"argv": argv},
             ) from exc
         return CommandResult(
-            argv=argv, returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(), stderr=(proc.stderr or "").strip(),
+            argv=argv,
+            returncode=proc.returncode,
+            stdout=(proc.stdout or "").strip(),
+            stderr=(proc.stderr or "").strip(),
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
@@ -1005,7 +1142,8 @@ class GitRunner:
             result = self._host_process(spec, ["sh", "-lc", "printf '%s' \"$HOME\""])
             if result.returncode != 0 or not result.stdout:
                 raise RepositorySyncError(
-                    "host_home_unavailable", f"could not resolve HOME on {spec.host}",
+                    "host_home_unavailable",
+                    f"could not resolve HOME on {spec.host}",
                     details={"stderr": result.stderr},
                 )
             home = result.stdout.splitlines()[-1].strip()
@@ -1022,7 +1160,11 @@ class GitRunner:
             return home
         if value.startswith("$HOME/"):
             return f"{home}/{value[6:]}"
-        return os.path.expandvars(os.path.expanduser(value)) if spec.transport == "local" else value
+        return (
+            os.path.expandvars(os.path.expanduser(value))
+            if spec.transport == "local"
+            else value
+        )
 
     def git_dir(self, spec: RepoSpec) -> str:
         return self.materialize_path(spec, spec.git_dir)
@@ -1033,7 +1175,9 @@ class GitRunner:
     def resolve_path(self, spec: RepoSpec) -> str:
         return self.work_tree(spec)
 
-    def host(self, spec: RepoSpec, *args: str, timeout: int | None = None) -> CommandResult:
+    def host(
+        self, spec: RepoSpec, *args: str, timeout: int | None = None
+    ) -> CommandResult:
         return self._host_process(spec, list(args), timeout=timeout)
 
     def exists(self, spec: RepoSpec, path: str, *, directory: bool = False) -> bool:
@@ -1046,7 +1190,9 @@ class GitRunner:
         if result.returncode != 0:
             raise RepositorySyncError("mkdir_failed", result.stderr or "mkdir failed")
 
-    def git(self, spec: RepoSpec, *args: str, timeout: int | None = None) -> CommandResult:
+    def git(
+        self, spec: RepoSpec, *args: str, timeout: int | None = None
+    ) -> CommandResult:
         return self.host(
             spec,
             "git",
@@ -1056,8 +1202,12 @@ class GitRunner:
             timeout=timeout,
         )
 
-    def git_common(self, spec: RepoSpec, *args: str, timeout: int | None = None) -> CommandResult:
-        return self.host(spec, "git", f"--git-dir={self.git_dir(spec)}", *args, timeout=timeout)
+    def git_common(
+        self, spec: RepoSpec, *args: str, timeout: int | None = None
+    ) -> CommandResult:
+        return self.host(
+            spec, "git", f"--git-dir={self.git_dir(spec)}", *args, timeout=timeout
+        )
 
 
 class RepositorySyncService:
@@ -1080,10 +1230,14 @@ class RepositorySyncService:
         try:
             return self.registry[name]
         except KeyError as exc:
-            raise RepositorySyncError("repo_unknown", f"unknown repository: {name}") from exc
+            raise RepositorySyncError(
+                "repo_unknown", f"unknown repository: {name}"
+            ) from exc
 
     def _superproject_spec(self) -> RepoSpec:
-        rows = [spec for spec in self.registry.values() if spec.local_mode == "superproject"]
+        rows = [
+            spec for spec in self.registry.values() if spec.local_mode == "superproject"
+        ]
         if len(rows) != 1:
             raise RepositorySyncError(
                 "superproject_unavailable",
@@ -1110,16 +1264,22 @@ class RepositorySyncService:
             deleted += int("D" in (x, y))
             conflicts += int(x == "U" or y == "U" or (x, y) in {("A", "A"), ("D", "D")})
         return {
-            "dirty": bool(rows), "entries": len(rows), "modified": modified,
-            "staged": staged, "untracked": untracked, "deleted": deleted,
-            "conflicts": conflicts, "porcelain": rows[:100],
+            "dirty": bool(rows),
+            "entries": len(rows),
+            "modified": modified,
+            "staged": staged,
+            "untracked": untracked,
+            "deleted": deleted,
+            "conflicts": conflicts,
+            "porcelain": rows[:100],
         }
 
     def _run_ok(self, spec: RepoSpec, *args: str) -> str:
         result = self.runner.git(spec, *args)
         if result.returncode != 0:
             raise RepositorySyncError(
-                "git_command_failed", result.stderr or result.stdout or "git command failed",
+                "git_command_failed",
+                result.stderr or result.stdout or "git command failed",
                 details={"argv": result.argv, "returncode": result.returncode},
             )
         return result.stdout
@@ -1157,17 +1317,25 @@ class RepositorySyncService:
 
     def _event_base(self, spec: RepoSpec, action: str, trigger: str) -> dict[str, Any]:
         return {
-            "repo": spec.name, "repo_full_name": spec.repo_full_name,
-            "branch": spec.branch, "host": spec.host, "action": action,
-            "trigger": trigger, "started_at": _now_iso(),
+            "repo": spec.name,
+            "repo_full_name": spec.repo_full_name,
+            "branch": spec.branch,
+            "host": spec.host,
+            "action": action,
+            "trigger": trigger,
+            "started_at": _now_iso(),
         }
 
-    def _finish_event(self, event: dict[str, Any], *, ok: bool, **extra: Any) -> dict[str, Any]:
+    def _finish_event(
+        self, event: dict[str, Any], *, ok: bool, **extra: Any
+    ) -> dict[str, Any]:
         event.update(extra)
         event["ok"] = ok
         event["finished_at"] = _now_iso()
         started = dt.datetime.fromisoformat(event["started_at"].replace("Z", "+00:00"))
-        finished = dt.datetime.fromisoformat(event["finished_at"].replace("Z", "+00:00"))
+        finished = dt.datetime.fromisoformat(
+            event["finished_at"].replace("Z", "+00:00")
+        )
         event["duration_ms"] = int((finished - started).total_seconds() * 1000)
         self.store.append(event)
         return event
@@ -1176,7 +1344,9 @@ class RepositorySyncService:
         return ("--", *spec.scope_paths) if spec.scope_paths else ()
 
     def _tracked_status(self, spec: RepoSpec) -> str:
-        return self._run_ok(spec, "status", "--porcelain=v1", "-uno", *self._scope_args(spec))
+        return self._run_ok(
+            spec, "status", "--porcelain=v1", "-uno", *self._scope_args(spec)
+        )
 
     def _working_status(self, spec: RepoSpec) -> str:
         """Return tracked and untracked local work for merge preservation."""
@@ -1229,7 +1399,9 @@ class RepositorySyncService:
             if staged.returncode != 0:
                 raise RepositorySyncError(
                     "local_stash_failed",
-                    staged.stderr or staged.stdout or "could not stage residual local changes",
+                    staged.stderr
+                    or staged.stdout
+                    or "could not stage residual local changes",
                     details={
                         "working_tree_before": before,
                         "working_tree_after": after,
@@ -1247,7 +1419,9 @@ class RepositorySyncService:
             if supplemental.returncode != 0:
                 raise RepositorySyncError(
                     "local_stash_failed",
-                    supplemental.stderr or supplemental.stdout or "could not stash residual local changes",
+                    supplemental.stderr
+                    or supplemental.stdout
+                    or "could not stash residual local changes",
                     details={
                         "working_tree_before": before,
                         "working_tree_after": after,
@@ -1310,7 +1484,9 @@ class RepositorySyncService:
                 code = "local_restore_conflict" if conflicts else "local_restore_failed"
                 raise RepositorySyncError(
                     code,
-                    restored.stderr or restored.stdout or "could not restore local changes",
+                    restored.stderr
+                    or restored.stdout
+                    or "could not restore local changes",
                     details={
                         "stash_sha": sha,
                         "stash_shas": stash_shas,
@@ -1345,7 +1521,9 @@ class RepositorySyncService:
                     if unstaged.returncode != 0:
                         raise RepositorySyncError(
                             "local_restore_failed",
-                            unstaged.stderr or unstaged.stdout or "could not restore residual index state",
+                            unstaged.stderr
+                            or unstaged.stdout
+                            or "could not restore residual index state",
                             details={
                                 "stash_sha": sha,
                                 "stash_shas": stash_shas,
@@ -1356,14 +1534,19 @@ class RepositorySyncService:
         # Drop only the stashes created by this transaction. Resolve the
         # current top ref each time because dropping one changes stash indexes.
         for _sha in reversed(stash_shas):
-            current_stashes = self._run_ok(spec, "stash", "list", "--format=%H").splitlines()
+            current_stashes = self._run_ok(
+                spec, "stash", "list", "--format=%H"
+            ).splitlines()
             try:
                 index = current_stashes.index(_sha)
             except ValueError as exc:
                 raise RepositorySyncError(
                     "local_stash_drop_failed",
                     "restored local work but could not locate its stash for cleanup",
-                    details={"stash_sha": _sha, "available_stashes": current_stashes[:10]},
+                    details={
+                        "stash_sha": _sha,
+                        "available_stashes": current_stashes[:10],
+                    },
                 ) from exc
             dropped = self.runner.git(spec, "stash", "drop", f"stash@{{{index}}}")
             if dropped.returncode != 0:
@@ -1377,7 +1560,9 @@ class RepositorySyncService:
         return snapshot
 
     def _conflict_files(self, spec: RepoSpec) -> list[str]:
-        result = self.runner.git(spec, "diff", "--name-only", "--diff-filter=U", *self._scope_args(spec))
+        result = self.runner.git(
+            spec, "diff", "--name-only", "--diff-filter=U", *self._scope_args(spec)
+        )
         if result.returncode != 0:
             return []
         return [row for row in result.stdout.splitlines() if row.strip()]
@@ -1387,24 +1572,38 @@ class RepositorySyncService:
             return
         listed = self.runner.git(spec, "ls-files", "-z")
         if listed.returncode != 0:
-            raise RepositorySyncError("scope_list_failed", listed.stderr or "could not list repository files")
+            raise RepositorySyncError(
+                "scope_list_failed", listed.stderr or "could not list repository files"
+            )
         files = [row for row in listed.stdout.split("\0") if row]
         if files:
             for start in range(0, len(files), 200):
-                chunk = files[start:start + 200]
-                reset = self.runner.git(spec, "update-index", "--no-skip-worktree", "--", *chunk)
+                chunk = files[start : start + 200]
+                reset = self.runner.git(
+                    spec, "update-index", "--no-skip-worktree", "--", *chunk
+                )
                 if reset.returncode != 0:
-                    raise RepositorySyncError("scope_index_failed", reset.stderr or "could not reset scope bits")
+                    raise RepositorySyncError(
+                        "scope_index_failed",
+                        reset.stderr or "could not reset scope bits",
+                    )
         prefixes = tuple(path.rstrip("/") + "/" for path in spec.scope_paths)
         outside = [
-            row for row in files
-            if row not in spec.scope_paths and not any(row.startswith(prefix) for prefix in prefixes)
+            row
+            for row in files
+            if row not in spec.scope_paths
+            and not any(row.startswith(prefix) for prefix in prefixes)
         ]
         for start in range(0, len(outside), 200):
-            chunk = outside[start:start + 200]
-            marked = self.runner.git(spec, "update-index", "--skip-worktree", "--", *chunk)
+            chunk = outside[start : start + 200]
+            marked = self.runner.git(
+                spec, "update-index", "--skip-worktree", "--", *chunk
+            )
             if marked.returncode != 0:
-                raise RepositorySyncError("scope_index_failed", marked.stderr or "could not apply source scope")
+                raise RepositorySyncError(
+                    "scope_index_failed",
+                    marked.stderr or "could not apply source scope",
+                )
 
     def initialize_layout(
         self, name: str, *, trigger: str = "dashboard", wait_seconds: float = 0.0
@@ -1428,7 +1627,9 @@ class RepositorySyncService:
             with self.store.lock(name, wait_seconds=wait_seconds):
                 layout = self._layout(spec)
                 if layout["ready"]:
-                    return self._finish_event(event, ok=True, status="noop", layout=layout)
+                    return self._finish_event(
+                        event, ok=True, status="noop", layout=layout
+                    )
                 work_existed = layout["work_tree_exists"]
                 existing_worktree = None
                 if work_existed:
@@ -1445,20 +1646,34 @@ class RepositorySyncService:
                 self.runner.mkdir(spec, str(Path(layout["git_dir"]).parent))
                 self.runner.mkdir(spec, layout["work_tree"])
                 if not layout["git_dir_exists"]:
-                    init = self.runner.host(spec, "git", "init", "--bare", layout["git_dir"])
+                    init = self.runner.host(
+                        spec, "git", "init", "--bare", layout["git_dir"]
+                    )
                     if init.returncode != 0:
-                        raise RepositorySyncError("git_init_failed", init.stderr or init.stdout or "git init --bare failed")
+                        raise RepositorySyncError(
+                            "git_init_failed",
+                            init.stderr or init.stdout or "git init --bare failed",
+                        )
 
-                for key, value in (("core.bare", "false"), ("core.worktree", layout["work_tree"])):
+                for key, value in (
+                    ("core.bare", "false"),
+                    ("core.worktree", layout["work_tree"]),
+                ):
                     cfg = self.runner.git_common(spec, "config", key, value)
                     if cfg.returncode != 0:
-                        raise RepositorySyncError("git_config_failed", cfg.stderr or f"failed to set {key}")
+                        raise RepositorySyncError(
+                            "git_config_failed", cfg.stderr or f"failed to set {key}"
+                        )
 
                 remote = self.runner.git_common(spec, "remote", "get-url", "origin")
                 if remote.returncode != 0:
-                    add = self.runner.git_common(spec, "remote", "add", "origin", spec.origin_url)
+                    add = self.runner.git_common(
+                        spec, "remote", "add", "origin", spec.origin_url
+                    )
                     if add.returncode != 0:
-                        raise RepositorySyncError("remote_add_failed", add.stderr or "remote add failed")
+                        raise RepositorySyncError(
+                            "remote_add_failed", add.stderr or "remote add failed"
+                        )
                 elif remote.stdout.strip() != spec.origin_url:
                     # A failed earlier initialization can leave a bare Git
                     # directory with only the old origin configured.  The
@@ -1479,10 +1694,16 @@ class RepositorySyncService:
                             },
                         )
                 configured = self.runner.git_common(
-                    spec, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"
+                    spec,
+                    "config",
+                    "remote.origin.fetch",
+                    "+refs/heads/*:refs/remotes/origin/*",
                 )
                 if configured.returncode != 0:
-                    raise RepositorySyncError("remote_config_failed", configured.stderr or "remote fetch configuration failed")
+                    raise RepositorySyncError(
+                        "remote_config_failed",
+                        configured.stderr or "remote fetch configuration failed",
+                    )
                 remote_ref = self._origin_ref(spec)
                 if existing_worktree:
                     # Existing live checkouts already contain the complete
@@ -1498,7 +1719,7 @@ class RepositorySyncService:
                         "rev-parse",
                         "--absolute-git-dir",
                     )
-                    shallow_path = f'{shallow.stdout.rstrip("/")}/shallow'
+                    shallow_path = f"{shallow.stdout.rstrip('/')}/shallow"
                     if (
                         shallow.returncode == 0
                         and shallow.stdout
@@ -1509,7 +1730,7 @@ class RepositorySyncService:
                             "cp",
                             "--",
                             shallow_path,
-                            f'{layout["git_dir"]}/shallow',
+                            f"{layout['git_dir']}/shallow",
                         )
                         if copied.returncode != 0:
                             raise RepositorySyncError(
@@ -1533,41 +1754,78 @@ class RepositorySyncService:
                         timeout=max(self.timeout, INITIALIZE_FETCH_TIMEOUT_SECONDS),
                     )
                 if fetched.returncode != 0:
-                    raise RepositorySyncError("fetch_failed", fetched.stderr or fetched.stdout or "fetch failed")
+                    raise RepositorySyncError(
+                        "fetch_failed",
+                        fetched.stderr or fetched.stdout or "fetch failed",
+                    )
 
-                remote_sha = self.runner.git_common(spec, "rev-parse", "--verify", remote_ref)
+                remote_sha = self.runner.git_common(
+                    spec, "rev-parse", "--verify", remote_ref
+                )
                 if remote_sha.returncode != 0:
-                    raise RepositorySyncError("remote_branch_missing", remote_sha.stderr or "remote branch missing")
-                local = self.runner.git_common(spec, "rev-parse", "--verify", f"refs/heads/{spec.branch}")
+                    raise RepositorySyncError(
+                        "remote_branch_missing",
+                        remote_sha.stderr or "remote branch missing",
+                    )
+                local = self.runner.git_common(
+                    spec, "rev-parse", "--verify", f"refs/heads/{spec.branch}"
+                )
                 if local.returncode == 0 and local.stdout != remote_sha.stdout:
                     raise RepositorySyncError(
-                        "production_branch_diverged", "canonical Git directory contains a different branch tip",
-                        details={"branch": spec.branch, "local_sha": local.stdout, "remote_sha": remote_sha.stdout},
+                        "production_branch_diverged",
+                        "canonical Git directory contains a different branch tip",
+                        details={
+                            "branch": spec.branch,
+                            "local_sha": local.stdout,
+                            "remote_sha": remote_sha.stdout,
+                        },
                     )
                 if local.returncode != 0:
-                    updated = self.runner.git_common(spec, "update-ref", f"refs/heads/{spec.branch}", remote_ref)
+                    updated = self.runner.git_common(
+                        spec, "update-ref", f"refs/heads/{spec.branch}", remote_ref
+                    )
                     if updated.returncode != 0:
-                        raise RepositorySyncError("branch_init_failed", updated.stderr or "branch init failed")
-                head = self.runner.git_common(spec, "symbolic-ref", "HEAD", f"refs/heads/{spec.branch}")
+                        raise RepositorySyncError(
+                            "branch_init_failed", updated.stderr or "branch init failed"
+                        )
+                head = self.runner.git_common(
+                    spec, "symbolic-ref", "HEAD", f"refs/heads/{spec.branch}"
+                )
                 if head.returncode != 0:
-                    raise RepositorySyncError("head_config_failed", head.stderr or "HEAD configuration failed")
+                    raise RepositorySyncError(
+                        "head_config_failed", head.stderr or "HEAD configuration failed"
+                    )
 
                 loaded = self.runner.git(spec, "read-tree", f"refs/heads/{spec.branch}")
                 if loaded.returncode != 0:
-                    raise RepositorySyncError("index_init_failed", loaded.stderr or loaded.stdout or "read-tree failed")
+                    raise RepositorySyncError(
+                        "index_init_failed",
+                        loaded.stderr or loaded.stdout or "read-tree failed",
+                    )
                 self._apply_scope(spec)
                 if not work_existed:
                     checkout = self.runner.git(spec, "checkout-index", "-a")
                     if checkout.returncode != 0:
-                        raise RepositorySyncError("live_source_init_failed", checkout.stderr or checkout.stdout or "checkout-index failed")
+                        raise RepositorySyncError(
+                            "live_source_init_failed",
+                            checkout.stderr
+                            or checkout.stdout
+                            or "checkout-index failed",
+                        )
 
                 after = self._layout(spec)
                 if not after["ready"]:
-                    raise RepositorySyncError("layout_unverified", "canonical repository layout was not verified", details=after)
+                    raise RepositorySyncError(
+                        "layout_unverified",
+                        "canonical repository layout was not verified",
+                        details=after,
+                    )
                 return self._finish_event(event, ok=True, status="ok", layout=after)
         except RepositorySyncError as exc:
             return self._finish_event(
-                event, ok=False, status="error",
+                event,
+                ok=False,
+                status="error",
                 error={"code": exc.code, "message": str(exc), "details": exc.details},
             )
 
@@ -1584,18 +1842,26 @@ class RepositorySyncService:
         layout = self._layout(spec)
         superproject_name = next(
             (
-                row.name for row in self.registry.values()
+                row.name
+                for row in self.registry.values()
                 if row.local_mode == "superproject"
             ),
             None,
         )
         base: dict[str, Any] = {
-            "name": spec.name, "repo_full_name": spec.repo_full_name,
-            "branch": spec.branch, "host": spec.host, "transport": spec.transport,
-            "ssh_target": spec.ssh_target, "private": spec.private,
-            "fork": spec.is_fork, "upstream_repo": spec.upstream_repo,
-            "origin_url": spec.origin_url, "layout": layout,
-            "path": layout["work_tree"], "git_dir": layout["git_dir"],
+            "name": spec.name,
+            "repo_full_name": spec.repo_full_name,
+            "branch": spec.branch,
+            "host": spec.host,
+            "transport": spec.transport,
+            "ssh_target": spec.ssh_target,
+            "private": spec.private,
+            "fork": spec.is_fork,
+            "upstream_repo": spec.upstream_repo,
+            "origin_url": spec.origin_url,
+            "layout": layout,
+            "path": layout["work_tree"],
+            "git_dir": layout["git_dir"],
             "local_mode": spec.local_mode,
             "capabilities": {
                 "merge_pr": True,
@@ -1613,17 +1879,30 @@ class RepositorySyncService:
             base["last_operation"] = self.store.last(name)
         if spec.local_mode == "remote_only":
             base.update({
-                "ok": True, "state": "remote_only", "current_branch": None,
-                "local_sha": None, "remote_sha": None, "ahead": 0, "behind": 0,
-                "working_tree": self._dirty_summary(""), "conflict_files": [],
-                "last_commit_at": None, "last_commit_subject": None,
+                "ok": True,
+                "state": "remote_only",
+                "current_branch": None,
+                "local_sha": None,
+                "remote_sha": None,
+                "ahead": 0,
+                "behind": 0,
+                "working_tree": self._dirty_summary(""),
+                "conflict_files": [],
+                "last_commit_at": None,
+                "last_commit_subject": None,
                 "origin_actual": spec.origin_url,
             })
         elif not layout["ready"]:
             base.update({
-                "ok": False, "state": "layout_missing", "current_branch": None,
-                "local_sha": None, "remote_sha": None, "ahead": 0, "behind": 0,
-                "working_tree": self._dirty_summary(""), "conflict_files": [],
+                "ok": False,
+                "state": "layout_missing",
+                "current_branch": None,
+                "local_sha": None,
+                "remote_sha": None,
+                "ahead": 0,
+                "behind": 0,
+                "working_tree": self._dirty_summary(""),
+                "conflict_files": [],
                 "error": {
                     "code": "layout_missing",
                     "message": "canonical live source is not initialized",
@@ -1633,24 +1912,34 @@ class RepositorySyncService:
         else:
             try:
                 if fetch:
-                    fetched = self.runner.git(spec, "fetch", "--prune", "origin", spec.branch)
+                    fetched = self.runner.git(
+                        spec, "fetch", "--prune", "origin", spec.branch
+                    )
                     if fetched.returncode != 0:
                         raise RepositorySyncError(
-                            "fetch_failed", fetched.stderr or fetched.stdout or "git fetch failed"
+                            "fetch_failed",
+                            fetched.stderr or fetched.stdout or "git fetch failed",
                         )
                 branch = self._run_ok(spec, "symbolic-ref", "--short", "HEAD")
                 local_sha = self._run_ok(spec, "rev-parse", "HEAD")
                 remote_sha = self._run_ok(spec, "rev-parse", self._origin_ref(spec))
                 counts = self._run_ok(
-                    spec, "rev-list", "--left-right", "--count",
+                    spec,
+                    "rev-list",
+                    "--left-right",
+                    "--count",
                     f"HEAD...{self._origin_ref(spec)}",
                 ).split()
                 ahead = int(counts[0]) if counts else 0
                 behind = int(counts[1]) if len(counts) > 1 else 0
                 dirty = self._dirty_summary(self._tracked_status(spec))
                 conflicts = self._conflict_files(spec)
-                last = self._run_ok(spec, "log", "-1", "--format=%cI%x00%s").split("\x00", 1)
-                actual_origin = self._run_ok(spec, "config", "--get", "remote.origin.url")
+                last = self._run_ok(spec, "log", "-1", "--format=%cI%x00%s").split(
+                    "\x00", 1
+                )
+                actual_origin = self._run_ok(
+                    spec, "config", "--get", "remote.origin.url"
+                )
                 if conflicts:
                     state = "conflict"
                 elif actual_origin != spec.origin_url:
@@ -1668,9 +1957,14 @@ class RepositorySyncService:
                 else:
                     state = "synced"
                 base.update({
-                    "ok": True, "state": state, "current_branch": branch,
-                    "local_sha": local_sha, "remote_sha": remote_sha,
-                    "ahead": ahead, "behind": behind, "working_tree": dirty,
+                    "ok": True,
+                    "state": state,
+                    "current_branch": branch,
+                    "local_sha": local_sha,
+                    "remote_sha": remote_sha,
+                    "ahead": ahead,
+                    "behind": behind,
+                    "working_tree": dirty,
                     "conflict_files": conflicts,
                     "last_commit_at": last[0] if last else None,
                     "last_commit_subject": last[1] if len(last) > 1 else None,
@@ -1678,8 +1972,13 @@ class RepositorySyncService:
                 })
             except RepositorySyncError as exc:
                 base.update({
-                    "ok": False, "state": "error",
-                    "error": {"code": exc.code, "message": str(exc), "details": exc.details},
+                    "ok": False,
+                    "state": "error",
+                    "error": {
+                        "code": exc.code,
+                        "message": str(exc),
+                        "details": exc.details,
+                    },
                 })
         if include_github:
             try:
@@ -1692,7 +1991,9 @@ class RepositorySyncService:
         base["duration_ms"] = int((time.monotonic() - started) * 1000)
         return base
 
-    def status_all(self, *, fetch: bool = True, include_github: bool = True) -> list[dict[str, Any]]:
+    def status_all(
+        self, *, fetch: bool = True, include_github: bool = True
+    ) -> list[dict[str, Any]]:
         names = list(self.registry)
 
         def one(name: str) -> dict[str, Any]:
@@ -1703,16 +2004,21 @@ class RepositorySyncService:
                 try:
                     if spec.local_mode == "remote_only":
                         raise RepositorySyncError(
-                            "remote_only", "local repository status is intentionally disabled"
+                            "remote_only",
+                            "local repository status is intentionally disabled",
                         )
                     git_dir = self.runner.git_dir(spec)
                     work_tree = self.runner.work_tree(spec)
                 except Exception:  # noqa: BLE001 — an unreachable host must not break the list
                     git_dir, work_tree = spec.git_dir, spec.work_tree
                 return {
-                    "name": name, "repo_full_name": spec.repo_full_name,
-                    "branch": spec.branch, "host": spec.host, "state": "error",
-                    "ok": False, "error": {"code": "status_failed", "message": str(exc)},
+                    "name": name,
+                    "repo_full_name": spec.repo_full_name,
+                    "branch": spec.branch,
+                    "host": spec.host,
+                    "state": "error",
+                    "ok": False,
+                    "error": {"code": "status_failed", "message": str(exc)},
                     "layout": {
                         "git_dir": git_dir,
                         "work_tree": work_tree,
@@ -1738,38 +2044,54 @@ class RepositorySyncService:
             )
         if status.get("origin_actual") != spec.origin_url:
             raise RepositorySyncError(
-                "origin_mismatch", "production origin does not match the registry",
-                details={"expected": spec.origin_url, "actual": status.get("origin_actual")},
+                "origin_mismatch",
+                "production origin does not match the registry",
+                details={
+                    "expected": spec.origin_url,
+                    "actual": status.get("origin_actual"),
+                },
             )
         if status.get("current_branch") != spec.branch:
             raise RepositorySyncError(
-                "wrong_branch", f"production is on {status.get('current_branch')!r}; expected {spec.branch!r}"
+                "wrong_branch",
+                f"production is on {status.get('current_branch')!r}; expected {spec.branch!r}",
             )
         if status.get("conflict_files"):
             raise RepositorySyncError(
-                "preexisting_conflict", "production contains unresolved conflicts",
+                "preexisting_conflict",
+                "production contains unresolved conflicts",
                 details={"conflict_files": status.get("conflict_files")},
             )
         if not allow_dirty and (status.get("working_tree") or {}).get("dirty"):
             raise RepositorySyncError(
-                "production_dirty", "live source has local tracked changes; pull refused",
+                "production_dirty",
+                "live source has local tracked changes; pull refused",
                 details={"working_tree": status.get("working_tree")},
             )
         if int(status.get("ahead") or 0) > 0:
             raise RepositorySyncError(
-                "production_ahead", "production contains local commits; pull refused",
-                details={"ahead": status.get("ahead"), "local_sha": status.get("local_sha")},
+                "production_ahead",
+                "production contains local commits; pull refused",
+                details={
+                    "ahead": status.get("ahead"),
+                    "local_sha": status.get("local_sha"),
+                },
             )
         return status
 
     def _pull_production_locked(self, spec: RepoSpec) -> dict[str, Any]:
         before = self._production_preflight(spec, fetch=True)
         merged = self.runner.git(
-            spec, "merge", "--ff-only", self._origin_ref(spec), timeout=max(self.timeout, 180)
+            spec,
+            "merge",
+            "--ff-only",
+            self._origin_ref(spec),
+            timeout=max(self.timeout, 180),
         )
         if merged.returncode != 0:
             raise RepositorySyncError(
-                "fast_forward_failed", merged.stderr or merged.stdout or "git merge --ff-only failed",
+                "fast_forward_failed",
+                merged.stderr or merged.stdout or "git merge --ff-only failed",
                 details={"returncode": merged.returncode},
             )
         after = self.status(
@@ -1777,13 +2099,18 @@ class RepositorySyncService:
         )
         if not after.get("ok") or after.get("local_sha") != after.get("remote_sha"):
             raise RepositorySyncError(
-                "pull_unverified", "production HEAD does not match origin after pull",
+                "pull_unverified",
+                "production HEAD does not match origin after pull",
                 details={"before": before, "after": after},
             )
         return {
-            "ok": True, "host": spec.host, "git_dir": self.runner.git_dir(spec),
-            "work_tree": self.runner.work_tree(spec), "before_sha": before.get("local_sha"),
-            "after_sha": after.get("local_sha"), "remote_sha": after.get("remote_sha"),
+            "ok": True,
+            "host": spec.host,
+            "git_dir": self.runner.git_dir(spec),
+            "work_tree": self.runner.work_tree(spec),
+            "before_sha": before.get("local_sha"),
+            "after_sha": after.get("local_sha"),
+            "remote_sha": after.get("remote_sha"),
             "changed": before.get("local_sha") != after.get("local_sha"),
         }
 
@@ -1795,15 +2122,23 @@ class RepositorySyncService:
         try:
             with self.store.lock(name, wait_seconds=wait_seconds):
                 production = self._pull_production_locked(spec)
-                return self._finish_event(event, ok=True, status="ok", production=production)
+                return self._finish_event(
+                    event, ok=True, status="ok", production=production
+                )
         except RepositorySyncError as exc:
             return self._finish_event(
-                event, ok=False, status="error",
+                event,
+                ok=False,
+                status="error",
                 error={"code": exc.code, "message": str(exc), "details": exc.details},
             )
 
     def request_codex_review(
-        self, name: str, number: int, *, expected_head_sha: str | None = None,
+        self,
+        name: str,
+        number: int,
+        *,
+        expected_head_sha: str | None = None,
         trigger: str = "dashboard",
     ) -> dict[str, Any]:
         spec = self.spec(name)
@@ -1816,7 +2151,9 @@ class RepositorySyncService:
             return self._finish_event(event, ok=True, status="requested", github=result)
         except RepositorySyncError as exc:
             return self._finish_event(
-                event, ok=False, status="error",
+                event,
+                ok=False,
+                status="error",
                 error={"code": exc.code, "message": str(exc), "details": exc.details},
             )
 
@@ -1828,11 +2165,17 @@ class RepositorySyncService:
         event = self._event_base(spec, action, trigger)
         event["pull_number"] = int(number)
         try:
-            result = self.github.mark_ready(spec, number) if ready else self.github.mark_draft(spec, number)
+            result = (
+                self.github.mark_ready(spec, number)
+                if ready
+                else self.github.mark_draft(spec, number)
+            )
             return self._finish_event(event, ok=True, status="ok", github=result)
         except RepositorySyncError as exc:
             return self._finish_event(
-                event, ok=False, status="error",
+                event,
+                ok=False,
+                status="error",
                 error={"code": exc.code, "message": str(exc), "details": exc.details},
             )
 
@@ -1861,7 +2204,8 @@ class RepositorySyncService:
                 pull = self.github.pull_detail(spec, int(number))
                 if pull.get("draft"):
                     raise RepositorySyncError(
-                        "pull_is_draft", "draft pull request must be marked ready before merge"
+                        "pull_is_draft",
+                        "draft pull request must be marked ready before merge",
                     )
                 local_snapshot = self._stash_local_changes(
                     spec,
@@ -1897,7 +2241,11 @@ class RepositorySyncService:
                         completed_phase="github_merge",
                         github=github_phase,
                         local_changes=local_snapshot,
-                        error={"code": exc.code, "message": str(exc), "details": details},
+                        error={
+                            "code": exc.code,
+                            "message": str(exc),
+                            "details": details,
+                        },
                     )
                 try:
                     self._restore_local_changes(spec, local_snapshot)
@@ -1911,7 +2259,11 @@ class RepositorySyncService:
                         github=github_phase,
                         production=production,
                         local_changes=local_snapshot,
-                        error={"code": exc.code, "message": str(exc), "details": exc.details},
+                        error={
+                            "code": exc.code,
+                            "message": str(exc),
+                            "details": exc.details,
+                        },
                     )
                 return self._finish_event(
                     event,
@@ -1936,7 +2288,10 @@ class RepositorySyncService:
                     "details": restore_error.details,
                 }
             return self._finish_event(
-                event, ok=False, status="error", github=github_phase,
+                event,
+                ok=False,
+                status="error",
+                github=github_phase,
                 local_changes=local_snapshot,
                 error={"code": exc.code, "message": str(exc), "details": details},
             )
@@ -1957,7 +2312,9 @@ class RepositorySyncService:
         if staged.returncode != 0:
             raise RepositorySyncError(
                 "local_commit_failed",
-                staged.stderr or staged.stdout or "could not stage tracked local changes",
+                staged.stderr
+                or staged.stdout
+                or "could not stage tracked local changes",
                 details={"working_tree": before},
             )
         committed = self.runner.git(
@@ -1966,7 +2323,9 @@ class RepositorySyncService:
         if committed.returncode != 0:
             raise RepositorySyncError(
                 "local_commit_failed",
-                committed.stderr or committed.stdout or "could not commit tracked local changes",
+                committed.stderr
+                or committed.stdout
+                or "could not commit tracked local changes",
                 details={"working_tree": before},
             )
         sha = self._run_ok(spec, "rev-parse", "HEAD")
@@ -1993,8 +2352,12 @@ class RepositorySyncService:
             )
         if status.get("origin_actual") != spec.origin_url:
             raise RepositorySyncError(
-                "origin_mismatch", "repository origin does not match the registry",
-                details={"expected": spec.origin_url, "actual": status.get("origin_actual")},
+                "origin_mismatch",
+                "repository origin does not match the registry",
+                details={
+                    "expected": spec.origin_url,
+                    "actual": status.get("origin_actual"),
+                },
             )
         if status.get("current_branch") != spec.branch:
             raise RepositorySyncError(
@@ -2003,7 +2366,8 @@ class RepositorySyncService:
             )
         if status.get("conflict_files"):
             raise RepositorySyncError(
-                "preexisting_conflict", "repository contains unresolved conflicts",
+                "preexisting_conflict",
+                "repository contains unresolved conflicts",
                 details={"conflict_files": status.get("conflict_files")},
             )
         return status
@@ -2014,9 +2378,7 @@ class RepositorySyncService:
         before = self._sync_identity_preflight(spec, fetch=True)
         local_commit = self._commit_tracked_changes(
             spec,
-            message=(
-                commit_message or f"sync: save tracked changes for {spec.name}"
-            ),
+            message=(commit_message or f"sync: save tracked changes for {spec.name}"),
         )
 
         # Refresh after the local commit so a remote update that arrived while
@@ -2025,7 +2387,10 @@ class RepositorySyncService:
         merge: dict[str, Any] = {"changed": False}
         if refreshed.get("ahead") and refreshed.get("behind"):
             merged = self.runner.git(
-                spec, "merge", "--no-edit", self._origin_ref(spec),
+                spec,
+                "merge",
+                "--no-edit",
+                self._origin_ref(spec),
                 timeout=max(self.timeout, 180),
             )
             if merged.returncode != 0:
@@ -2038,7 +2403,9 @@ class RepositorySyncService:
                 }
                 raise RepositorySyncError(
                     code,
-                    merged.stderr or merged.stdout or "could not merge origin into local commits",
+                    merged.stderr
+                    or merged.stdout
+                    or "could not merge origin into local commits",
                     details=details,
                 )
             merge = {
@@ -2047,13 +2414,18 @@ class RepositorySyncService:
             }
         elif refreshed.get("behind"):
             merged = self.runner.git(
-                spec, "merge", "--ff-only", self._origin_ref(spec),
+                spec,
+                "merge",
+                "--ff-only",
+                self._origin_ref(spec),
                 timeout=max(self.timeout, 180),
             )
             if merged.returncode != 0:
                 raise RepositorySyncError(
                     "sync_pull_failed",
-                    merged.stderr or merged.stdout or "could not fast-forward from origin",
+                    merged.stderr
+                    or merged.stdout
+                    or "could not fast-forward from origin",
                     details={"returncode": merged.returncode},
                 )
             merge = {
@@ -2074,7 +2446,9 @@ class RepositorySyncService:
             if pushed_result.returncode != 0:
                 raise RepositorySyncError(
                     "sync_push_failed",
-                    pushed_result.stderr or pushed_result.stdout or "could not push local commits to origin",
+                    pushed_result.stderr
+                    or pushed_result.stdout
+                    or "could not push local commits to origin",
                     details={"returncode": pushed_result.returncode},
                 )
             pushed = True
@@ -2115,7 +2489,8 @@ class RepositorySyncService:
                 details=error.get("details") or {},
             )
         result = self.runner.host(
-            spec, self.runner.materialize_path(spec, spec.sync_script),
+            spec,
+            self.runner.materialize_path(spec, spec.sync_script),
             timeout=max(self.timeout, 300),
         )
         if result.returncode != 0:
@@ -2151,8 +2526,13 @@ class RepositorySyncService:
         }
 
     def sync(
-        self, name: str, *, auto_commit: bool = False, commit_message: str | None = None,
-        trigger: str = "manual", wait_seconds: float = 0.0,
+        self,
+        name: str,
+        *,
+        auto_commit: bool = False,
+        commit_message: str | None = None,
+        trigger: str = "manual",
+        wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
         del auto_commit
         spec = self.spec(name)
@@ -2186,7 +2566,9 @@ class RepositorySyncService:
         spec = self.spec(name)
         event = self._event_base(spec, "commit_local", "dashboard")
         return self._finish_event(
-            event, ok=False, status="retired",
+            event,
+            ok=False,
+            status="retired",
             error={
                 "code": "operation_retired",
                 "message": "production source cannot be committed from Mission Control",
@@ -2195,8 +2577,14 @@ class RepositorySyncService:
         )
 
     def merge_pull_request_rebase(
-        self, name: str, number: int, *, expected_head_sha: str | None = None,
-        trigger: str = "manual", pull_after: bool = True, auto_commit: bool = False,
+        self,
+        name: str,
+        number: int,
+        *,
+        expected_head_sha: str | None = None,
+        trigger: str = "manual",
+        pull_after: bool = True,
+        auto_commit: bool = False,
     ) -> dict[str, Any]:
         del auto_commit, pull_after
         return self.merge_pr(
@@ -2204,8 +2592,13 @@ class RepositorySyncService:
         )
 
     def merge_pr(
-        self, name: str, number: int, *, expected_head_sha: str | None = None,
-        trigger: str = "manual", wait_seconds: float = 0.0,
+        self,
+        name: str,
+        number: int,
+        *,
+        expected_head_sha: str | None = None,
+        trigger: str = "manual",
+        wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
         """Merge on GitHub and prepare an exact parent gitlink PR when managed."""
         spec = self.spec(name)
@@ -2217,7 +2610,8 @@ class RepositorySyncService:
                 pull = self.github.pull_detail(spec, int(number))
                 if pull.get("draft"):
                     raise RepositorySyncError(
-                        "pull_is_draft", "draft pull request must be marked ready before merge"
+                        "pull_is_draft",
+                        "draft pull request must be marked ready before merge",
                     )
                 github = self.github.merge_pr_rebase(
                     spec, int(number), expected_head_sha=expected_head_sha
@@ -2316,8 +2710,13 @@ class RepositorySyncService:
         spec = self.spec(name)
         event = self._event_base(spec, "sync_upstream", "dashboard")
         return self._finish_event(
-            event, ok=False, status="retired",
-            error={"code": "upstream_disabled", "message": "upstream sync is not part of owner PR control"},
+            event,
+            ok=False,
+            status="retired",
+            error={
+                "code": "upstream_disabled",
+                "message": "upstream sync is not part of owner PR control",
+            },
         )
 
     def automation_commands(self) -> dict[str, str]:

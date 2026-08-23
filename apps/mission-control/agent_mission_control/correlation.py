@@ -18,6 +18,7 @@ delegation<->task, issue<->tool_call.
 
 NEVER infer a relation from timestamps alone; inferred edges labeled `inferred`.
 """
+
 from __future__ import annotations
 
 import json
@@ -93,11 +94,15 @@ class CorrelationEngine:
         add_node(nodes, TASK, tid, task)
         session_id = task.get("session_id")
         if session_id:
-            add_edge(edges, TASK, tid, SESSION, session_id, "tasks.session_id", "native")
+            add_edge(
+                edges, TASK, tid, SESSION, session_id, "tasks.session_id", "native"
+            )
             add_node(nodes, SESSION, session_id, {})
         run_id = task.get("current_run_id")
         if run_id:
-            add_edge(edges, TASK, tid, RUN, str(run_id), "tasks.current_run_id", "native")
+            add_edge(
+                edges, TASK, tid, RUN, str(run_id), "tasks.current_run_id", "native"
+            )
             add_node(nodes, RUN, str(run_id), {})
         assignee = task.get("assignee")
         if assignee:
@@ -108,7 +113,12 @@ class CorrelationEngine:
         for r in runs:
             rid = str(r.get("id"))
             add_edge(edges, TASK, tid, RUN, rid, "task_runs.task_id", "native")
-            add_node(nodes, RUN, rid, {"status": r.get("status"), "outcome": r.get("outcome")})
+            add_node(
+                nodes,
+                RUN,
+                rid,
+                {"status": r.get("status"), "outcome": r.get("outcome")},
+            )
             meta = r.get("metadata") or {}
             if isinstance(meta, str):
                 try:
@@ -117,22 +127,47 @@ class CorrelationEngine:
                     meta = {}
             wsid = meta.get("worker_session_id")
             if wsid:
-                add_edge(edges, RUN, rid, SESSION, wsid, "task_runs.metadata.worker_session_id", "inferred")
+                add_edge(
+                    edges,
+                    RUN,
+                    rid,
+                    SESSION,
+                    wsid,
+                    "task_runs.metadata.worker_session_id",
+                    "inferred",
+                )
                 add_node(nodes, SESSION, wsid, {})
         # attachments
         atts = await self._get("task_attachments", tid) or []
         for a in atts:
             aid = str(a.get("id"))
-            add_edge(edges, ARTIFACT, aid, TASK, tid, "task_attachments.task_id", "native")
+            add_edge(
+                edges, ARTIFACT, aid, TASK, tid, "task_attachments.task_id", "native"
+            )
             add_node(nodes, ARTIFACT, aid, {"filename": a.get("filename", "")})
         # issue occurrences referencing this task
         occs = await self._get("issue_occurrences_by_task", tid) or []
         for o in occs:
             iid = str(o.get("issue_id"))
-            add_edge(edges, ISSUE, iid, TASK, tid, "issue_occurrences.task_ref", "native")
-            add_node(nodes, ISSUE, iid, {"severity": o.get("severity", ""), "status": o.get("status", "")})
+            add_edge(
+                edges, ISSUE, iid, TASK, tid, "issue_occurrences.task_ref", "native"
+            )
+            add_node(
+                nodes,
+                ISSUE,
+                iid,
+                {"severity": o.get("severity", ""), "status": o.get("status", "")},
+            )
             if o.get("session_ref"):
-                add_edge(edges, ISSUE, iid, SESSION, o["session_ref"], "issue_occurrences.session_ref", "native")
+                add_edge(
+                    edges,
+                    ISSUE,
+                    iid,
+                    SESSION,
+                    o["session_ref"],
+                    "issue_occurrences.session_ref",
+                    "native",
+                )
                 add_node(nodes, SESSION, o["session_ref"], {})
 
     async def _session_edges(self, session: dict, nodes: dict, edges: list) -> None:
@@ -140,49 +175,126 @@ class CorrelationEngine:
         add_node(nodes, SESSION, sid, session)
         thread_id = session.get("thread_id")
         if thread_id:
-            add_edge(edges, SESSION, sid, THREAD, str(thread_id), "sessions.thread_id", "native")
+            add_edge(
+                edges,
+                SESSION,
+                sid,
+                THREAD,
+                str(thread_id),
+                "sessions.thread_id",
+                "native",
+            )
             add_node(nodes, THREAD, str(thread_id), {})
         parent = session.get("parent_session_id")
         if parent:
-            add_edge(edges, SESSION, sid, SESSION, parent, "sessions.parent_session_id", "native")
+            add_edge(
+                edges,
+                SESSION,
+                sid,
+                SESSION,
+                parent,
+                "sessions.parent_session_id",
+                "native",
+            )
             add_node(nodes, SESSION, parent, {})
         profile = session.get("profile_name")
         if profile:
-            add_edge(edges, PROFILE, profile, SESSION, sid, "sessions.profile_name", "partial")
+            add_edge(
+                edges,
+                PROFILE,
+                profile,
+                SESSION,
+                sid,
+                "sessions.profile_name",
+                "partial",
+            )
             add_node(nodes, PROFILE, profile, {"name": profile})
         # delegations
         deps = await self._get("delegations_by_session", sid) or []
         for d in deps:
             did = d.get("delegation_id") or d.get("id")
             if did:
-                add_edge(edges, DELEGATION, str(did), SESSION, sid, "async_delegations.origin_session", "native")
+                add_edge(
+                    edges,
+                    DELEGATION,
+                    str(did),
+                    SESSION,
+                    sid,
+                    "async_delegations.origin_session",
+                    "native",
+                )
                 add_node(nodes, DELEGATION, str(did), {"state": d.get("state", "")})
         # api requests
         reqs = await self._get("api_requests_by_session", sid) or []
         for r in reqs:
             rid = r.get("api_request_id")
             if rid:
-                add_edge(edges, API_REQUEST, str(rid), SESSION, sid, "llm_provider_requests.session_id", "native")
+                add_edge(
+                    edges,
+                    API_REQUEST,
+                    str(rid),
+                    SESSION,
+                    sid,
+                    "llm_provider_requests.session_id",
+                    "native",
+                )
                 add_node(nodes, API_REQUEST, str(rid), {"model": r.get("model", "")})
                 if r.get("turn_id"):
-                    add_edge(edges, API_REQUEST, str(rid), "turn", str(r["turn_id"]), "llm_provider_requests.turn_id", "native")
+                    add_edge(
+                        edges,
+                        API_REQUEST,
+                        str(rid),
+                        "turn",
+                        str(r["turn_id"]),
+                        "llm_provider_requests.turn_id",
+                        "native",
+                    )
                     add_node(nodes, "turn", str(r["turn_id"]), {})
         # messages with tool_call_id (bounded)
         msgs = await self._get("messages_by_session", sid) or []
         for m in msgs:
             tc = m.get("tool_call_id")
             if tc:
-                add_edge(edges, TOOL_CALL, str(tc), MESSAGE, str(m.get("id")), "messages.tool_call_id", "native")
+                add_edge(
+                    edges,
+                    TOOL_CALL,
+                    str(tc),
+                    MESSAGE,
+                    str(m.get("id")),
+                    "messages.tool_call_id",
+                    "native",
+                )
                 add_node(nodes, TOOL_CALL, str(tc), {})
                 add_node(nodes, MESSAGE, str(m.get("id")), {"role": m.get("role", "")})
         # issue occurrences referencing this session
         occs = await self._get("issue_occurrences_by_session", sid) or []
         for o in occs:
             iid = str(o.get("issue_id"))
-            add_edge(edges, ISSUE, iid, SESSION, sid, "issue_occurrences.session_ref", "native")
-            add_node(nodes, ISSUE, iid, {"severity": o.get("severity", ""), "status": o.get("status", "")})
+            add_edge(
+                edges,
+                ISSUE,
+                iid,
+                SESSION,
+                sid,
+                "issue_occurrences.session_ref",
+                "native",
+            )
+            add_node(
+                nodes,
+                ISSUE,
+                iid,
+                {"severity": o.get("severity", ""), "status": o.get("status", "")},
+            )
             if o.get("task_ref"):
-                add_edge(edges, ISSUE, iid, TASK, o["task_ref"], "issue_occurrences.task_ref", "native")
+                add_edge(
+                    edges,
+                    ISSUE,
+                    iid,
+                    TASK,
+                    o["task_ref"],
+                    "issue_occurrences.task_ref",
+                    "native",
+                )
                 add_node(nodes, TASK, o["task_ref"], {})
 
     async def _issue_edges(self, issue: dict, nodes: dict, edges: list) -> None:
@@ -190,20 +302,52 @@ class CorrelationEngine:
         add_node(nodes, ISSUE, iid, issue)
         for o in issue.get("occurrences", []) or []:
             if o.get("task_ref"):
-                add_edge(edges, ISSUE, iid, TASK, o["task_ref"], "issue_occurrences.task_ref", "native")
+                add_edge(
+                    edges,
+                    ISSUE,
+                    iid,
+                    TASK,
+                    o["task_ref"],
+                    "issue_occurrences.task_ref",
+                    "native",
+                )
                 add_node(nodes, TASK, o["task_ref"], {})
             if o.get("session_ref"):
-                add_edge(edges, ISSUE, iid, SESSION, o["session_ref"], "issue_occurrences.session_ref", "native")
+                add_edge(
+                    edges,
+                    ISSUE,
+                    iid,
+                    SESSION,
+                    o["session_ref"],
+                    "issue_occurrences.session_ref",
+                    "native",
+                )
                 add_node(nodes, SESSION, o["session_ref"], {})
             if o.get("tool_ref"):
-                add_edge(edges, ISSUE, iid, TOOL_CALL, o["tool_ref"], "issue_occurrences.tool_ref (NAME only)", "inferred")
+                add_edge(
+                    edges,
+                    ISSUE,
+                    iid,
+                    TOOL_CALL,
+                    o["tool_ref"],
+                    "issue_occurrences.tool_ref (NAME only)",
+                    "inferred",
+                )
                 add_node(nodes, TOOL_CALL, o["tool_ref"], {})
         # permit -> issue via issue_title "Issue N"
         permits = await self._get("permits_for_issue", iid) or []
         for p in permits:
             pid = p.get("permit_id")
             if pid:
-                add_edge(edges, PERMIT, str(pid), ISSUE, iid, "permits.issue_title parse", "inferred")
+                add_edge(
+                    edges,
+                    PERMIT,
+                    str(pid),
+                    ISSUE,
+                    iid,
+                    "permits.issue_title parse",
+                    "inferred",
+                )
                 add_node(nodes, PERMIT, str(pid), {"status": p.get("status", "")})
 
     # ---- public API ---------------------------------------------------------
@@ -251,10 +395,14 @@ class CorrelationEngine:
             else:
                 partial_hits.add(pair)
 
-        unsupported = [p for p in UNSUPPORTED_PAIRS if any(
-            frozenset((s, t)) == frozenset(p) for s, t in
-            [(e["source_type"], e["target_type"]) for e in edges]
-        )]
+        unsupported = [
+            p
+            for p in UNSUPPORTED_PAIRS
+            if any(
+                frozenset((s, t)) == frozenset(p)
+                for s, t in [(e["source_type"], e["target_type"]) for e in edges]
+            )
+        ]
         if edges and (supported_hits or partial_hits):
             coverage = "complete" if supported_hits else "partial"
         else:
@@ -275,8 +423,10 @@ def add_node(nodes: dict, kind: str, entity_id: Any, data: Optional[dict]) -> No
 
 def add_edge(
     edges: list,
-    src_type: str, src_id: Any,
-    tgt_type: str, tgt_id: Any,
+    src_type: str,
+    src_id: Any,
+    tgt_type: str,
+    tgt_id: Any,
     evidence: str,
     kind: str,
 ) -> None:

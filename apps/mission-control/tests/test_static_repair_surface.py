@@ -16,26 +16,50 @@ def text(relative: str) -> str:
 def require(relative: str, *needles: str) -> None:
     content = text(relative)
     for needle in needles:
-        assert needle in content, f"{relative}: missing required contract marker {needle!r}"
+        assert needle in content, (
+            f"{relative}: missing required contract marker {needle!r}"
+        )
 
 
 def forbid(relative: str, *needles: str) -> None:
     content = text(relative)
     for needle in needles:
-        assert needle not in content, f"{relative}: known broken pattern still present {needle!r}"
+        assert needle not in content, (
+            f"{relative}: known broken pattern still present {needle!r}"
+        )
 
 
 def main() -> None:
-    require("frontend/dist/app.js", "buildHash(route.path, params)", "summarizeSourceHealth(capabilitiesEnvelope?.data)")
-    require("frontend/dist/profile.js", "delete route.params[PROFILE_KEY]", "setProfileInLocation")
-    require("frontend/dist/tabs/chat.js", "export function createChat", "export function createChatModal")
+    require(
+        "frontend/dist/app.js",
+        "buildHash(route.path, params)",
+        "summarizeSourceHealth(capabilitiesEnvelope?.data)",
+    )
+    require(
+        "frontend/dist/profile.js",
+        "delete route.params[PROFILE_KEY]",
+        "setProfileInLocation",
+    )
+    require(
+        "frontend/dist/tabs/chat.js",
+        "export function createChat",
+        "export function createChatModal",
+    )
     # The chat tab is now an orchestrator over tabs/chat/* and pure/chat-*.
     # These markers pin the split itself: the turn reducer must stay pure (no
     # DOM), and the tab must keep going through it rather than poking the
     # transcript from inside the SSE handler again.
-    require("frontend/dist/pure/chat-turn.js", "export function reduceTurn", "export function createTurn")
+    require(
+        "frontend/dist/pure/chat-turn.js",
+        "export function reduceTurn",
+        "export function createTurn",
+    )
     forbid("frontend/dist/pure/chat-turn.js", "document.", "window.")
-    require("frontend/dist/tabs/chat/composer.js", "reduceTurn(turn, event)", "controller.abort()")
+    require(
+        "frontend/dist/tabs/chat/composer.js",
+        "reduceTurn(turn, event)",
+        "controller.abort()",
+    )
     require("frontend/dist/tabs/chat/turn-view.js", "export function createTurnView")
     # Live-verified (browser, 2026-08-12): app.js's navigate() re-mounts and
     # re-activates the CACHED tab instance for the current route on every call
@@ -57,20 +81,49 @@ def main() -> None:
     # repair is that it shapes through `taskRows`; the Stage 6 rebuild moved
     # that call into the `loadEnvelope` pick rather than removing it, so the
     # marker follows the call, not the old local variable name.
-    require("frontend/dist/tabs/overview.js", "pick: taskRows", "import { createStatRow }")
+    require(
+        "frontend/dist/tabs/overview.js", "pick: taskRows", "import { createStatRow }"
+    )
     # Same repair, same rule: pin the CALL, not the local variable that happens
     # to receive it. The Stage 7 filter work renamed it to `loaded` so the
     # filtered subset could keep the name `rows`.
-    require("frontend/dist/tabs/kanban.js", "taskRows(tasks.data)", "createKanbanRunAnalysis")
-    require("frontend/dist/tabs/kanban-analysis.js", "export function createKanbanRunAnalysis")
+    require(
+        "frontend/dist/tabs/kanban.js",
+        "taskRows(tasks.data)",
+        "createKanbanRunAnalysis",
+    )
+    require(
+        "frontend/dist/tabs/kanban-analysis.js",
+        "export function createKanbanRunAnalysis",
+    )
     forbid("frontend/dist/app.js", "createRunInspector")
     require("frontend/dist/tabs/sessions.js", "sessionRows(sessions.data)", "offset")
     require("frontend/dist/tabs/alerts.js", "alertRows(alerts.data)")
-    require("frontend/dist/tabs/skills.js", "export function renderSkills", "Array.isArray(raw)")
-    require("frontend/dist/tabs/plugins.js", "export function renderPlugins", "Array.isArray(raw)")
-    require("frontend/dist/tabs/logs.js", "export function createLogs", "logLines(envelope.data)")
-    require("frontend/dist/tabs/command-center.js", "export function createCommandCenter", "/api/upstream/api/ops/doctor")
-    require("frontend/dist/tabs/llama-proxy.js", "export function createLlamaProxy", "LLaMA_PROXY_URL")
+    require(
+        "frontend/dist/tabs/skills.js",
+        "export function renderSkills",
+        "Array.isArray(raw)",
+    )
+    require(
+        "frontend/dist/tabs/plugins.js",
+        "export function renderPlugins",
+        "Array.isArray(raw)",
+    )
+    require(
+        "frontend/dist/tabs/logs.js",
+        "export function createLogs",
+        "logLines(envelope.data)",
+    )
+    require(
+        "frontend/dist/tabs/command-center.js",
+        "export function createCommandCenter",
+        "/api/upstream/api/ops/doctor",
+    )
+    require(
+        "frontend/dist/tabs/llama-proxy.js",
+        "export function createLlamaProxy",
+        "LLaMA_PROXY_URL",
+    )
     # Room-slot reset has a persistent inline confirmation, not a browser-native
     # modal or short timer that can disappear without making a request. The plugin
     # result remains in the inspector with each old -> new session transition.
@@ -83,14 +136,22 @@ def main() -> None:
         "new_session_id",
     )
     forbid("frontend/dist/tabs/room-binding.js", "window.confirm(")
-    require("frontend/dist/styles.css", ".room-slot-reset-outcome", ".room-slot-reset-results")
+    require(
+        "frontend/dist/styles.css",
+        ".room-slot-reset-outcome",
+        ".room-slot-reset-results",
+    )
     require(
         "frontend/dist/tabs/system-manager.js",
         "columns: columnsFor(active)",
         "emptyTitle: `No ${active} records`",
         "Running systemd/Docker services are discovered by the 30-second reconciler.",
     )
-    require("frontend/dist/pure/data-shape.js", "export function listFrom", "export function summarizeSourceHealth")
+    require(
+        "frontend/dist/pure/data-shape.js",
+        "export function listFrom",
+        "export function summarizeSourceHealth",
+    )
     # Context-window gauge. The panel must stay INSIDE .chat-composer and above
     # .chat-composer-box: that placement is what makes it expand upward into
     # the transcript instead of overlaying it or pushing the input off-screen.
@@ -103,7 +164,9 @@ def main() -> None:
         "frontend/dist/tabs/chat/composer.js",
         "if (contextPanel) box.append(contextPanel.node);",
     )
-    require("frontend/dist/pure/context-window.js", "export function normalizeContextWindow")
+    require(
+        "frontend/dist/pure/context-window.js", "export function normalizeContextWindow"
+    )
     require("frontend/dist/styles.css", ".chat-context-panel", "--context-reserve")
 
     forbid("frontend/dist/tabs/overview.js", "(runningTasks.data || []).slice")

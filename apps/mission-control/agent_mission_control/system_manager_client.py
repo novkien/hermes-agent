@@ -22,7 +22,11 @@ class SystemManagerClient:
     source_id = "system-manager"
 
     def __init__(self) -> None:
-        self.base_url = (os.getenv("SYSTEM_MANAGER_URL", DEFAULT_URL) or DEFAULT_URL).strip().rstrip("/")
+        self.base_url = (
+            (os.getenv("SYSTEM_MANAGER_URL", DEFAULT_URL) or DEFAULT_URL)
+            .strip()
+            .rstrip("/")
+        )
         self.token = (os.getenv("SYSTEM_MANAGER_TOKEN", "") or "").strip()
         try:
             timeout = float(os.getenv("SYSTEM_MANAGER_TIMEOUT_SECONDS", "15") or "15")
@@ -45,10 +49,16 @@ class SystemManagerClient:
             # A short-lived client keeps this optional integration free of new
             # AppDeps/shutdown ownership. The daemon is LAN/local and requests
             # are low-frequency operator/inventory calls.
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
-                response = await client.request(method, path, json=json_body, headers=headers)
+            async with httpx.AsyncClient(
+                base_url=self.base_url, timeout=self.timeout
+            ) as client:
+                response = await client.request(
+                    method, path, json=json_body, headers=headers
+                )
         except httpx.TimeoutException as exc:
-            raise UpstreamError(504, {"error": "system_manager_timeout"}, "timeout") from exc
+            raise UpstreamError(
+                504, {"error": "system_manager_timeout"}, "timeout"
+            ) from exc
         except httpx.HTTPError as exc:
             raise UpstreamError(
                 502,
@@ -58,5 +68,8 @@ class SystemManagerClient:
         try:
             body = response.json()
         except ValueError:
-            body = {"success": False, "error": response.text[:1000] or "invalid upstream response"}
+            body = {
+                "success": False,
+                "error": response.text[:1000] or "invalid upstream response",
+            }
         return response.status_code, body

@@ -68,8 +68,11 @@ def redact_text(text: str) -> str:
         text,
     )
     text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer <redacted>", text)
-    text = re.sub(r"(?i)\b(password|passwd|api[_-]?key|secret|token)\s*[:=]\s*\S+",
-                  r"\1=<redacted>", text)
+    text = re.sub(
+        r"(?i)\b(password|passwd|api[_-]?key|secret|token)\s*[:=]\s*\S+",
+        r"\1=<redacted>",
+        text,
+    )
     return text
 
 
@@ -85,8 +88,15 @@ def redact_query_params(params: dict[str, str]) -> dict[str, str]:
 # only "permit touched". Everything not listed stays key-name-only, and even
 # these are length-capped so a caller cannot smuggle free text through one.
 AUDIT_VALUE_FIELDS = frozenset({
-    "status", "approved", "executed", "event_type", "enabled", "state",
-    "severity", "confirm", "action",
+    "status",
+    "approved",
+    "executed",
+    "event_type",
+    "enabled",
+    "state",
+    "severity",
+    "confirm",
+    "action",
 })
 _AUDIT_VALUE_MAX = 32
 
@@ -133,7 +143,8 @@ def build_request_summary(
         decided = [
             f"{k}={rendered}"
             for k in sorted(body)
-            if k in AUDIT_VALUE_FIELDS and (rendered := _audit_value(body[k])) is not None
+            if k in AUDIT_VALUE_FIELDS
+            and (rendered := _audit_value(body[k])) is not None
         ]
         if decided:
             parts.append(" ".join(decided))

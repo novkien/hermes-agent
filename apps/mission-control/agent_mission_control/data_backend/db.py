@@ -141,9 +141,7 @@ def compute_schema_fingerprint(con: sqlite3.Connection) -> str:
     import hashlib
 
     rows = [
-        r[0]
-        for r in con.execute("SELECT sql FROM sqlite_master ORDER BY name")
-        if r[0]
+        r[0] for r in con.execute("SELECT sql FROM sqlite_master ORDER BY name") if r[0]
     ]
     ddl = "\n".join(rows)
     return hashlib.sha256(ddl.encode("utf-8")).hexdigest()

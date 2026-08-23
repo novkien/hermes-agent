@@ -87,26 +87,60 @@ _RUNNER_ERROR_STATUS = {
 # (GET routes of the 9119 dashboard, excluding 9119's own auth/UI routes).
 # Source: hermes-api/dashboard/u02-dashboard-routes.json
 READ_ALLOWLIST = [
-    "/api/actions", "/api/analytics", "/api/audio", "/api/config",
-    "/api/credentials", "/api/cron", "/api/curator", "/api/dashboard",
-    "/api/egress", "/api/env", "/api/files", "/api/fs", "/api/git",
-    "/api/health", "/api/hermes", "/api/learning", "/api/logs", "/api/mcp",
-    "/api/media", "/api/memory", "/api/messaging", "/api/model", "/api/ops",
-    "/api/pairing", "/api/portal", "/api/profiles", "/api/providers",
+    "/api/actions",
+    "/api/analytics",
+    "/api/audio",
+    "/api/config",
+    "/api/credentials",
+    "/api/cron",
+    "/api/curator",
+    "/api/dashboard",
+    "/api/egress",
+    "/api/env",
+    "/api/files",
+    "/api/fs",
+    "/api/git",
+    "/api/health",
+    "/api/hermes",
+    "/api/learning",
+    "/api/logs",
+    "/api/mcp",
+    "/api/media",
+    "/api/memory",
+    "/api/messaging",
+    "/api/model",
+    "/api/ops",
+    "/api/pairing",
+    "/api/portal",
+    "/api/profiles",
+    "/api/providers",
     # Native BFF surface (repository_routes.py) — registered before the
     # catch-all, so this entry documents readability and keeps the
     # "advertised writes imply readable surface" invariant true.
     "/api/repositories",
-    "/api/sessions", "/api/skills", "/api/ssh", "/api/status", "/api/system",
-    "/api/tools", "/api/webhooks",
+    "/api/sessions",
+    "/api/skills",
+    "/api/ssh",
+    "/api/status",
+    "/api/system",
+    "/api/tools",
+    "/api/webhooks",
 ]
 # Excluded from the allowlist (9119-internal auth/UI/PTY, never proxied):
 _READ_EXCLUDE = {
-    "/api/auth", "/api/chat", "/api/pty", "/api/ws", "/api/events",
+    "/api/auth",
+    "/api/chat",
+    "/api/pty",
+    "/api/ws",
+    "/api/events",
     # Sensitive surfaces never proxied (freeze §10/§14.3 — no secrets, no
     # arbitrary filesystem access, no credential/SSH/oauth/pairing material):
-    "/api/env", "/api/fs", "/api/ssh", "/api/credentials",
-    "/api/providers/oauth", "/api/pairing",
+    "/api/env",
+    "/api/fs",
+    "/api/ssh",
+    "/api/credentials",
+    "/api/providers/oauth",
+    "/api/pairing",
 }
 
 # Mutation allowlist — each maps 1:1 to a verified Hermes gateway (8642) route
@@ -238,9 +272,20 @@ UPSTREAM_MUTATION_SPECS = {
         "body_keys_allow": ("updates",),
         "body_nested_keys_allow": {
             "updates": (
-                "prompt", "schedule", "name", "deliver", "skills", "model",
-                "provider", "base_url", "script", "context_from",
-                "enabled_toolsets", "workdir", "no_agent", "enabled",
+                "prompt",
+                "schedule",
+                "name",
+                "deliver",
+                "skills",
+                "model",
+                "provider",
+                "base_url",
+                "script",
+                "context_from",
+                "enabled_toolsets",
+                "workdir",
+                "no_agent",
+                "enabled",
             ),
         },
         "require_confirm": ("DELETE",),
@@ -314,7 +359,6 @@ UPSTREAM_MUTATION_SPECS = {
     },
     # No archive route exists on 9119 — the OpenAPI document declares no path
     # matching /archiv/ at all — so archive stays unallowlisted.
-
     # ---- cron: full lifecycle -------------------------------------------
     # Schedules are not validated here. Upstream owns the cron grammar, so its
     # 4xx passes through unchanged rather than being second-guessed by the BFF.
@@ -324,8 +368,18 @@ UPSTREAM_MUTATION_SPECS = {
         "upstream_path": "/api/cron/jobs",
         "summary": "upstream.cron.create",
         "body_keys_allow": (
-            "prompt", "schedule", "name", "deliver", "skills", "model", "provider",
-            "base_url", "script", "context_from", "enabled_toolsets", "workdir",
+            "prompt",
+            "schedule",
+            "name",
+            "deliver",
+            "skills",
+            "model",
+            "provider",
+            "base_url",
+            "script",
+            "context_from",
+            "enabled_toolsets",
+            "workdir",
             "no_agent",
         ),
         "forward_query": ("profile",),
@@ -345,15 +399,20 @@ UPSTREAM_MUTATION_SPECS = {
         "summary": "upstream.plugin.disable",
         "response_meta": {"restart_required": True},
     },
-
     # ---- profiles --------------------------------------------------------
     "/api/profiles": {
         "methods": {"POST"},
         "upstream_path": "/api/profiles",
         "summary": "upstream.profile.create",
         "body_keys_allow": (
-            "name", "clone_from", "clone_from_default", "clone_all", "no_skills",
-            "description", "provider", "model",
+            "name",
+            "clone_from",
+            "clone_from_default",
+            "clone_all",
+            "no_skills",
+            "description",
+            "provider",
+            "model",
         ),
     },
     # Literal paths are declared before the {name} pattern: first match wins,
@@ -398,7 +457,6 @@ UPSTREAM_MUTATION_SPECS = {
         "upstream_path": "/api/profiles/{name}/describe-auto",
         "summary": "upstream.profile.describe_auto",
     },
-
     # ---- mcp servers -----------------------------------------------------
     # POST only. Upstream's PUT on this path is MCPServersReplace — a whole-map
     # replace of mcp.json — so driving it from a single-server form would let a
@@ -434,7 +492,6 @@ UPSTREAM_MUTATION_SPECS = {
         "body_keys_allow": ("name", "env", "enable"),
         "reject_sentinel": True,
     },
-
     # ---- toolsets --------------------------------------------------------
     "/api/tools/toolsets/{name}": {
         "methods": {"PUT"},
@@ -478,7 +535,6 @@ UPSTREAM_MUTATION_SPECS = {
         "summary": "upstream.toolset.terminal_backend",
         "body_keys_allow": ("backend",),
     },
-
     # ---- memory provider -------------------------------------------------
     "/api/memory/provider": {
         "methods": {"PUT"},
@@ -508,15 +564,22 @@ UPSTREAM_MUTATION_SPECS = {
         "body_keys_allow": ("values",),
         "reject_sentinel": True,
     },
-
     # ---- webhooks --------------------------------------------------------
     "/api/webhooks": {
         "methods": {"POST"},
         "upstream_path": "/api/webhooks",
         "summary": "upstream.webhook.create",
         "body_keys_allow": (
-            "name", "description", "events", "prompt", "script", "skills",
-            "deliver", "deliver_only", "deliver_chat_id", "secret",
+            "name",
+            "description",
+            "events",
+            "prompt",
+            "script",
+            "skills",
+            "deliver",
+            "deliver_only",
+            "deliver_chat_id",
+            "secret",
         ),
     },
     "/api/webhooks/enable": {
@@ -537,7 +600,6 @@ UPSTREAM_MUTATION_SPECS = {
         "summary": "upstream.webhook.delete",
         "require_confirm": True,
     },
-
     # ---- messaging platforms --------------------------------------------
     "/api/messaging/platforms/{name}": {
         "methods": {"PUT"},
@@ -553,7 +615,6 @@ UPSTREAM_MUTATION_SPECS = {
         "upstream_path": "/api/messaging/platforms/{name}/test",
         "summary": "upstream.messaging.test",
     },
-
     # ---- gateway lifecycle ----------------------------------------------
     # Every one of these interrupts live agent work, so all four are confirm-
     # gated. Drain is the graceful option; the UI should present it first.
@@ -581,7 +642,6 @@ UPSTREAM_MUTATION_SPECS = {
         "summary": "upstream.gateway.stop",
         "require_confirm": True,
     },
-
     # ---- ops -------------------------------------------------------------
     # Hooks are identified by (event, command), not by a path id — delete takes
     # a body, so one spec serves both verbs.
@@ -604,7 +664,6 @@ UPSTREAM_MUTATION_SPECS = {
         "upstream_path": "/api/ops/prompt-size",
         "summary": "upstream.ops.prompt_size",
     },
-
     # ---- models ----------------------------------------------------------
     "/api/model/set": {
         "methods": {"POST"},
@@ -625,10 +684,17 @@ UPSTREAM_MUTATION_SPECS = {
         "upstream_path": "/api/model/moa",
         "summary": "upstream.model.moa",
         "body_keys_allow": (
-            "default_preset", "active_preset", "presets",
-            "reference_models", "aggregator", "reference_temperature",
-            "aggregator_temperature", "max_tokens", "reference_max_tokens",
-            "fanout", "reference_timeout",
+            "default_preset",
+            "active_preset",
+            "presets",
+            "reference_models",
+            "aggregator",
+            "reference_temperature",
+            "aggregator_temperature",
+            "max_tokens",
+            "reference_max_tokens",
+            "fanout",
+            "reference_timeout",
         ),
     },
 }
@@ -636,9 +702,9 @@ UPSTREAM_MUTATION_SPECS = {
 # The verbs the mutation proxy has to accept. Derived from the specs so adding
 # a spec with a new verb cannot leave the route registered without it — that
 # mismatch produces a bare FastAPI 405 that never reaches the allowlist check.
-UPSTREAM_MUTATION_METHODS = sorted(
-    {method for spec in UPSTREAM_MUTATION_SPECS.values() for method in spec["methods"]}
-)
+UPSTREAM_MUTATION_METHODS = sorted({
+    method for spec in UPSTREAM_MUTATION_SPECS.values() for method in spec["methods"]
+})
 
 # Writes the SPA may perform on a given read surface. Advertised in that read's
 # envelope so the UI enables exactly the controls the BFF will actually
@@ -648,8 +714,16 @@ READ_PATH_MUTATIONS = {
     # MUTATION_ALLOWLIST both carried real session writes, so every session read
     # advertised `read_only: true, mutations_supported: []` and the SPA had no
     # honest signal to gate rename/fork/model-lock/delete on.
-    "/api/sessions": ("chat", "create", "rename", "archive", "delete", "fork",
-                      "model_lock", "stop"),
+    "/api/sessions": (
+        "chat",
+        "create",
+        "rename",
+        "archive",
+        "delete",
+        "fork",
+        "model_lock",
+        "stop",
+    ),
     "/api/skills": ("save", "enable", "disable", "delete"),
     "/api/skills/content": ("save", "enable", "disable", "delete"),
     "/api/cron/jobs": ("create", "update", "delete", "fire", "pause", "resume"),
@@ -660,15 +734,26 @@ READ_PATH_MUTATIONS = {
     "/api/profiles": ("create", "update", "delete", "activate", "describe_auto"),
     "/api/mcp/servers": ("create", "delete", "test", "enable", "disable"),
     "/api/mcp/catalog": ("install",),
-    "/api/tools/toolsets": ("enable", "disable", "set_model", "set_provider",
-                            "set_env", "post_setup"),
+    "/api/tools/toolsets": (
+        "enable",
+        "disable",
+        "set_model",
+        "set_provider",
+        "set_env",
+        "post_setup",
+    ),
     "/api/tools/terminal/backends": ("set_backend",),
     "/api/memory": ("set_provider", "reset", "configure_provider", "setup_provider"),
     "/api/webhooks": ("create", "delete", "enable", "disable"),
     "/api/messaging/platforms": ("configure", "test"),
     # The dashboard exposes no GET /api/gateway/*; lifecycle controls hang off
     # the status read the Command Center already performs.
-    "/api/status": ("gateway_start", "gateway_stop", "gateway_restart", "gateway_drain"),
+    "/api/status": (
+        "gateway_start",
+        "gateway_stop",
+        "gateway_restart",
+        "gateway_drain",
+    ),
     "/api/ops/hooks": ("create", "delete"),
     "/api/ops/checkpoints": ("prune",),
     "/api/model": ("set", "set_moa"),
@@ -676,9 +761,15 @@ READ_PATH_MUTATIONS = {
     # Owner repository control plane (repository_routes.py). The read envelope
     # advertises these so the Repositories tab gates its Hermes Sync and
     # GitHub-only PR controls on the same list the BFF enforces.
-    "/api/repositories": ("initialize_layout", "sync", "codex_review",
-                          "mark_ready", "mark_draft", "merge_pr",
-                          "prepare_superproject_pin"),
+    "/api/repositories": (
+        "initialize_layout",
+        "sync",
+        "codex_review",
+        "mark_ready",
+        "mark_draft",
+        "merge_pr",
+        "prepare_superproject_pin",
+    ),
 }
 
 ROOM_SLOT_SEAT_ROLES = ("ceo", "coder", "research", "system")
@@ -689,7 +780,8 @@ SESSION_INJECTOR_FORCE_RESET_ROUTE = (
 
 
 def room_slot_force_reset_arguments(
-    payload: Any, slot: int,
+    payload: Any,
+    slot: int,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Resolve one configured Room slot to the plugin's exact reset contract.
 
@@ -706,7 +798,8 @@ def room_slot_force_reset_arguments(
 
     configured = next(
         (
-            row for row in slots
+            row
+            for row in slots
             if isinstance(row, dict) and str(row.get("slot") or "") == str(slot)
         ),
         None,
@@ -721,6 +814,7 @@ def room_slot_force_reset_arguments(
     if not all(thread_ids) or len(set(thread_ids)) != len(ROOM_SLOT_SEAT_ROLES):
         return None, f"Room slot {slot} does not define four distinct seat threads"
     return {"chat_id": chat_id, "thread_ids": thread_ids}, None
+
 
 # Writable branches of Hermes' config.yaml. A leaf (`True`) means "this whole
 # subtree may be written"; a dict means "recurse, and drop anything else".
@@ -791,9 +885,8 @@ def _invalid_skills_mode_mapping(value: Any, field: str) -> str | None:
         normalized[mode] = set(names)
     overlap = sorted(normalized["prune"] & normalized["invisible"])
     if overlap:
-        return (
-            f"{field} assigns skill(s) to both prune and invisible: "
-            + ", ".join(overlap)
+        return f"{field} assigns skill(s) to both prune and invisible: " + ", ".join(
+            overlap
         )
     return None
 
@@ -890,7 +983,9 @@ def _describe_allow_tree(tree: Any, prefix: str = "") -> list[str]:
 _SPEC_TOKEN_RE = re.compile(r"\\\{([a-z_]+)\\\}")
 
 
-def match_upstream_mutation(path: str, method: str) -> Optional[tuple[dict, dict[str, str]]]:
+def match_upstream_mutation(
+    path: str, method: str
+) -> Optional[tuple[dict, dict[str, str]]]:
     """Return (spec, path_tokens) when the SPA mutation path is allowlisted."""
     for pattern, spec in UPSTREAM_MUTATION_SPECS.items():
         if method not in spec["methods"]:
@@ -1034,7 +1129,9 @@ def _parse_sse_block(raw: str) -> Optional[tuple[str, Any]]:
         return name, body
 
 
-def _json_error(status: int, code: str, message: str, request_id: str | None = None) -> JSONResponse:
+def _json_error(
+    status: int, code: str, message: str, request_id: str | None = None
+) -> JSONResponse:
     body: dict[str, Any] = {"error": {"message": message, "code": code}}
     if request_id:
         body["request_id"] = request_id
@@ -1135,7 +1232,9 @@ class Router:
         origin = request.headers.get("Origin")
         if not origin:
             return True  # non-browser clients
-        allowed = {entry.strip() for entry in self.s.allowed_origin.split(",") if entry.strip()}
+        allowed = {
+            entry.strip() for entry in self.s.allowed_origin.split(",") if entry.strip()
+        }
         return origin in allowed
 
     def _host_allowed(self, request: Request) -> bool:
@@ -1240,7 +1339,10 @@ class Router:
         if not isinstance(rows, list):
             return False
         for row in rows:
-            if isinstance(row, dict) and (row.get("name") or row.get("id")) == profile_name:
+            if (
+                isinstance(row, dict)
+                and (row.get("name") or row.get("id")) == profile_name
+            ):
                 return True
             if isinstance(row, str) and row == profile_name:
                 return True
@@ -1326,8 +1428,9 @@ class Router:
     async def memory_file_read(self, request: Request, file_key: str) -> Response:
         filename = self._memory_filename(file_key)
         if not filename:
-            return _json_error(404, "not_found", "unknown memory file",
-                               request.state.request_id)
+            return _json_error(
+                404, "not_found", "unknown memory file", request.state.request_id
+            )
 
         profile_id = self._request_profile(request)
         rid = request.state.request_id
@@ -1335,14 +1438,23 @@ class Router:
         try:
             result = await self.adapter.memory_file(filename)
         except DataBackendError as e:
-            return _json_error(upstream_error_status(e.status), "memory_read_failed",
-                               e.detail or "data backend unavailable", rid)
+            return _json_error(
+                upstream_error_status(e.status),
+                "memory_read_failed",
+                e.detail or "data backend unavailable",
+                rid,
+            )
         data, upstream_meta = result.data, result.meta
 
         return JSONResponse(
             self._envelope(
-                data, source_id="adapter", profile_id=profile_id, freshness="live",
-                request_id=rid, read_only=False, mutations_supported=("save",),
+                data,
+                source_id="adapter",
+                profile_id=profile_id,
+                freshness="live",
+                request_id=rid,
+                read_only=False,
+                mutations_supported=("save",),
                 upstream_meta=upstream_meta,
             )
         )
@@ -1350,56 +1462,83 @@ class Router:
     async def memory_file_write(self, request: Request, file_key: str) -> Response:
         filename = self._memory_filename(file_key)
         if not filename:
-            return _json_error(404, "not_found", "unknown memory file",
-                               request.state.request_id)
+            return _json_error(
+                404, "not_found", "unknown memory file", request.state.request_id
+            )
 
         session = self._require_session(request)
         self._require_csrf(request, session)
         if not self._origin_allowed(request):
-            return _json_error(403, "origin_forbidden", "Origin not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "origin_forbidden", "Origin not allowed", request.state.request_id
+            )
         if not self._host_allowed(request):
-            return _json_error(403, "host_forbidden", "Host not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "host_forbidden", "Host not allowed", request.state.request_id
+            )
         if not self.mutation_limiter.allow(session["id"]):
-            return _json_error(429, "rate_limited", "mutation rate limit exceeded",
-                               request.state.request_id)
+            return _json_error(
+                429,
+                "rate_limited",
+                "mutation rate limit exceeded",
+                request.state.request_id,
+            )
 
         rid = request.state.request_id
         profile_id = self._request_profile(request)
         body = await request.json()
         if not isinstance(body, dict) or not isinstance(body.get("content"), str):
-            return _json_error(400, "bad_request", "request body must include content",
-                               rid)
+            return _json_error(
+                400, "bad_request", "request body must include content", rid
+            )
 
         content = body["content"]
         target = f"/api/memory/{filename}"
-        summary = build_request_summary(request.method, target, dict(request.query_params))
+        summary = build_request_summary(
+            request.method, target, dict(request.query_params)
+        )
 
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action="hermes.memory.save", target=target,
-                profile_id=profile_id, request_summary=summary,
-                upstream_status=None, result="pending",
+                request_id=rid,
+                actor="owner",
+                action="hermes.memory.save",
+                target=target,
+                profile_id=profile_id,
+                request_summary=summary,
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}",
-                               request_id=rid)
+            return _json_error(
+                503,
+                "audit_failed",
+                f"audit write failed: {type(e).__name__}",
+                request_id=rid,
+            )
 
         try:
             result = await self.adapter.save_memory_file(filename, content)
         except DataBackendError as e:
             self._record_audit_result(rid, 500, f"error:{type(e).__name__}")
-            return _json_error(upstream_error_status(e.status), "memory_write_failed",
-                               e.detail or "data backend unavailable", request_id=rid)
+            return _json_error(
+                upstream_error_status(e.status),
+                "memory_write_failed",
+                e.detail or "data backend unavailable",
+                request_id=rid,
+            )
 
         self._record_audit_result(rid, 200, "ok")
         data, upstream_meta = result.data, result.meta
         return JSONResponse(
             self._envelope(
-                data, source_id="adapter", profile_id=profile_id, freshness="live",
-                request_id=rid, read_only=False, mutations_supported=("save",),
+                data,
+                source_id="adapter",
+                profile_id=profile_id,
+                freshness="live",
+                request_id=rid,
+                read_only=False,
+                mutations_supported=("save",),
                 upstream_meta=upstream_meta,
             )
         )
@@ -1414,10 +1553,15 @@ class Router:
         """
         rid = request.state.request_id
         profile = self._request_profile(request)
-        requested = [value.strip() for value in request.query_params.get("session_ids", "").split(",")]
+        requested = [
+            value.strip()
+            for value in request.query_params.get("session_ids", "").split(",")
+        ]
         session_ids = list(dict.fromkeys(value for value in requested if value))
         if len(session_ids) > 50:
-            return _json_error(400, "bad_request", "session_ids accepts at most 50 unique ids", rid)
+            return _json_error(
+                400, "bad_request", "session_ids accepts at most 50 unique ids", rid
+            )
         if not profile:
             return _json_error(400, "bad_request", "profile is required", rid)
 
@@ -1442,11 +1586,17 @@ class Router:
                 # non-Kanban session into a synthetic unresolved worker.
                 try:
                     status, body, _headers = await self.dashboard.get(
-                        f"/api/sessions/{session_id}", params={"profile": profile}, inbound_request_id=rid,
+                        f"/api/sessions/{session_id}",
+                        params={"profile": profile},
+                        inbound_request_id=rid,
                     )
                 except UpstreamError:
                     degraded = True
-                    links[session_id] = {"kind": "kanban_worker", "resolution": "unresolved", "reason": "dashboard_unavailable"}
+                    links[session_id] = {
+                        "kind": "kanban_worker",
+                        "resolution": "unresolved",
+                        "reason": "dashboard_unavailable",
+                    }
                     return
                 if status >= 400:
                     return
@@ -1454,25 +1604,37 @@ class Router:
                 if session.get("source") != "kanban":
                     return
 
-                unresolved: dict[str, Any] = {"kind": "kanban_worker", "resolution": "unresolved"}
+                unresolved: dict[str, Any] = {
+                    "kind": "kanban_worker",
+                    "resolution": "unresolved",
+                }
                 try:
                     status, body, _headers = await self.dashboard.get(
                         f"/api/sessions/{session_id}/messages",
-                        params={"profile": profile, "limit": "1", "order": "oldest"}, inbound_request_id=rid,
+                        params={"profile": profile, "limit": "1", "order": "oldest"},
+                        inbound_request_id=rid,
                     )
                 except UpstreamError:
                     degraded = True
-                    links[session_id] = {**unresolved, "reason": "dashboard_unavailable"}
+                    links[session_id] = {
+                        **unresolved,
+                        "reason": "dashboard_unavailable",
+                    }
                     return
                 if status >= 400:
                     links[session_id] = {**unresolved, "reason": "seed_unavailable"}
                     return
                 data, _meta = split_upstream_envelope(body)
-                messages = data.get("messages", data) if isinstance(data, dict) else data
+                messages = (
+                    data.get("messages", data) if isinstance(data, dict) else data
+                )
                 first = messages[0] if isinstance(messages, list) and messages else None
                 task_id = _kanban_worker_task_id(first)
                 if not task_id:
-                    links[session_id] = {**unresolved, "reason": "canonical_seed_missing"}
+                    links[session_id] = {
+                        **unresolved,
+                        "reason": "canonical_seed_missing",
+                    }
                     return
                 try:
                     result = await self.adapter.kanban_task(task_id)
@@ -1482,7 +1644,8 @@ class Router:
                     else:
                         degraded = True
                         links[session_id] = {
-                            **unresolved, "reason": "data_backend_unavailable"
+                            **unresolved,
+                            "reason": "data_backend_unavailable",
                         }
                     return
                 task = record(result.data, ("task", "data")) or {}
@@ -1490,7 +1653,9 @@ class Router:
                     links[session_id] = {**unresolved, "reason": "task_unreadable"}
                     return
                 links[session_id] = {
-                    "kind": "kanban_worker", "resolution": "verified", "task_id": task_id,
+                    "kind": "kanban_worker",
+                    "resolution": "verified",
+                    "task_id": task_id,
                     "status": task.get("status") or "unknown",
                     "current_run_id": task.get("current_run_id"),
                     "last_heartbeat_at": task.get("last_heartbeat_at"),
@@ -1499,17 +1664,23 @@ class Router:
                 }
 
         await asyncio.gather(*(resolve(session_id) for session_id in session_ids))
-        return JSONResponse(self._envelope(
-            {"links": links}, source_id="session-operational-context", profile_id=profile,
-            freshness="degraded" if degraded else "live", request_id=rid,
-            degraded_reason="one_or_more_sources_unavailable" if degraded else None,
-        ))
+        return JSONResponse(
+            self._envelope(
+                {"links": links},
+                source_id="session-operational-context",
+                profile_id=profile,
+                freshness="degraded" if degraded else "live",
+                request_id=rid,
+                degraded_reason="one_or_more_sources_unavailable" if degraded else None,
+            )
+        )
 
     async def proxy_dashboard_read(self, request: Request, path: str) -> Response:
         normalized = "/" + path.lstrip("/")
         if not is_allowed_read_path(normalized):
-            return _json_error(404, "not_found", "path not in read allowlist",
-                               request.state.request_id)
+            return _json_error(
+                404, "not_found", "path not in read allowlist", request.state.request_id
+            )
         params = dict(request.query_params)
         profile = params.get("profile")
         rid = request.state.request_id
@@ -1521,8 +1692,11 @@ class Router:
             detail = str(e.detail or "upstream error")
             return JSONResponse(
                 self._envelope(
-                    {"error": detail}, source_id="hermes-dashboard",
-                    profile_id=profile, freshness="unavailable", request_id=rid,
+                    {"error": detail},
+                    source_id="hermes-dashboard",
+                    profile_id=profile,
+                    freshness="unavailable",
+                    request_id=rid,
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
                 status_code=upstream_error_status(e.status),
@@ -1535,8 +1709,11 @@ class Router:
         if status >= 400:
             return JSONResponse(
                 self._envelope(
-                    data, source_id="hermes-dashboard", profile_id=profile,
-                    freshness="unavailable", request_id=rid,
+                    data,
+                    source_id="hermes-dashboard",
+                    profile_id=profile,
+                    freshness="unavailable",
+                    request_id=rid,
                     degraded_reason=f"upstream_status:{status}",
                     upstream_meta=upstream_meta,
                 ),
@@ -1545,10 +1722,14 @@ class Router:
         mutations = list(READ_PATH_MUTATIONS.get(normalized, ()))
         return JSONResponse(
             self._envelope(
-                data, source_id="hermes-dashboard", profile_id=profile,
-                freshness="live", request_id=rid,
+                data,
+                source_id="hermes-dashboard",
+                profile_id=profile,
+                freshness="live",
+                request_id=rid,
                 schema_fingerprint=headers.get("x-schema-fingerprint"),
-                source_version=headers.get("x-hermes-version") or headers.get("x-source-version"),
+                source_version=headers.get("x-hermes-version")
+                or headers.get("x-source-version"),
                 read_only=not mutations,
                 mutations_supported=mutations,
                 upstream_meta=upstream_meta,
@@ -1591,7 +1772,9 @@ class Router:
         relative = "/" + path.lstrip("/")
         # An asset requested by an embedded external dashboard resolves against
         # that service, and its path is already relative to the service root.
-        referer_service = self._proxy_service_from_referer(request.headers.get("referer"))
+        referer_service = self._proxy_service_from_referer(
+            request.headers.get("referer")
+        )
         if referer_service:
             return await self.proxy_external_dashboard(
                 request, referer_service, relative
@@ -1627,8 +1810,14 @@ class Router:
     # The BFF pre-validates enums so an operator gets an instant, specific
     # error; the adapter re-validates and remains the real boundary.
     PERMIT_DECISION_FIELDS = frozenset({
-        "status", "approved", "executed", "approval_note", "action_plan",
-        "execution_result", "result_status", "delete",
+        "status",
+        "approved",
+        "executed",
+        "approval_note",
+        "action_plan",
+        "execution_result",
+        "result_status",
+        "delete",
     })
     # `delete`/`reason` ride the same update path rather than a separate
     # decision route: deletion is soft (the ledger sets deleted_at/
@@ -1636,20 +1825,42 @@ class Router:
     # `update`, matching the one `issue_update` tool Hermes agents call), so
     # it is one more transition, not a second capability.
     ISSUE_UPDATE_FIELDS = frozenset({
-        "status", "resolution", "verification", "merge_into_id", "event_type",
-        "context", "severity", "delete", "reason",
+        "status",
+        "resolution",
+        "verification",
+        "merge_into_id",
+        "event_type",
+        "context",
+        "severity",
+        "delete",
+        "reason",
     })
     ISSUE_STATUSES = ("open", "resolved", "dismissed", "merged")
     ISSUE_EVENT_TYPES = (
-        "observed", "recurred", "investigation", "workaround", "recovered",
-        "reproduced", "not_reproduced", "verification_failed", "resolved",
-        "dismissed", "merged",
+        "observed",
+        "recurred",
+        "investigation",
+        "workaround",
+        "recovered",
+        "reproduced",
+        "not_reproduced",
+        "verification_failed",
+        "resolved",
+        "dismissed",
+        "merged",
     )
 
     async def _adapter_decision(
-        self, request: Request, *, call, entity_id: str, target: str,
-        audit_action: str, allowed_fields: frozenset[str],
-        validate=None, event: tuple[str, str] | None = None,
+        self,
+        request: Request,
+        *,
+        call,
+        entity_id: str,
+        target: str,
+        audit_action: str,
+        allowed_fields: frozenset[str],
+        validate=None,
+        event: tuple[str, str] | None = None,
     ) -> Response:
         self._guard_mutation(request)
         rid = request.state.request_id
@@ -1660,11 +1871,17 @@ class Router:
         except Exception:  # noqa: BLE001
             return _json_error(400, "invalid_body", "JSON body required", rid)
         if not isinstance(body, dict) or not body:
-            return _json_error(400, "invalid_body", "body must be a non-empty object", rid)
+            return _json_error(
+                400, "invalid_body", "body must be a non-empty object", rid
+            )
         unknown = sorted(set(body) - allowed_fields)
         if unknown:
-            return _json_error(400, "unsupported_field",
-                               f"unsupported fields: {', '.join(unknown)}", rid)
+            return _json_error(
+                400,
+                "unsupported_field",
+                f"unsupported fields: {', '.join(unknown)}",
+                rid,
+            )
         if validate is not None:
             problem = validate(body)
             if problem:
@@ -1675,23 +1892,34 @@ class Router:
         # short enum fields in AUDIT_VALUE_FIELDS render their values; the
         # free-text ones (resolution, approval_note, ...) stay name-only.
         summary = build_request_summary(
-            request.method, target, dict(request.query_params), body=body)
+            request.method, target, dict(request.query_params), body=body
+        )
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action=audit_action, target=target,
-                profile_id=profile_id, request_summary=summary,
-                upstream_status=None, result="pending",
+                request_id=rid,
+                actor="owner",
+                action=audit_action,
+                target=target,
+                profile_id=profile_id,
+                request_summary=summary,
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(e).__name__}", rid
+            )
 
         try:
             result = await call(entity_id, body)
         except DataBackendError as e:
             self._record_audit_result(rid, e.status, f"error:{type(e).__name__}")
-            return _json_error(upstream_error_status(e.status), "decision_failed",
-                               e.detail or "data backend unavailable", rid)
+            return _json_error(
+                upstream_error_status(e.status),
+                "decision_failed",
+                e.detail or "data backend unavailable",
+                rid,
+            )
 
         self._record_audit_result(rid, 200, "ok")
         data, upstream_meta = result.data, result.meta
@@ -1705,33 +1933,54 @@ class Router:
             if self.read_model is not None:
                 if operation == "delete":
                     revision = self.read_model.delete_entity(
-                        resource_key, str(entity_id), profile_id=profile_id or self.s.live_default_profile
+                        resource_key,
+                        str(entity_id),
+                        profile_id=profile_id or self.s.live_default_profile,
                     )
                     event_payload = {}
                 else:
                     raw = dict(data) if isinstance(data, dict) else {}
-                    raw.update({key: value for key, value in body.items() if key in {"status", "severity"}})
+                    raw.update({
+                        key: value
+                        for key, value in body.items()
+                        if key in {"status", "severity"}
+                    })
                     raw["permit_id" if entity_type == "permit" else "id"] = entity_id
                     revision, event_payload = self.read_model.upsert_entity(
-                        resource_key, raw, profile_id=profile_id or self.s.live_default_profile
+                        resource_key,
+                        raw,
+                        profile_id=profile_id or self.s.live_default_profile,
                     )
             await bus.safe_publish(
-                event_name, entity_type + "s", entity_type, str(entity_id),
-                event_payload, coverage="native",
+                event_name,
+                entity_type + "s",
+                entity_type,
+                str(entity_id),
+                event_payload,
+                coverage="native",
                 profile_id=profile_id,
-                resource_key=resource_key, operation=operation, revision=revision,
+                resource_key=resource_key,
+                operation=operation,
+                revision=revision,
             )
         return JSONResponse(
             self._envelope(
-                data, source_id="adapter", profile_id=profile_id, freshness="live",
-                request_id=rid, read_only=False, mutations_supported=["decide"],
+                data,
+                source_id="adapter",
+                profile_id=profile_id,
+                freshness="live",
+                request_id=rid,
+                read_only=False,
+                mutations_supported=["decide"],
                 upstream_meta=upstream_meta,
             )
         )
 
     async def permit_decision(self, request: Request, permit_id: str) -> Response:
         return await self._adapter_decision(
-            request, call=self.adapter.decide_permit, entity_id=permit_id,
+            request,
+            call=self.adapter.decide_permit,
+            entity_id=permit_id,
             target=f"/permits/{permit_id}/decision",
             audit_action="adapter.permit.decide",
             allowed_fields=self.PERMIT_DECISION_FIELDS,
@@ -1754,7 +2003,9 @@ class Router:
             return f"event_type must be one of: {', '.join(self.ISSUE_EVENT_TYPES)}"
         # Mirrors the upstream script's own rules so the form can say why
         # before a round trip, not after.
-        if status == "resolved" and not (body.get("resolution") and body.get("verification")):
+        if status == "resolved" and not (
+            body.get("resolution") and body.get("verification")
+        ):
             return "resolved requires both resolution and verification"
         if status == "dismissed" and not body.get("resolution"):
             return "dismissed requires a resolution explaining why it is not a defect"
@@ -1764,7 +2015,9 @@ class Router:
 
     async def issue_update(self, request: Request, issue_id: str) -> Response:
         return await self._adapter_decision(
-            request, call=self.adapter.update_issue, entity_id=issue_id,
+            request,
+            call=self.adapter.update_issue,
+            entity_id=issue_id,
             target=f"/issues/{issue_id}/update",
             audit_action="adapter.issue.update",
             allowed_fields=self.ISSUE_UPDATE_FIELDS,
@@ -1799,15 +2052,18 @@ class Router:
         # mask is a stale client echoing a value it was never shown.
         if redact_mod.contains_redacted_sentinel(body):
             return _json_error(
-                400, "redacted_value_submitted",
+                400,
+                "redacted_value_submitted",
                 "body contains a redacted placeholder; re-enter the real value "
-                "or omit the field", rid,
+                "or omit the field",
+                rid,
             )
 
         pruned = _prune_to_allow_tree(body, CONFIG_WRITE_ALLOW_TREE)
         if not pruned:
             return _json_error(
-                400, "config_path_not_writable",
+                400,
+                "config_path_not_writable",
                 "no writable config path in body; writable: "
                 + ", ".join(sorted(_describe_allow_tree(CONFIG_WRITE_ALLOW_TREE))),
                 rid,
@@ -1819,41 +2075,60 @@ class Router:
 
         # Record which writable section was touched, not its contents.
         summary = build_request_summary(
-            request.method, "/api/config", dict(request.query_params),
-            body_keys=sorted(_describe_allow_tree(pruned)))
+            request.method,
+            "/api/config",
+            dict(request.query_params),
+            body_keys=sorted(_describe_allow_tree(pruned)),
+        )
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action="upstream.config.save",
-                target="/api/config", profile_id=profile_id,
-                request_summary=summary, upstream_status=None, result="pending",
+                request_id=rid,
+                actor="owner",
+                action="upstream.config.save",
+                target="/api/config",
+                profile_id=profile_id,
+                request_summary=summary,
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(e).__name__}", rid
+            )
 
         try:
             status, resp_body, _ = await self.dashboard.request(
-                "PUT", "/api/config", json_body=pruned, inbound_request_id=rid,
+                "PUT",
+                "/api/config",
+                json_body=pruned,
+                inbound_request_id=rid,
             )
         except UpstreamError as e:
             self._record_audit_result(rid, e.status, f"error:{e.detail}")
             return JSONResponse(
                 self._envelope(
                     {"error": str(e.detail) or "upstream error"},
-                    source_id="hermes-dashboard", profile_id=profile_id,
-                    freshness="unavailable", request_id=rid, read_only=False,
+                    source_id="hermes-dashboard",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
                 status_code=502,
             )
 
-        self._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")
+        self._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )
         return JSONResponse(
             self._envelope(
-                redact_mod.redact_config(resp_body), source_id="hermes-dashboard",
+                redact_mod.redact_config(resp_body),
+                source_id="hermes-dashboard",
                 profile_id=profile_id,
                 freshness="live" if status < 400 else "unavailable",
-                request_id=rid, read_only=False,
+                request_id=rid,
+                read_only=False,
                 degraded_reason=None if status < 400 else f"upstream_status:{status}",
                 extra_meta={"written_paths": sorted(_describe_allow_tree(pruned))},
             ),
@@ -1872,8 +2147,12 @@ class Router:
         path = "/" + path.lstrip("/")
         matched = match_upstream_mutation(path, request.method)
         if matched is None:
-            return _json_error(404, "mutation_unknown", "unknown upstream mutation",
-                               request.state.request_id)
+            return _json_error(
+                404,
+                "mutation_unknown",
+                "unknown upstream mutation",
+                request.state.request_id,
+            )
         spec, tokens = matched
         self._guard_mutation(request)
         # Destructive specs need the client to say so explicitly, so a replayed
@@ -1881,29 +2160,41 @@ class Router:
         # `require_confirm` is either True (every verb) or the verbs it covers,
         # so an edit-and-delete path can gate only the delete.
         confirm_spec = spec.get("require_confirm")
-        needs_confirm = (
-            confirm_spec is True
-            or (isinstance(confirm_spec, (tuple, list, set, frozenset))
-                and request.method in confirm_spec)
+        needs_confirm = confirm_spec is True or (
+            isinstance(confirm_spec, (tuple, list, set, frozenset))
+            and request.method in confirm_spec
         )
         if needs_confirm and request.query_params.get("confirm") != "true":
-            return _json_error(428, "confirm_required",
-                               "destructive mutation requires confirm=true",
-                               request.state.request_id)
+            return _json_error(
+                428,
+                "confirm_required",
+                "destructive mutation requires confirm=true",
+                request.state.request_id,
+            )
 
         rid = request.state.request_id
         profile_id = self._request_profile(request)
-        summary = build_request_summary(request.method, path, dict(request.query_params))
+        summary = build_request_summary(
+            request.method, path, dict(request.query_params)
+        )
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action=spec["summary"], target=path,
-                profile_id=profile_id, request_summary=summary,
-                upstream_status=None, result="pending",
+                request_id=rid,
+                actor="owner",
+                action=spec["summary"],
+                target=path,
+                profile_id=profile_id,
+                request_summary=summary,
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}",
-                               request_id=rid)
+            return _json_error(
+                503,
+                "audit_failed",
+                f"audit write failed: {type(e).__name__}",
+                request_id=rid,
+            )
 
         body: Any = None
         try:
@@ -1926,9 +2217,11 @@ class Router:
         if spec.get("reject_sentinel") and redact_mod.contains_redacted_sentinel(body):
             self._record_audit_result(rid, 400, "rejected:redaction_sentinel")
             return _json_error(
-                400, "redacted_value_submitted",
+                400,
+                "redacted_value_submitted",
                 "body contains a redacted placeholder; re-enter the real value "
-                "or omit the field", rid,
+                "or omit the field",
+                rid,
             )
 
         upstream_path = spec["upstream_path"].format(**tokens)
@@ -1942,22 +2235,30 @@ class Router:
         }
         try:
             status, resp_body, _ = await self.dashboard.request(
-                upstream_method, upstream_path, params=forwarded or None,
-                json_body=body, inbound_request_id=rid,
+                upstream_method,
+                upstream_path,
+                params=forwarded or None,
+                json_body=body,
+                inbound_request_id=rid,
             )
         except UpstreamError as e:
             self._record_audit_result(rid, e.status, f"error:{e.detail}")
             return JSONResponse(
                 self._envelope(
                     {"error": str(e.detail) or "upstream error"},
-                    source_id="hermes-dashboard", profile_id=profile_id,
-                    freshness="unavailable", request_id=rid, read_only=False,
+                    source_id="hermes-dashboard",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
                 status_code=502,
             )
 
-        self._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")
+        self._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )
         if status < 400:
             # The poll workers carry the real fields; these events only say
             # "changed", so an open tab refreshes now instead of at next poll.
@@ -1974,19 +2275,30 @@ class Router:
                     resource_key = "cron.jobs"
                     operation = "invalidate"
                     data, _upstream_meta = split_upstream_envelope(resp_body)
-                    candidate = data.get("job") if isinstance(data, dict) and isinstance(data.get("job"), dict) else data
+                    candidate = (
+                        data.get("job")
+                        if isinstance(data, dict) and isinstance(data.get("job"), dict)
+                        else data
+                    )
                     candidate = dict(candidate) if isinstance(candidate, dict) else {}
                     if isinstance(body, dict):
-                        updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
+                        updates = (
+                            body.get("updates")
+                            if isinstance(body.get("updates"), dict)
+                            else body
+                        )
                         candidate.update(updates)
                     if path.endswith("/pause"):
                         candidate["state"] = "paused"
                     elif path.endswith("/resume"):
                         candidate["state"] = "scheduled"
-                    entity_id = str(entity_id or candidate.get("id") or candidate.get("name") or "")
+                    entity_id = str(
+                        entity_id or candidate.get("id") or candidate.get("name") or ""
+                    )
                     if request.method == "DELETE" and entity_id:
                         revision = self.read_model.delete_entity(
-                            resource_key, entity_id,
+                            resource_key,
+                            entity_id,
                             profile_id=profile_id or self.s.live_default_profile,
                         )
                         event_payload = {}
@@ -1994,20 +2306,32 @@ class Router:
                     elif entity_id:
                         candidate["id"] = entity_id
                         revision, event_payload = self.read_model.upsert_entity(
-                            resource_key, candidate,
+                            resource_key,
+                            candidate,
                             profile_id=profile_id or self.s.live_default_profile,
                         )
                         operation = "upsert"
                 await bus.safe_publish(
-                    event_name, "dashboard", entity_type,
-                    entity_id, event_payload, coverage="native", profile_id=profile_id,
-                    resource_key=resource_key, operation=operation, revision=revision,
+                    event_name,
+                    "dashboard",
+                    entity_type,
+                    entity_id,
+                    event_payload,
+                    coverage="native",
+                    profile_id=profile_id,
+                    resource_key=resource_key,
+                    operation=operation,
+                    revision=revision,
                 )
         freshness = "live" if status < 400 else "unavailable"
         return JSONResponse(
             self._envelope(
-                resp_body, source_id="hermes-dashboard", profile_id=profile_id,
-                freshness=freshness, request_id=rid, read_only=False,
+                resp_body,
+                source_id="hermes-dashboard",
+                profile_id=profile_id,
+                freshness=freshness,
+                request_id=rid,
+                read_only=False,
                 degraded_reason=None if status < 400 else f"upstream_status:{status}",
                 extra_meta=spec.get("response_meta") if status < 400 else None,
             ),
@@ -2017,8 +2341,12 @@ class Router:
     async def proxy_adapter_read(self, request: Request, path: str) -> Response:
         normalized = "/" + path.lstrip("/")
         if not is_allowed_adapter_path(normalized):
-            return _json_error(404, "not_found", "path not in adapter allowlist",
-                               request.state.request_id)
+            return _json_error(
+                404,
+                "not_found",
+                "path not in adapter allowlist",
+                request.state.request_id,
+            )
         profile = request.query_params.get("profile")
         # Management profile is provenance for adapter reads, not an assignee
         # alias. Only adapter-native filters are forwarded.
@@ -2033,8 +2361,11 @@ class Router:
             detail = str(e.detail or "data backend error")
             return JSONResponse(
                 self._envelope(
-                    {"error": detail}, source_id="adapter", profile_id=profile,
-                    freshness="unavailable", request_id=rid,
+                    {"error": detail},
+                    source_id="adapter",
+                    profile_id=profile,
+                    freshness="unavailable",
+                    request_id=rid,
                     degraded_reason=f"data_backend_error:{e.status}",
                 ),
                 status_code=upstream_error_status(e.status),
@@ -2045,8 +2376,12 @@ class Router:
             data, upstream_meta = result.data, result.meta
         return JSONResponse(
             self._envelope(
-                data, source_id="adapter", profile_id=profile,
-                freshness="live", request_id=rid, upstream_meta=upstream_meta,
+                data,
+                source_id="adapter",
+                profile_id=profile,
+                freshness="live",
+                request_id=rid,
+                upstream_meta=upstream_meta,
             )
         )
 
@@ -2061,9 +2396,13 @@ class Router:
         try:
             slot_number = int(slot)
         except (TypeError, ValueError):
-            return _json_error(404, "not_found", "Room slot not found", request.state.request_id)
+            return _json_error(
+                404, "not_found", "Room slot not found", request.state.request_id
+            )
         if slot_number < 1:
-            return _json_error(404, "not_found", "Room slot not found", request.state.request_id)
+            return _json_error(
+                404, "not_found", "Room slot not found", request.state.request_id
+            )
 
         self._guard_mutation(request)
         if request.query_params.get("confirm") != "true":
@@ -2152,7 +2491,9 @@ class Router:
                 status_code=upstream_error_status(exc.status),
             )
 
-        self._record_audit_result(rid, status, "ok" if status < 400 else f"plugin:{status}")
+        self._record_audit_result(
+            rid, status, "ok" if status < 400 else f"plugin:{status}"
+        )
         return JSONResponse(
             self._envelope(
                 body,
@@ -2176,8 +2517,12 @@ class Router:
         """
         normalized = "/" + path.lstrip("/")
         if normalized not in GATEWAY_READ_PATHS:
-            return _json_error(404, "not_found", "path not in gateway read allowlist",
-                               request.state.request_id)
+            return _json_error(
+                404,
+                "not_found",
+                "path not in gateway read allowlist",
+                request.state.request_id,
+            )
         profile = request.query_params.get("profile")
         session_id = (request.query_params.get("session_id") or "").strip()
         session_scoped_toolsets = normalized == "/v1/toolsets" and bool(session_id)
@@ -2196,8 +2541,11 @@ class Router:
             detail = str(e.detail or "upstream error")
             return JSONResponse(
                 self._envelope(
-                    {"error": detail}, source_id="hermes-gateway", profile_id=profile,
-                    freshness="unavailable", request_id=rid,
+                    {"error": detail},
+                    source_id="hermes-gateway",
+                    profile_id=profile,
+                    freshness="unavailable",
+                    request_id=rid,
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
                 status_code=upstream_error_status(e.status),
@@ -2205,9 +2553,12 @@ class Router:
         data, upstream_meta = split_upstream_envelope(body)
         return JSONResponse(
             self._envelope(
-                data, source_id="hermes-gateway", profile_id=profile,
+                data,
+                source_id="hermes-gateway",
+                profile_id=profile,
                 freshness="live" if status < 400 else "unavailable",
-                request_id=rid, upstream_meta=upstream_meta,
+                request_id=rid,
+                upstream_meta=upstream_meta,
                 degraded_reason=None if status < 400 else f"upstream_status:{status}",
             ),
             status_code=status,
@@ -2242,17 +2593,22 @@ class Router:
             rf"(?P<start>url\(\s*)/(?!/|{escaped_prefix}(?:/|\)))",
             flags=re.IGNORECASE,
         )
-        return css_root.sub(
-            lambda match: f"{match.group('start')}{prefix}/", rewritten
-        )
+        return css_root.sub(lambda match: f"{match.group('start')}{prefix}/", rewritten)
 
     def _should_rewrite_external_body(self, content_type: str, path: str) -> bool:
         if not content_type:
             path_lower = path.lower()
-            return any(path_lower.endswith(suf) for suf in (".js", ".mjs", ".css", ".html"))
+            return any(
+                path_lower.endswith(suf) for suf in (".js", ".mjs", ".css", ".html")
+            )
         return any(
             token in content_type
-            for token in ("text/html", "text/javascript", "application/javascript", "text/css")
+            for token in (
+                "text/html",
+                "text/javascript",
+                "application/javascript",
+                "text/css",
+            )
         )
 
     def _normalize_external_path(
@@ -2261,16 +2617,19 @@ class Router:
         normalized = path.lstrip("/")
         repeated_prefix = f"api/proxy/external/{service}/"
         while normalized.startswith(repeated_prefix):
-            normalized = normalized[len(repeated_prefix):]
+            normalized = normalized[len(repeated_prefix) :]
         if not normalized:
             normalized = target_spec["index_path"].lstrip("/")
         return f"/{normalized}"
 
-    async def proxy_external_dashboard(self, request: Request, service: str, path: str = "") -> Response:
+    async def proxy_external_dashboard(
+        self, request: Request, service: str, path: str = ""
+    ) -> Response:
         target_spec = _EXTERNAL_DASHBOARD_TARGETS.get(service)
         if target_spec is None:
             return _json_error(
-                404, "proxy_target_not_found",
+                404,
+                "proxy_target_not_found",
                 f"proxy target not found: {service}",
                 request.state.request_id,
             )
@@ -2286,14 +2645,18 @@ class Router:
                 follow_redirects=True,
             ) as client:
                 upstream = await client.get(
-                    target_url, params=params or None, headers={"X-Request-Id": rid},
+                    target_url,
+                    params=params or None,
+                    headers={"X-Request-Id": rid},
                 )
         except httpx.TimeoutException:
-            return _json_error(504, "upstream_timeout", "upstream timeout",
-                               request.state.request_id)
+            return _json_error(
+                504, "upstream_timeout", "upstream timeout", request.state.request_id
+            )
         except httpx.HTTPError as exc:
-            return _json_error(502, "upstream_unavailable", str(exc),
-                               request.state.request_id)
+            return _json_error(
+                502, "upstream_unavailable", str(exc), request.state.request_id
+            )
 
         content = upstream.content
         content_type = (upstream.headers.get("content-type") or "").lower()
@@ -2306,7 +2669,9 @@ class Router:
                 text = content.decode("utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 text = ""
-            content = self._rewrite_external_dashboard_text(text, service).encode("utf-8")
+            content = self._rewrite_external_dashboard_text(text, service).encode(
+                "utf-8"
+            )
             if "text/html" in content_type:
                 headers["content-type"] = "text/html; charset=utf-8"
             headers["x-proxy-target"] = service
@@ -2322,8 +2687,11 @@ class Router:
         snap = self.registry.snapshot()
         return JSONResponse(
             self._envelope(
-                snap, source_id="capability-registry", profile_id=None,
-                freshness="live", request_id=request.state.request_id,
+                snap,
+                source_id="capability-registry",
+                profile_id=None,
+                freshness="live",
+                request_id=request.state.request_id,
             )
         )
 
@@ -2334,22 +2702,31 @@ class Router:
         rid = request.state.request_id
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action="capabilities.refresh",
-                target="/api/capabilities/refresh", profile_id=None,
+                request_id=rid,
+                actor="owner",
+                action="capabilities.refresh",
+                target="/api/capabilities/refresh",
+                profile_id=None,
                 request_summary=build_request_summary(
-                    request.method, "/api/capabilities/refresh",
-                    dict(request.query_params)),
-                upstream_status=None, result="pending",
+                    request.method,
+                    "/api/capabilities/refresh",
+                    dict(request.query_params),
+                ),
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(e).__name__}", rid
+            )
         await self.registry.refresh()
         self._record_audit_result(rid, 200, "ok")
         return JSONResponse(
             self._envelope(
-                self.registry.snapshot(), source_id="capability-registry",
-                profile_id=None, freshness="live",
+                self.registry.snapshot(),
+                source_id="capability-registry",
+                profile_id=None,
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -2368,7 +2745,9 @@ class Router:
         return JSONResponse(
             self._envelope(
                 {"items": rows, "total": total},
-                source_id="control-store", profile_id=None, freshness="live",
+                source_id="control-store",
+                profile_id=None,
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -2392,7 +2771,9 @@ class Router:
         return JSONResponse(
             self._envelope(
                 {"events": rows, "total": self.store.event_replay_count()},
-                source_id="event-bus", profile_id=None, freshness="live",
+                source_id="event-bus",
+                profile_id=None,
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -2402,60 +2783,101 @@ class Router:
         self._require_session(request)
         rid = request.state.request_id
         route = str(request.query_params.get("route") or "overview")
-        profile = str(request.query_params.get("profile") or self.s.live_default_profile)
+        profile = str(
+            request.query_params.get("profile") or self.s.live_default_profile
+        )
         if self.read_model is None:
-            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+            return _json_error(
+                503, "read_model_unavailable", "live read model unavailable", rid
+            )
         try:
             data = self.read_model.bootstrap(route, profile_id=profile)
         except KeyError:
-            return _json_error(404, "unknown_route", "route is outside live resource contract", rid)
+            return _json_error(
+                404, "unknown_route", "route is outside live resource contract", rid
+            )
         except ValueError as exc:
             return _json_error(400, "invalid_profile", str(exc), rid)
         provenance = [item.get("provenance") for item in data["resources"].values()]
-        freshness = "stale" if "stale" in provenance else (
-            "unavailable" if provenance and all(value in {"missing", "unavailable"} for value in provenance)
-            else "live"
+        freshness = (
+            "stale"
+            if "stale" in provenance
+            else (
+                "unavailable"
+                if provenance
+                and all(value in {"missing", "unavailable"} for value in provenance)
+                else "live"
+            )
         )
-        return JSONResponse(self._envelope(
-            data, source_id="read-model", profile_id=profile, freshness=freshness,
-            request_id=rid,
-        ))
+        return JSONResponse(
+            self._envelope(
+                data,
+                source_id="read-model",
+                profile_id=profile,
+                freshness=freshness,
+                request_id=rid,
+            )
+        )
 
     async def live_resource(self, request: Request, resource_key: str) -> Response:
         """Bounded resource resync, optionally suppressed by revision."""
         self._require_session(request)
         rid = request.state.request_id
-        profile = str(request.query_params.get("profile") or self.s.live_default_profile)
+        profile = str(
+            request.query_params.get("profile") or self.s.live_default_profile
+        )
         try:
             after_revision = max(0, int(request.query_params.get("after_revision", 0)))
         except (TypeError, ValueError):
-            return _json_error(422, "invalid_revision", "after_revision must be an integer", rid)
+            return _json_error(
+                422, "invalid_revision", "after_revision must be an integer", rid
+            )
         if self.read_model is None:
-            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+            return _json_error(
+                503, "read_model_unavailable", "live read model unavailable", rid
+            )
         try:
             data = self.read_model.resource(
                 resource_key, profile_id=profile, after_revision=after_revision
             )
         except KeyError:
-            return _json_error(404, "unknown_resource", "resource is outside live resource contract", rid)
+            return _json_error(
+                404,
+                "unknown_resource",
+                "resource is outside live resource contract",
+                rid,
+            )
         except ValueError as exc:
             return _json_error(400, "invalid_profile", str(exc), rid)
-        return JSONResponse(self._envelope(
-            data, source_id="read-model", profile_id=profile,
-            freshness=str(data.get("provenance") or "unavailable"), request_id=rid,
-        ))
+        return JSONResponse(
+            self._envelope(
+                data,
+                source_id="read-model",
+                profile_id=profile,
+                freshness=str(data.get("provenance") or "unavailable"),
+                request_id=rid,
+            )
+        )
 
     async def live_health(self, request: Request) -> Response:
         self._require_session(request)
         rid = request.state.request_id
         if self.read_model is None:
-            return _json_error(503, "read_model_unavailable", "live read model unavailable", rid)
+            return _json_error(
+                503, "read_model_unavailable", "live read model unavailable", rid
+            )
         data = self.read_model.health()
         status = 200 if data.get("status") != "unavailable" else 503
-        return JSONResponse(self._envelope(
-            data, source_id="read-model", profile_id=None,
-            freshness="live" if status == 200 else "unavailable", request_id=rid,
-        ), status_code=status)
+        return JSONResponse(
+            self._envelope(
+                data,
+                source_id="read-model",
+                profile_id=None,
+                freshness="live" if status == 200 else "unavailable",
+                request_id=rid,
+            ),
+            status_code=status,
+        )
 
     # ------------------------------------------------------------ mutations
     async def _read_body_keys(self, request: Request) -> list[str]:
@@ -2468,56 +2890,81 @@ class Router:
             return list(body.keys())
         return []
 
-    async def mutation(self, request: Request, action: str, path: str,
-                       upstream_path: str | None = None,
-                       gateway: GatewayClient | None = None,
-                       on_success: Callable[[int, Any], None] | None = None) -> Response:
+    async def mutation(
+        self,
+        request: Request,
+        action: str,
+        path: str,
+        upstream_path: str | None = None,
+        gateway: GatewayClient | None = None,
+        on_success: Callable[[int, Any], None] | None = None,
+    ) -> Response:
         gateway = gateway or self.gateway
         spec = MUTATION_ALLOWLIST.get(action)
         if spec is None:
-            return _json_error(404, "mutation_unknown", "unknown mutation",
-                               request.state.request_id)
+            return _json_error(
+                404, "mutation_unknown", "unknown mutation", request.state.request_id
+            )
         session = self._require_session(request)
         self._require_csrf(request, session)
 
         # Origin/host checks on state-changing requests.
         if not self._origin_allowed(request):
-            return _json_error(403, "origin_forbidden", "Origin not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "origin_forbidden", "Origin not allowed", request.state.request_id
+            )
         if not self._host_allowed(request):
-            return _json_error(403, "host_forbidden", "Host not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "host_forbidden", "Host not allowed", request.state.request_id
+            )
 
         # Per-session mutation rate limit.
         if not self.mutation_limiter.allow(session["id"]):
-            return _json_error(429, "rate_limited", "mutation rate limit exceeded",
-                               request.state.request_id)
+            return _json_error(
+                429,
+                "rate_limited",
+                "mutation rate limit exceeded",
+                request.state.request_id,
+            )
 
         # confirm=1 requirement (session delete).
         if spec.get("require_confirm"):
             if request.query_params.get("confirm") != spec["require_confirm"]:
-                return _json_error(400, "confirm_required",
-                                   "confirm=1 query param required",
-                                   request.state.request_id)
+                return _json_error(
+                    400,
+                    "confirm_required",
+                    "confirm=1 query param required",
+                    request.state.request_id,
+                )
 
         rid = request.state.request_id
         actor = "owner"
         target = path
-        summary = build_request_summary(request.method, path, dict(request.query_params))
+        summary = build_request_summary(
+            request.method, path, dict(request.query_params)
+        )
         profile_id = self._request_profile(request)
 
         # AUDIT FIRST — append-only row before any upstream call; on failure
         # abort with 503 and never touch upstream.
         try:
             self.store.append_audit(
-                request_id=rid, actor=actor, action=spec["summary"], target=target,
-                profile_id=profile_id, request_summary=summary,
-                upstream_status=None, result="pending",
+                request_id=rid,
+                actor=actor,
+                action=spec["summary"],
+                target=target,
+                profile_id=profile_id,
+                request_summary=summary,
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}",
-                               request_id=rid)
+            return _json_error(
+                503,
+                "audit_failed",
+                f"audit write failed: {type(e).__name__}",
+                request_id=rid,
+            )
 
         # Read body now (body-limit middleware already enforced the cap).
         body: Any = None
@@ -2544,9 +2991,17 @@ class Router:
 
         # Streaming mutation (chat) — passthrough SSE without buffering.
         if spec.get("stream"):
-            return await self._stream_chat(request, spec, upstream_path, body,
-                                           extra_headers, rid, profile_id, idem,
-                                           gateway=gateway)
+            return await self._stream_chat(
+                request,
+                spec,
+                upstream_path,
+                body,
+                extra_headers,
+                rid,
+                profile_id,
+                idem,
+                gateway=gateway,
+            )
 
         try:
             if spec.get("cron"):
@@ -2555,23 +3010,31 @@ class Router:
                 )
             else:
                 status, resp_body, _ = await gateway.request(
-                    spec["method"], upstream_path,
-                    json_body=body, inbound_request_id=rid, extra_headers=extra_headers,
+                    spec["method"],
+                    upstream_path,
+                    json_body=body,
+                    inbound_request_id=rid,
+                    extra_headers=extra_headers,
                 )
         except UpstreamError as e:
             self._record_audit_result(rid, e.status, f"error:{e.detail}")
             return JSONResponse(
                 self._envelope(
                     {"error": str(e.detail) or "upstream error"},
-                    source_id="hermes-gateway", profile_id=profile_id,
-                    freshness="unavailable", request_id=rid,
-                    read_only=False, mutations_supported=sorted(MUTATION_ALLOWLIST),
+                    source_id="hermes-gateway",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
+                    mutations_supported=sorted(MUTATION_ALLOWLIST),
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
                 status_code=502,
             )
 
-        self._record_audit_result(rid, status, "ok" if status < 400 else f"upstream:{status}")
+        self._record_audit_result(
+            rid, status, "ok" if status < 400 else f"upstream:{status}"
+        )
         # Post-success bookkeeping the generic path can't know about (fork
         # carrying its parent's execution_mode onto the new session id).
         # Best-effort: local bookkeeping must never turn a succeeded upstream
@@ -2580,14 +3043,19 @@ class Router:
             try:
                 on_success(status, resp_body)
             except Exception:  # noqa: BLE001
-                logger.warning("mutation on_success hook failed for %s", action,
-                               exc_info=True)
+                logger.warning(
+                    "mutation on_success hook failed for %s", action, exc_info=True
+                )
         # Exact upstream status/body passthrough — never rewrite success.
         freshness = "live" if status < 400 else "unavailable"
         return JSONResponse(
             self._envelope(
-                resp_body, source_id="hermes-gateway", profile_id=profile_id,
-                freshness=freshness, request_id=rid, read_only=False,
+                resp_body,
+                source_id="hermes-gateway",
+                profile_id=profile_id,
+                freshness=freshness,
+                request_id=rid,
+                read_only=False,
                 mutations_supported=sorted(MUTATION_ALLOWLIST),
                 degraded_reason=None if status < 400 else f"upstream_status:{status}",
             ),
@@ -2595,25 +3063,39 @@ class Router:
         )
 
     async def _stream_chat(
-        self, request: Request, spec: dict, upstream_path: str, body: Any,
-        extra_headers: dict | None, rid: str, profile_id: str | None, idem: str | None,
-        *, gateway: GatewayClient | None = None,
+        self,
+        request: Request,
+        spec: dict,
+        upstream_path: str,
+        body: Any,
+        extra_headers: dict | None,
+        rid: str,
+        profile_id: str | None,
+        idem: str | None,
+        *,
+        gateway: GatewayClient | None = None,
     ) -> Response:
         """Proxy the gateway SSE stream chunk-by-chunk (never buffered)."""
         gateway = gateway or self.gateway
         upstream: Any = None
         try:
             upstream = await gateway.stream(
-                "POST", upstream_path, json_body=body,
-                inbound_request_id=rid, extra_headers=extra_headers,
+                "POST",
+                upstream_path,
+                json_body=body,
+                inbound_request_id=rid,
+                extra_headers=extra_headers,
             )
         except UpstreamError as e:
             self._record_audit_result(rid, e.status, f"error:{e.detail}")
             return JSONResponse(
                 self._envelope(
                     {"error": str(e.detail) or "upstream error"},
-                    source_id="hermes-gateway", profile_id=profile_id,
-                    freshness="unavailable", request_id=rid, read_only=False,
+                    source_id="hermes-gateway",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
                     mutations_supported=sorted(MUTATION_ALLOWLIST),
                     degraded_reason=f"upstream_error:{e.status}",
                 ),
@@ -2630,8 +3112,12 @@ class Router:
             self._record_audit_result(rid, status, f"upstream:{status}")
             return JSONResponse(
                 self._envelope(
-                    err_body, source_id="hermes-gateway", profile_id=profile_id,
-                    freshness="unavailable", request_id=rid, read_only=False,
+                    err_body,
+                    source_id="hermes-gateway",
+                    profile_id=profile_id,
+                    freshness="unavailable",
+                    request_id=rid,
+                    read_only=False,
                     mutations_supported=sorted(MUTATION_ALLOWLIST),
                     degraded_reason=f"upstream_status:{status}",
                 ),
@@ -2645,13 +3131,21 @@ class Router:
             # One event per turn (never per frame): marks activity on the
             # session so subscribers can react without flooding the ring.
             await bus.safe_publish(
-                "session.changed", "chat", "session", session_id,
-                {"event": "message_received"}, coverage="native",
+                "session.changed",
+                "chat",
+                "session",
+                session_id,
+                {"event": "message_received"},
+                coverage="native",
                 profile_id=profile_id,
             )
 
         async def gen():
-            touch = self._stream_touch_callback(session_id) if session_id else (lambda: None)
+            touch = (
+                self._stream_touch_callback(session_id)
+                if session_id
+                else (lambda: None)
+            )
             try:
                 async for chunk in upstream.aiter_bytes():
                     touch()
@@ -2685,11 +3179,14 @@ class Router:
     # --------------------------------------------------------------- auth api
     def _effective_client_ip(self, request: Request) -> str:
         """Effective client IP: direct peer unless TRUST_PROXY_HEADERS=1."""
-        return resolve_client_ip(
-            request.client.host if request.client else None,
-            request.headers.get("X-Forwarded-For"),
-            self.s.trust_proxy_headers,
-        ) or "unknown"
+        return (
+            resolve_client_ip(
+                request.client.host if request.client else None,
+                request.headers.get("X-Forwarded-For"),
+                self.s.trust_proxy_headers,
+            )
+            or "unknown"
+        )
 
     def auto_issue_session(self, request: Request) -> Optional[dict[str, Any]]:
         """Issue a server-side session for an allowed peer (no login step).
@@ -2740,7 +3237,9 @@ class Router:
         return JSONResponse(
             self._envelope(
                 {"authenticated": True, "session_id": session["id"][:8]},
-                source_id="control-store", profile_id=None, freshness="live",
+                source_id="control-store",
+                profile_id=None,
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -2772,8 +3271,12 @@ class Router:
             # the SPA's /api/csrf fetch) carries the cookie.
             session = getattr(request.state, "auto_session", None)
         if session is None:
-            return _json_error(401, "unauthenticated", "valid session required",
-                               request.state.request_id)
+            return _json_error(
+                401,
+                "unauthenticated",
+                "valid session required",
+                request.state.request_id,
+            )
 
         last_event_id = request.query_params.get("last_event_id") or (
             request.headers.get("Last-Event-ID") or None
@@ -2791,7 +3294,9 @@ class Router:
         # `profile` below continues to filter normal fleet events for the
         # surrounding dashboard tab, which may be a different profile.
         watch_profile = (request.query_params.get("watch_profile") or "").strip()
-        profile_id = str(request.query_params.get("profile") or self.s.live_default_profile)
+        profile_id = str(
+            request.query_params.get("profile") or self.s.live_default_profile
+        )
         queue = self.event_bus.make_queue()
 
         async def subscriber(ev: dict) -> None:
@@ -2806,16 +3311,23 @@ class Router:
         # flight should be picked up the moment the request arrives — not after
         # the replay backlog has been walked.
         watcher = (
-            asyncio.create_task(self._pump_session_frames(
-                watch_id, queue, profile_name=watch_profile,
-            ))
-            if watch_id else None
+            asyncio.create_task(
+                self._pump_session_frames(
+                    watch_id,
+                    queue,
+                    profile_name=watch_profile,
+                )
+            )
+            if watch_id
+            else None
         )
         shutdown_requested = getattr(request.app.state, "shutdown_requested", None)
 
         async def gen():
             try:
-                replay = await self.event_bus.replay_after(last_event_id, profile_id=profile_id)
+                replay = await self.event_bus.replay_after(
+                    last_event_id, profile_id=profile_id
+                )
                 for ev in replay:
                     yield sse_frame(ev)
                 yield f"retry: {self.event_bus.retry_ms}\n\n"
@@ -2824,7 +3336,8 @@ class Router:
                         queue_get = asyncio.create_task(queue.get())
                         shutdown_wait = (
                             asyncio.create_task(shutdown_requested.wait())
-                            if shutdown_requested is not None else None
+                            if shutdown_requested is not None
+                            else None
                         )
                         waiting = {queue_get}
                         if shutdown_wait is not None:
@@ -2895,7 +3408,9 @@ class Router:
             try:
                 gateway = await self._gateway_client_for_watch_profile(profile_name)
                 resp, _rid = await chat_proxy.open_session_events(
-                    gateway, session_id, after_seq=after_seq,
+                    gateway,
+                    session_id,
+                    after_seq=after_seq,
                 )
                 buffer = ""
                 async for chunk in chat_proxy.iter_forwarded_frames(resp, _rid):
@@ -2913,9 +3428,16 @@ class Router:
                                 seq = 0
                             if seq > after_seq:
                                 after_seq = seq
-                        await queue.put({"_frame": sse_frame_named("chat.frame", {
-                            "session_id": session_id, "event": name, "data": payload,
-                        })})
+                        await queue.put({
+                            "_frame": sse_frame_named(
+                                "chat.frame",
+                                {
+                                    "session_id": session_id,
+                                    "event": name,
+                                    "data": payload,
+                                },
+                            )
+                        })
                         # A run's counter restarts at one, so retaining the
                         # prior cursor after its final frame would make a
                         # reconnect during the next run skip its replay.
@@ -2930,21 +3452,31 @@ class Router:
                 # actual worker chat. Preserve the SSE connection for other
                 # fleet events but report this watched-session outcome once.
                 if exc.status == 404:
-                    await queue.put({"_frame": sse_frame_named("chat.frame", {
-                        "session_id": session_id,
-                        "event": "error",
-                        "data": {
-                            "code": "session_not_found",
-                            "message": "The selected session is not available in its profile.",
-                        },
-                    })})
+                    await queue.put({
+                        "_frame": sse_frame_named(
+                            "chat.frame",
+                            {
+                                "session_id": session_id,
+                                "event": "error",
+                                "data": {
+                                    "code": "session_not_found",
+                                    "message": "The selected session is not available in its profile.",
+                                },
+                            },
+                        )
+                    })
                     return
             except RunnerSpawnError as exc:
-                await queue.put({"_frame": sse_frame_named("chat.frame", {
-                    "session_id": session_id,
-                    "event": "error",
-                    "data": {"code": exc.code, "message": str(exc)},
-                })})
+                await queue.put({
+                    "_frame": sse_frame_named(
+                        "chat.frame",
+                        {
+                            "session_id": session_id,
+                            "event": "error",
+                            "data": {"code": exc.code, "message": str(exc)},
+                        },
+                    )
+                })
                 return
             except Exception:
                 # The upstream watch is a best-effort overlay on this channel.
@@ -2971,8 +3503,12 @@ class Router:
     async def search_endpoint(self, request: Request) -> Response:
         q = request.query_params.get("q", "")
         if not q:
-            return _json_error(400, "query_required", "q query param required",
-                               request.state.request_id)
+            return _json_error(
+                400,
+                "query_required",
+                "q query param required",
+                request.state.request_id,
+            )
         try:
             limit = int(request.query_params.get("limit", 20))
         except ValueError:
@@ -2991,30 +3527,42 @@ class Router:
     async def alerts_endpoint(self, request: Request) -> Response:
         return JSONResponse(
             self._envelope(
-                self.alert_engine.list_active(), source_id="alert-engine",
-                profile_id=self._request_profile(request), freshness="live",
+                self.alert_engine.list_active(),
+                source_id="alert-engine",
+                profile_id=self._request_profile(request),
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
 
     async def _alert_acknowledge(
-        self, request: Request, alert_id: str, action: str,
-        audit_action: str, snooze_seconds: int | None = None,
+        self,
+        request: Request,
+        alert_id: str,
+        action: str,
+        audit_action: str,
+        snooze_seconds: int | None = None,
     ) -> Response:
         self._guard_mutation(request)
         rid = request.state.request_id
         target = f"/api/alerts/{alert_id}"
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action=audit_action, target=target,
+                request_id=rid,
+                actor="owner",
+                action=audit_action,
+                target=target,
                 profile_id=self._request_profile(request),
                 request_summary=build_request_summary(
-                    request.method, target, dict(request.query_params)),
-                upstream_status=None, result="pending",
+                    request.method, target, dict(request.query_params)
+                ),
+                upstream_status=None,
+                result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(e).__name__}", rid
+            )
         try:
             result = await self.alert_engine.acknowledge(
                 alert_id, action, snooze_seconds=snooze_seconds
@@ -3037,7 +3585,10 @@ class Router:
             hours = 1
         hours = max(1, min(hours, 72))
         return await self._alert_acknowledge(
-            request, alert_id, alerts_mod.SNOOZE, "alert.snooze",
+            request,
+            alert_id,
+            alerts_mod.SNOOZE,
+            "alert.snooze",
             snooze_seconds=hours * 3600,
         )
 
@@ -3046,8 +3597,12 @@ class Router:
     # BFF, so there is no upstream call and no audit row — the mutation chain
     # here exists to stop a cross-origin page from rewriting the operator's UI.
     PREFERENCE_KEYS = frozenset({
-        "density", "nav_collapsed", "inspector_width", "default_route",
-        "table_sort", "theme",
+        "density",
+        "nav_collapsed",
+        "inspector_width",
+        "default_route",
+        "table_sort",
+        "theme",
     })
 
     async def preferences_read(self, request: Request) -> Response:
@@ -3055,7 +3610,8 @@ class Router:
             self._envelope(
                 self.store.list_preferences(self._request_profile(request)),
                 source_id="local-store",
-                profile_id=self._request_profile(request), freshness="live",
+                profile_id=self._request_profile(request),
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -3071,15 +3627,22 @@ class Router:
             return _json_error(400, "invalid_body", "body must be object", rid)
         unknown = sorted(set(body) - self.PREFERENCE_KEYS)
         if unknown:
-            return _json_error(400, "unknown_preference",
-                               f"unsupported keys: {', '.join(unknown)}", rid)
+            return _json_error(
+                400,
+                "unknown_preference",
+                f"unsupported keys: {', '.join(unknown)}",
+                rid,
+            )
         profile_id = self._request_profile(request)
         for key, value in body.items():
             self.store.set_preference(key, value, profile_id)
         return JSONResponse(
             self._envelope(
-                self.store.list_preferences(profile_id), source_id="local-store",
-                profile_id=profile_id, freshness="live", request_id=rid,
+                self.store.list_preferences(profile_id),
+                source_id="local-store",
+                profile_id=profile_id,
+                freshness="live",
+                request_id=rid,
             )
         )
 
@@ -3094,22 +3657,28 @@ class Router:
         self._require_session(request)
         name = (
             self.dashboard_store.get_persona(session_id)
-            if self.dashboard_store is not None else None
+            if self.dashboard_store is not None
+            else None
         )
         return JSONResponse(
             self._envelope(
-                {"profile_name": name}, source_id="local-store",
-                profile_id=self._request_profile(request), freshness="live",
+                {"profile_name": name},
+                source_id="local-store",
+                profile_id=self._request_profile(request),
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
 
-    async def session_persona_write(self, request: Request, session_id: str) -> Response:
+    async def session_persona_write(
+        self, request: Request, session_id: str
+    ) -> Response:
         self._guard_mutation(request)
         rid = request.state.request_id
         if self.dashboard_store is None:
-            return _json_error(503, "store_unavailable",
-                               "dashboard store not configured", rid)
+            return _json_error(
+                503, "store_unavailable", "dashboard store not configured", rid
+            )
         try:
             body = await request.json()
         except Exception:
@@ -3118,13 +3687,16 @@ class Router:
             return _json_error(400, "invalid_body", "body must be object", rid)
         name = body.get("profile_name")
         if not isinstance(name, str) or not name.strip():
-            return _json_error(400, "invalid_body",
-                               "profile_name must be a non-empty string", rid)
+            return _json_error(
+                400, "invalid_body", "profile_name must be a non-empty string", rid
+            )
         self.dashboard_store.set_persona(session_id, name.strip())
         return JSONResponse(
             self._envelope(
-                {"profile_name": name.strip()}, source_id="local-store",
-                profile_id=self._request_profile(request), freshness="live",
+                {"profile_name": name.strip()},
+                source_id="local-store",
+                profile_id=self._request_profile(request),
+                freshness="live",
                 request_id=rid,
             )
         )
@@ -3133,8 +3705,10 @@ class Router:
         window = request.query_params.get("window", "24h")
         return JSONResponse(
             self._envelope(
-                self.pulse.derive(window), source_id="pulse",
-                profile_id=self._request_profile(request), freshness="live",
+                self.pulse.derive(window),
+                source_id="pulse",
+                profile_id=self._request_profile(request),
+                freshness="live",
                 request_id=request.state.request_id,
             )
         )
@@ -3154,31 +3728,45 @@ class Router:
             return ""
         nested = body.get("session")
         if isinstance(nested, dict):
-            found = nested.get("id") or nested.get("session_id") or nested.get("session_key")
+            found = (
+                nested.get("id")
+                or nested.get("session_id")
+                or nested.get("session_key")
+            )
             if found:
                 return str(found)
-        return str(body.get("id") or body.get("session_id") or body.get("session_key") or "")
+        return str(
+            body.get("id") or body.get("session_id") or body.get("session_key") or ""
+        )
 
     async def chat_create_session(self, request: Request) -> Response:
         session = self._require_session(request)
         self._require_csrf(request, session)
         if not self._origin_allowed(request):
-            return _json_error(403, "origin_forbidden", "Origin not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "origin_forbidden", "Origin not allowed", request.state.request_id
+            )
         if not self._host_allowed(request):
-            return _json_error(403, "host_forbidden", "Host not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "host_forbidden", "Host not allowed", request.state.request_id
+            )
         if not self.mutation_limiter.allow(session["id"]):
-            return _json_error(429, "rate_limited", "mutation rate limit exceeded",
-                               request.state.request_id)
+            return _json_error(
+                429,
+                "rate_limited",
+                "mutation rate limit exceeded",
+                request.state.request_id,
+            )
         try:
             body = await request.json()
         except Exception:
-            return _json_error(400, "invalid_body", "JSON body required",
-                               request.state.request_id)
+            return _json_error(
+                400, "invalid_body", "JSON body required", request.state.request_id
+            )
         if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "body must be object",
-                               request.state.request_id)
+            return _json_error(
+                400, "invalid_body", "body must be object", request.state.request_id
+            )
         idem = request.headers.get("Idempotency-Key")
         rid = request.state.request_id
 
@@ -3206,29 +3794,42 @@ class Router:
         # but no audit call site should force a NOT NULL failure.
         try:
             self.store.append_audit(
-                request_id=rid, actor="owner", action="chat_session_create",
-                target="/api/sessions", profile_id=self._request_profile(request),
-                request_summary="POST /api/sessions", upstream_status=None,
+                request_id=rid,
+                actor="owner",
+                action="chat_session_create",
+                target="/api/sessions",
+                profile_id=self._request_profile(request),
+                request_summary="POST /api/sessions",
+                upstream_status=None,
                 result="pending",
             )
         except Exception as e:  # noqa: BLE001
-            return _json_error(503, "audit_failed",
-                               f"audit write failed: {type(e).__name__}", rid)
+            return _json_error(
+                503, "audit_failed", f"audit write failed: {type(e).__name__}", rid
+            )
 
         if wants_runner:
             profile_name = profile_name.strip()
             if self.runner_manager is None:
                 self._record_audit_result(rid, None, "error:runner_unhealthy")
-                return _json_error(503, "runner_unhealthy",
-                                   "profile-scoped chat runner not configured", rid)
+                return _json_error(
+                    503,
+                    "runner_unhealthy",
+                    "profile-scoped chat runner not configured",
+                    rid,
+                )
             # Fail closed on an unknown profile before ever touching a
             # process spawn — a garbage/injected name still cannot reach
             # argv (create_subprocess_exec never shells out), but there is
             # no reason to pay for a spawn attempt Hermes would only reject.
             if not await self._profile_exists(profile_name):
                 self._record_audit_result(rid, None, "error:runner_profile_missing")
-                return _json_error(400, "runner_profile_missing",
-                                   f"no such profile: {profile_name!r}", rid)
+                return _json_error(
+                    400,
+                    "runner_profile_missing",
+                    f"no such profile: {profile_name!r}",
+                    rid,
+                )
             try:
                 client = await self.runner_manager.ensure_profile_gateway(profile_name)
             except RunnerSpawnError as exc:
@@ -3242,7 +3843,9 @@ class Router:
             upstream_body = dict(body)
             upstream_body.pop("profile", None)
             upstream_body.pop("profile_name", None)
-            result = await chat_proxy.create_session(execution_target.client, upstream_body, idem)
+            result = await chat_proxy.create_session(
+                execution_target.client, upstream_body, idem
+            )
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
             detail = "upstream error"
@@ -3285,8 +3888,12 @@ class Router:
             bus = getattr(self, "event_bus", None)
             if bus is not None:
                 await bus.safe_publish(
-                    "session.changed", "chat", "session", str(sid),
-                    {"event": "created"}, coverage="native",
+                    "session.changed",
+                    "chat",
+                    "session",
+                    str(sid),
+                    {"event": "created"},
+                    coverage="native",
                     profile_id=self._request_profile(request),
                 )
         return JSONResponse(content=result["body"], status_code=result["status"])
@@ -3305,48 +3912,72 @@ class Router:
         session = self._require_session(request)
         self._require_csrf(request, session)
         if not self._origin_allowed(request):
-            return _json_error(403, "origin_forbidden", "Origin not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "origin_forbidden", "Origin not allowed", request.state.request_id
+            )
         if not self._host_allowed(request):
-            return _json_error(403, "host_forbidden", "Host not allowed",
-                               request.state.request_id)
+            return _json_error(
+                403, "host_forbidden", "Host not allowed", request.state.request_id
+            )
         if not self.mutation_limiter.allow(session["id"]):
-            return _json_error(429, "rate_limited", "mutation rate limit exceeded",
-                               request.state.request_id)
+            return _json_error(
+                429,
+                "rate_limited",
+                "mutation rate limit exceeded",
+                request.state.request_id,
+            )
         try:
             body = await request.json()
         except Exception:
-            return _json_error(400, "invalid_body", "JSON body required",
-                               request.state.request_id)
+            return _json_error(
+                400, "invalid_body", "JSON body required", request.state.request_id
+            )
         if not isinstance(body, dict):
-            return _json_error(400, "invalid_body", "body must be object",
-                               request.state.request_id)
+            return _json_error(
+                400, "invalid_body", "body must be object", request.state.request_id
+            )
         session_id = str(body.get("session_id") or "")
         if not session_id:
-            return _json_error(400, "session_id_required", "session_id required",
-                               request.state.request_id)
+            return _json_error(
+                400,
+                "session_id_required",
+                "session_id required",
+                request.state.request_id,
+            )
         rid = request.state.request_id
         try:
             attachments = chat_proxy.normalize_chat_attachments(body.get("attachments"))
         except chat_proxy.AttachmentValidationError as exc:
             return _json_error(400, exc.code, str(exc), rid)
         upstream_body = {
-            k: body.get(k) for k in
+            k: body.get(k)
+            for k in
             # `require_model_lock` is what makes the composer's model pick
             # actually run: without it the gateway ranks a per-request model
             # BELOW the model persisted on the session row and silently uses
             # the latter. See pure/chat-model.js#chatStreamBody.
-            ("message", "system_message", "instructions", "model", "provider",
-             "model_options", "require_model_lock")
+            (
+                "message",
+                "system_message",
+                "instructions",
+                "model",
+                "provider",
+                "model_options",
+                "require_model_lock",
+            )
             if body.get(k) is not None
         }
         if attachments:
             upstream_body["attachments"] = attachments
         self.store.append_audit(
-            request_id=rid, actor="owner", action="chat_stream",
+            request_id=rid,
+            actor="owner",
+            action="chat_stream",
             target=f"/api/sessions/{session_id}/chat/stream",
             profile_id=self._request_profile(request),
-            request_summary="POST /api/chat/stream", upstream_status=None, result="streaming",
+            request_summary="POST /api/chat/stream",
+            upstream_status=None,
+            result="streaming",
         )
 
         gateway = await self._gateway_client_for_session(session_id)
@@ -3356,21 +3987,27 @@ class Router:
             )
         except chat_proxy.UpstreamError as exc:
             self._record_audit_result(rid, exc.status, f"error:{exc.status}")
+
             async def err_gen():
                 yield chat_proxy.error_frame(
                     f"upstream {exc.status}: {exc.body}", rid, exc.status
                 )
+
             return StreamingResponse(
-                err_gen(), media_type="text/event-stream",
+                err_gen(),
+                media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         except Exception as exc:
             self._record_audit_result(rid, 502, f"error:{type(exc).__name__}")
             err_msg = f"upstream unreachable: {type(exc).__name__}"
+
             async def err_gen2():
                 yield chat_proxy.error_frame(err_msg, rid, None)
+
             return StreamingResponse(
-                err_gen2(), media_type="text/event-stream",
+                err_gen2(),
+                media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
@@ -3419,8 +4056,12 @@ class Router:
         """GET /api/chat/running — sessions with a turn in flight right now."""
         session = self._stream_session(request)
         if session is None:
-            return _json_error(401, "unauthenticated", "valid session required",
-                               request.state.request_id)
+            return _json_error(
+                401,
+                "unauthenticated",
+                "valid session required",
+                request.state.request_id,
+            )
         rid = request.state.request_id
         try:
             rows = await chat_proxy.read_running_sessions(self.gateway)
@@ -3428,16 +4069,25 @@ class Router:
             # A gateway that cannot answer this is not an error worth blocking
             # the UI over — "nothing is running" is the honest default, and the
             # degraded reason says why the answer is thin.
-            return JSONResponse(self._envelope(
-                {"running": []}, source_id="hermes-gateway",
-                profile_id=self._request_profile(request), freshness="degraded",
-                request_id=rid, degraded_reason=f"upstream {exc.status}",
-            ))
-        return JSONResponse(self._envelope(
-            {"running": rows}, source_id="hermes-gateway",
-            profile_id=self._request_profile(request), freshness="live",
-            request_id=rid,
-        ))
+            return JSONResponse(
+                self._envelope(
+                    {"running": []},
+                    source_id="hermes-gateway",
+                    profile_id=self._request_profile(request),
+                    freshness="degraded",
+                    request_id=rid,
+                    degraded_reason=f"upstream {exc.status}",
+                )
+            )
+        return JSONResponse(
+            self._envelope(
+                {"running": rows},
+                source_id="hermes-gateway",
+                profile_id=self._request_profile(request),
+                freshness="live",
+                request_id=rid,
+            )
+        )
 
     # ------------------------------------------------------------ static
     def _static_index(self, request: Request, full_path: str = "") -> Response:
@@ -3448,19 +4098,26 @@ class Router:
             root = self.s.resolved_frontend_dir.resolve()
             target = (root / full_path).resolve()
             if str(target).startswith(str(root)) and target.is_file():
-                return FileResponse(target, headers={"Cache-Control": "no-store, max-age=0"})
+                return FileResponse(
+                    target, headers={"Cache-Control": "no-store, max-age=0"}
+                )
         index = self.s.resolved_frontend_dir / "index.html"
         if not index.is_file():
-            return _json_error(404, "frontend_missing", "frontend build not found",
-                               request.state.request_id)
+            return _json_error(
+                404,
+                "frontend_missing",
+                "frontend build not found",
+                request.state.request_id,
+            )
         return FileResponse(index, headers={"Cache-Control": "no-store, max-age=0"})
 
     def _static_asset(self, request: Request, file_path: str) -> Response:
         root = self.s.resolved_frontend_dir.resolve()
         target = (root / file_path).resolve()
         if not str(target).startswith(str(root)) or not target.is_file():
-            return _json_error(404, "not_found", "asset not found",
-                               request.state.request_id)
+            return _json_error(
+                404, "not_found", "asset not found", request.state.request_id
+            )
         return FileResponse(target, headers={"Cache-Control": "no-store, max-age=0"})
 
     # ------------------------------------------------------------- routing
@@ -3474,92 +4131,158 @@ class Router:
         r.add_api_route("/api/auth/logout", self.logout, methods=["POST"])
         r.add_api_route("/api/auth/me", self.me, methods=["GET"])
         r.add_api_route("/api/csrf", self.csrf_endpoint, methods=["GET"])
-        r.add_api_route("/api/capabilities", self.capabilities_endpoint, methods=["GET"])
-        r.add_api_route("/api/capabilities/refresh", self.capabilities_refresh, methods=["POST"])
+        r.add_api_route(
+            "/api/capabilities", self.capabilities_endpoint, methods=["GET"]
+        )
+        r.add_api_route(
+            "/api/capabilities/refresh", self.capabilities_refresh, methods=["POST"]
+        )
         r.add_api_route("/api/audit", self.audit_endpoint, methods=["GET"])
         # Registered before the dashboard read catch-all, and ahead of
         # /api/events/stream only for readability — the paths do not overlap.
-        r.add_api_route("/api/events/recent", self.events_recent_endpoint, methods=["GET"])
+        r.add_api_route(
+            "/api/events/recent", self.events_recent_endpoint, methods=["GET"]
+        )
         r.add_api_route("/api/live/bootstrap", self.live_bootstrap, methods=["GET"])
-        r.add_api_route("/api/live/resource/{resource_key}", self.live_resource, methods=["GET"])
+        r.add_api_route(
+            "/api/live/resource/{resource_key}", self.live_resource, methods=["GET"]
+        )
         r.add_api_route("/api/live/health", self.live_health, methods=["GET"])
 
         # ---- mutations (allowlist, 1:1 mirror of gateway 8642 routes) ----
-        r.add_api_route("/api/sessions/{session_id}/chat/stream",
-                        self._mutation_chat, methods=["POST"])
-        r.add_api_route("/api/sessions", self._mutation_session_create, methods=["POST"])
-        r.add_api_route("/api/sessions/{session_id}",
-                        self._mutation_session_patch, methods=["PATCH"])
-        r.add_api_route("/api/sessions/{session_id}",
-                        self._mutation_session_delete, methods=["DELETE"])
-        r.add_api_route("/api/sessions/{session_id}/fork",
-                        self._mutation_session_fork, methods=["POST"])
-        r.add_api_route("/api/sessions/{session_id}/model",
-                        self._mutation_session_model, methods=["POST"])
-        r.add_api_route("/api/runs/{run_id}/stop",
-                        self._mutation_run_stop, methods=["POST"])
+        r.add_api_route(
+            "/api/sessions/{session_id}/chat/stream",
+            self._mutation_chat,
+            methods=["POST"],
+        )
+        r.add_api_route(
+            "/api/sessions", self._mutation_session_create, methods=["POST"]
+        )
+        r.add_api_route(
+            "/api/sessions/{session_id}",
+            self._mutation_session_patch,
+            methods=["PATCH"],
+        )
+        r.add_api_route(
+            "/api/sessions/{session_id}",
+            self._mutation_session_delete,
+            methods=["DELETE"],
+        )
+        r.add_api_route(
+            "/api/sessions/{session_id}/fork",
+            self._mutation_session_fork,
+            methods=["POST"],
+        )
+        r.add_api_route(
+            "/api/sessions/{session_id}/model",
+            self._mutation_session_model,
+            methods=["POST"],
+        )
+        r.add_api_route(
+            "/api/runs/{run_id}/stop", self._mutation_run_stop, methods=["POST"]
+        )
         r.add_api_route("/api/cron/fire", self._mutation_cron_fire, methods=["POST"])
-        r.add_api_route("/api/room-slots/{slot}/reset", self.room_slot_force_reset,
-                        methods=["POST"])
+        r.add_api_route(
+            "/api/room-slots/{slot}/reset", self.room_slot_force_reset, methods=["POST"]
+        )
 
         # ---- gateway (8642) reads — agent capability surface ----
-        r.add_api_route("/api/gateway/{path:path}", self.proxy_gateway_read,
-                        methods=["GET"])
+        r.add_api_route(
+            "/api/gateway/{path:path}", self.proxy_gateway_read, methods=["GET"]
+        )
 
         # Explicit before every generic read proxy/catch-all.
-        r.add_api_route("/api/session-context/kanban-workers", self.kanban_worker_context,
-                        methods=["GET"])
+        r.add_api_route(
+            "/api/session-context/kanban-workers",
+            self.kanban_worker_context,
+            methods=["GET"],
+        )
 
         # ---- read proxy (catch-all) ----
-        r.add_api_route("/api/proxy/dashboard/{path:path}", self.proxy_dashboard_read,
-                        methods=["GET"])
-        r.add_api_route("/api/proxy/external/{service}", self.proxy_external_dashboard,
-                        methods=["GET"])
-        r.add_api_route("/api/proxy/external/{service}/{path:path}", self.proxy_external_dashboard,
-                        methods=["GET"])
-        r.add_api_route("/api/upstream/{path:path}", self.proxy_upstream_read,
-                        methods=["GET"])
-        r.add_api_route("/api/adapter/{path:path}", self.proxy_adapter_read, methods=["GET"])
+        r.add_api_route(
+            "/api/proxy/dashboard/{path:path}",
+            self.proxy_dashboard_read,
+            methods=["GET"],
+        )
+        r.add_api_route(
+            "/api/proxy/external/{service}",
+            self.proxy_external_dashboard,
+            methods=["GET"],
+        )
+        r.add_api_route(
+            "/api/proxy/external/{service}/{path:path}",
+            self.proxy_external_dashboard,
+            methods=["GET"],
+        )
+        r.add_api_route(
+            "/api/upstream/{path:path}", self.proxy_upstream_read, methods=["GET"]
+        )
+        r.add_api_route(
+            "/api/adapter/{path:path}", self.proxy_adapter_read, methods=["GET"]
+        )
 
         # ---- upstream (9119) mutation proxy — bounded SPA write surface ----
-        r.add_api_route("/api/upstream/{path:path}", self.upstream_mutation,
-                        methods=UPSTREAM_MUTATION_METHODS)
+        r.add_api_route(
+            "/api/upstream/{path:path}",
+            self.upstream_mutation,
+            methods=UPSTREAM_MUTATION_METHODS,
+        )
 
         # ---- local editable memory sources (local file-backed tabs) ----
-        r.add_api_route("/api/memory/{file_key}", self.memory_file_read,
-                        methods=["GET"])
-        r.add_api_route("/api/memory/{file_key}", self.memory_file_write,
-                        methods=["PUT"])
+        r.add_api_route(
+            "/api/memory/{file_key}", self.memory_file_read, methods=["GET"]
+        )
+        r.add_api_route(
+            "/api/memory/{file_key}", self.memory_file_write, methods=["PUT"]
+        )
 
         # ---- SSE stream (real fabric, Stage 5) ----
         r.add_api_route("/api/events/stream", self.sse_stream, methods=["GET"])
 
         # ---- Stage 5: federated search / run inspector / alerts / pulse ----
         r.add_api_route("/api/search", self.search_endpoint, methods=["GET"])
-        r.add_api_route("/api/run-inspector/task/{task_id}", self.inspect_task, methods=["GET"])
-        r.add_api_route("/api/run-inspector/session/{session_id}", self.inspect_session, methods=["GET"])
+        r.add_api_route(
+            "/api/run-inspector/task/{task_id}", self.inspect_task, methods=["GET"]
+        )
+        r.add_api_route(
+            "/api/run-inspector/session/{session_id}",
+            self.inspect_session,
+            methods=["GET"],
+        )
         r.add_api_route("/api/alerts", self.alerts_endpoint, methods=["GET"])
         r.add_api_route("/api/alerts/{alert_id}/ack", self.alert_ack, methods=["POST"])
-        r.add_api_route("/api/alerts/{alert_id}/snooze", self.alert_snooze, methods=["POST"])
+        r.add_api_route(
+            "/api/alerts/{alert_id}/snooze", self.alert_snooze, methods=["POST"]
+        )
         r.add_api_route("/api/pulse", self.pulse_endpoint, methods=["GET"])
         r.add_api_route("/api/preferences", self.preferences_read, methods=["GET"])
         r.add_api_route("/api/preferences", self.preferences_write, methods=["PUT"])
         r.add_api_route("/api/config", self.config_write, methods=["PUT"])
         # Before the dashboard catch-all: /api/sessions/... otherwise proxies
         # to 9119, which has no persona route and would 404.
-        r.add_api_route("/api/sessions/{session_id}/persona",
-                        self.session_persona_read, methods=["GET"])
-        r.add_api_route("/api/sessions/{session_id}/persona",
-                        self.session_persona_write, methods=["POST"])
-        r.add_api_route("/api/permits/{permit_id}/decision", self.permit_decision,
-                        methods=["POST"])
-        r.add_api_route("/api/issues/{issue_id}/update", self.issue_update,
-                        methods=["POST"])
+        r.add_api_route(
+            "/api/sessions/{session_id}/persona",
+            self.session_persona_read,
+            methods=["GET"],
+        )
+        r.add_api_route(
+            "/api/sessions/{session_id}/persona",
+            self.session_persona_write,
+            methods=["POST"],
+        )
+        r.add_api_route(
+            "/api/permits/{permit_id}/decision", self.permit_decision, methods=["POST"]
+        )
+        r.add_api_route(
+            "/api/issues/{issue_id}/update", self.issue_update, methods=["POST"]
+        )
 
         # ---- Stage 5: chat proxy (session create + stream) ----
         r.add_api_route("/api/chat/session", self.chat_create_session, methods=["POST"])
         # SPA canonical path (F-01): /api/chat/sessions == session-create.
-        r.add_api_route("/api/chat/sessions", self.chat_sessions_alias, methods=["POST"])
+        r.add_api_route(
+            "/api/chat/sessions", self.chat_sessions_alias, methods=["POST"]
+        )
         r.add_api_route("/api/chat/stream", self.chat_stream, methods=["POST"])
         # Read-only live view of a turn someone else started. Before the
         # dashboard catch-all below, which would otherwise treat these as 9119
@@ -3570,7 +4293,9 @@ class Router:
         # Registered after every explicit BFF route so the specific handlers
         # (search/inspector/alerts/pulse/chat/events/...) always win; this
         # catch-all only serves allowlisted 9119 dashboard reads.
-        r.add_api_route("/api/{path:path}", self.proxy_dashboard_direct, methods=["GET"])
+        r.add_api_route(
+            "/api/{path:path}", self.proxy_dashboard_direct, methods=["GET"]
+        )
 
         # ---- static (catch-all after API) ----
         r.add_api_route("/assets/{file_path:path}", self._static_asset, methods=["GET"])
@@ -3583,15 +4308,23 @@ class Router:
         # resolved to the trailing "stream" segment.
         path = f"/api/sessions/{session_id}/chat/stream"
         gateway = await self._gateway_client_for_session(session_id)
-        return await self.mutation(request, "chat_send", path, upstream_path=path,
-                                   gateway=gateway)
+        return await self.mutation(
+            request, "chat_send", path, upstream_path=path, gateway=gateway
+        )
 
-    async def _mutation_session_fork(self, request: Request, session_id: str) -> Response:
+    async def _mutation_session_fork(
+        self, request: Request, session_id: str
+    ) -> Response:
         path = f"/api/sessions/{session_id}/fork"
         gateway = await self._gateway_client_for_session(session_id)
-        return await self.mutation(request, "session_fork", path, upstream_path=path,
-                                   gateway=gateway,
-                                   on_success=self._fork_persona_writer(session_id))
+        return await self.mutation(
+            request,
+            "session_fork",
+            path,
+            upstream_path=path,
+            gateway=gateway,
+            on_success=self._fork_persona_writer(session_id),
+        )
 
     def _fork_persona_writer(self, source_session_id: str):
         """Carry a session's profile + execution mode onto its fork.
@@ -3621,11 +4354,14 @@ class Router:
 
         return _write
 
-    async def _mutation_session_model(self, request: Request, session_id: str) -> Response:
+    async def _mutation_session_model(
+        self, request: Request, session_id: str
+    ) -> Response:
         path = f"/api/sessions/{session_id}/model"
         gateway = await self._gateway_client_for_session(session_id)
-        return await self.mutation(request, "session_model_lock", path, upstream_path=path,
-                                   gateway=gateway)
+        return await self.mutation(
+            request, "session_model_lock", path, upstream_path=path, gateway=gateway
+        )
 
     async def _mutation_run_stop(self, request: Request, run_id: str) -> Response:
         # Not resolved to a runner-backed client: run_id is a gateway run id,
@@ -3640,15 +4376,21 @@ class Router:
     async def _mutation_session_create(self, request: Request) -> Response:
         return await self.mutation(request, "session_create", "/api/sessions")
 
-    async def _mutation_session_patch(self, request: Request, session_id: str) -> Response:
+    async def _mutation_session_patch(
+        self, request: Request, session_id: str
+    ) -> Response:
         gateway = await self._gateway_client_for_session(session_id)
-        return await self.mutation(request, "session_patch", f"/api/sessions/{session_id}",
-                                   gateway=gateway)
+        return await self.mutation(
+            request, "session_patch", f"/api/sessions/{session_id}", gateway=gateway
+        )
 
-    async def _mutation_session_delete(self, request: Request, session_id: str) -> Response:
+    async def _mutation_session_delete(
+        self, request: Request, session_id: str
+    ) -> Response:
         gateway = await self._gateway_client_for_session(session_id)
-        return await self.mutation(request, "session_delete", f"/api/sessions/{session_id}",
-                                   gateway=gateway)
+        return await self.mutation(
+            request, "session_delete", f"/api/sessions/{session_id}", gateway=gateway
+        )
 
     async def _mutation_cron_fire(self, request: Request) -> Response:
         return await self.mutation(request, "cron_fire", "/api/cron/fire")

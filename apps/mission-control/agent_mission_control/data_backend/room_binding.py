@@ -14,7 +14,9 @@ import yaml
 from .config import ROOM_BINDING_KEYS, ROOM_SLOT_KEYS, ROOM_TOPIC_KEYS
 
 
-def _read_group_topics(extra: dict[str, Any], room_chat_id: Any) -> list[dict[str, Any]]:
+def _read_group_topics(
+    extra: dict[str, Any], room_chat_id: Any
+) -> list[dict[str, Any]]:
     """Whitelist-extract topics for the group_topics entry matching room_chat_id.
 
     Only ROOM_TOPIC_KEYS fields are copied per topic; unmatched groups (any
