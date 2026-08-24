@@ -579,7 +579,12 @@ def _rich_normalize_linebreaks(text: str) -> str:
 # never wakes, so an unguarded stop() hangs indefinitely and wedges the whole
 # reconnect/teardown ladder. This is an internal safety bound (not a user knob),
 # applied identically at every stop() site so no path can hang on a dead socket.
-_UPDATER_STOP_TIMEOUT = 15.0
+# A healthy stop() completes in well under a second, so this bound only ever
+# governs the pathological CLOSE-WAIT case; keeping it short caps the deaf
+# window each recovery event adds (incident logs 2026-08-24 measured ~15s of
+# guaranteed polling outage per event at 15.0 — every Telegram-edge 502 paid
+# the full bound before the ladder could restart polling).
+_UPDATER_STOP_TIMEOUT = 5.0
 # Per-step bound for disconnect() awaits that are not updater.stop() itself.
 # Kept short so a cancellation-swallowing lifecycle/PTB close cannot burn the
 # gateway's whole fatal-handler budget before the reconnect queue is useful
@@ -4419,12 +4424,18 @@ class TelegramAdapter(BasePlatformAdapter):
                         self._background_tasks.add(self._polling_error_task)
                         self._polling_error_task.add_done_callback(self._background_tasks.discard)
                     elif self._looks_like_network_error(error):
-                        logger.warning("[%s] Telegram network _redact_telegram_error_text(error), scheduling reconnect: %s", self.name, error)
+                        logger.warning(
+                            "[%s] Telegram network error, scheduling reconnect: %s",
+                            self.name, _redact_telegram_error_text(error),
+                        )
                         self._polling_error_task = loop.create_task(self._handle_polling_network_error(error))
                         self._background_tasks.add(self._polling_error_task)
                         self._polling_error_task.add_done_callback(self._background_tasks.discard)
                     else:
-                        logger.error("[%s] Telegram polling _redact_telegram_error_text(error): %s", self.name, error, exc_info=True)
+                        logger.error(
+                            "[%s] Telegram polling error (unhandled): %s",
+                            self.name, _redact_telegram_error_text(error), exc_info=True,
+                        )
 
                 # Store reference for retry use in _handle_polling_conflict
                 self._polling_error_callback_ref = _polling_error_callback
