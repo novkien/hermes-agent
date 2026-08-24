@@ -917,6 +917,52 @@ class GitHubRestClient:
                 return row
         return None
 
+    def _gitlink_pull_entries(
+        self, spec: RepoSpec, pull_number: int, *, ref: str
+    ) -> list[dict[str, str]]:
+        """Return the exact gitlinks already accumulated on a parent PR."""
+        rows = self.request(
+            "GET",
+            f"/repos/{spec.repo_full_name}/pulls/{int(pull_number)}/files?per_page=100",
+        )
+        entries: list[dict[str, str]] = []
+        for row in rows if isinstance(rows, list) else []:
+            path = _superproject_path(
+                (row or {}).get("filename") if isinstance(row, dict) else None,
+                repository=spec.name,
+            )
+            if not path:
+                raise GitHubApiError(
+                    "superproject_pin_invalid",
+                    "aggregate Hermes PR contains a non-gitlink path",
+                    details={"pull_number": int(pull_number), "path": path},
+                )
+            encoded_path = quote(path, safe="/")
+            query = urlencode({"ref": ref})
+            payload = self.request(
+                "GET",
+                f"/repos/{spec.repo_full_name}/contents/{encoded_path}?{query}",
+            )
+            if not isinstance(payload, dict) or payload.get("type") != "submodule":
+                raise GitHubApiError(
+                    "superproject_pin_invalid",
+                    "aggregate Hermes PR contains a non-gitlink entry",
+                    details={"pull_number": int(pull_number), "path": path},
+                )
+            sha = str(payload.get("sha") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+                raise GitHubApiError(
+                    "github_response_invalid",
+                    f"GitHub did not return a valid gitlink SHA for {path} at {ref}",
+                )
+            entries.append({
+                "path": path,
+                "mode": "160000",
+                "type": "commit",
+                "sha": sha,
+            })
+        return entries
+
     def ensure_superproject_gitlink_pr(
         self,
         superproject: RepoSpec,
@@ -945,15 +991,27 @@ class GitHubRestClient:
             )
 
         current = self._open_gitlink_pull(superproject)
+        parent_sha = self._branch_sha(superproject, superproject.branch)
+        branch_behind_parent = False
         if current:
             branch = str((current.get("head") or {}).get("ref") or "")
             branch_sha = self._branch_sha(superproject, branch)
             pull_number = int(current.get("number") or 0)
             pull_url = current.get("html_url")
             state = "updated"
+            comparison = self.request(
+                "GET",
+                f"/repos/{superproject.repo_full_name}/compare/{parent_sha}...{branch_sha}",
+            )
+            if not isinstance(comparison, dict):
+                raise GitHubApiError(
+                    "github_response_invalid",
+                    "GitHub did not return parent branch ancestry",
+                )
+            branch_behind_parent = int(comparison.get("behind_by") or 0) > 0
         else:
             branch = f"{SUPERPROJECT_BRANCH_PREFIX}{child.name}-{target[:12]}-{time.time_ns()}"
-            branch_sha = self._branch_sha(superproject, superproject.branch)
+            branch_sha = parent_sha
             pull_number = 0
             pull_url = None
             state = "created"
@@ -963,7 +1021,7 @@ class GitHubRestClient:
             child.superproject_path,
             ref=branch if current else superproject.branch,
         )
-        if current_pin == target:
+        if current_pin == target and not branch_behind_parent:
             return {
                 "managed": True,
                 "changed": False,
@@ -977,20 +1035,29 @@ class GitHubRestClient:
                 "html_url": pull_url,
             }
 
-        base_tree = self._commit_tree_sha(superproject, branch_sha)
+        entries_by_path: dict[str, dict[str, str]] = {}
+        parents = [branch_sha]
+        if current and branch_behind_parent:
+            for entry in self._gitlink_pull_entries(
+                superproject, pull_number, ref=branch
+            ):
+                entries_by_path[entry["path"]] = entry
+            base_tree = self._commit_tree_sha(superproject, parent_sha)
+            parents.append(parent_sha)
+        else:
+            base_tree = self._commit_tree_sha(superproject, branch_sha)
+        entries_by_path[child.superproject_path] = {
+            "path": child.superproject_path,
+            "mode": "160000",
+            "type": "commit",
+            "sha": target,
+        }
         tree = self.request(
             "POST",
             f"/repos/{superproject.repo_full_name}/git/trees",
             {
                 "base_tree": base_tree,
-                "tree": [
-                    {
-                        "path": child.superproject_path,
-                        "mode": "160000",
-                        "type": "commit",
-                        "sha": target,
-                    }
-                ],
+                "tree": list(entries_by_path.values()),
             },
         )
         tree_sha = str((tree or {}).get("sha") or "")
@@ -1004,7 +1071,7 @@ class GitHubRestClient:
             {
                 "message": f"chore: update {child.name} gitlink to {target[:12]}",
                 "tree": tree_sha,
-                "parents": [branch_sha],
+                "parents": parents,
             },
         )
         commit_sha = str((commit or {}).get("sha") or "")
