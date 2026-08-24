@@ -770,6 +770,7 @@ class GitlinkGithub(GitHubRestClient):
         self.ref_updates = []
         self.pull_files = set()
         self.behind_by = 0
+        self.content_refs = []
 
     def _new_sha(self):
         self.counter += 1
@@ -797,7 +798,8 @@ class GitlinkGithub(GitHubRestClient):
         if marker in endpoint and method == "GET":
             item = unquote(endpoint.split(marker, 1)[1])
             ref = parse_qs(parsed.query)["ref"][0]
-            tree = self.commits[self.refs[ref]]
+            self.content_refs.append(ref)
+            tree = self.commits[self.refs.get(ref, ref)]
             return {
                 "sha": self.trees[tree][item],
                 "type": "submodule",
@@ -977,6 +979,15 @@ class GitHubGitlinkWorkflowTests(unittest.TestCase):
         self.assertEqual(merged_tree[".sources/hermes-skills"], skills_target)
         self.assertEqual(second["pull_number"], first["pull_number"])
         self.assertFalse(self.github.ref_updates[-1]["force"])
+
+    def test_created_pin_is_verified_at_immutable_parent_commit(self):
+        result = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.agent, target_sha="4" * 40
+        )
+
+        self.assertTrue(result["changed"])
+        self.assertIn(result["parent_commit_sha"], self.github.commits)
+        self.assertEqual(self.github.content_refs[-1], result["parent_commit_sha"])
 
 
 class UnreachableHostRunner(RepositoryGitRunner):
