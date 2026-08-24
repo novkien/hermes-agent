@@ -763,10 +763,13 @@ class GitlinkGithub(GitHubRestClient):
         self.refs = {"main": self.BASE_COMMIT}
         self.commits = {self.BASE_COMMIT: self.BASE_TREE}
         self.trees = {self.BASE_TREE: dict(initial_pins)}
+        self.commit_parents = {self.BASE_COMMIT: []}
         self.open_pull = None
         self.counter = 10
         self.tree_entries = []
         self.ref_updates = []
+        self.pull_files = set()
+        self.behind_by = 0
 
     def _new_sha(self):
         self.counter += 1
@@ -778,6 +781,10 @@ class GitlinkGithub(GitHubRestClient):
         endpoint = parsed.path
         if endpoint.endswith("/pulls") and method == "GET":
             return [self.open_pull] if self.open_pull else []
+        if endpoint.endswith("/files") and "/pulls/" in endpoint and method == "GET":
+            return [{"filename": path} for path in sorted(self.pull_files)]
+        if "/compare/" in endpoint and method == "GET":
+            return {"behind_by": self.behind_by}
         marker = "/git/ref/heads/"
         if marker in endpoint and method == "GET":
             branch = unquote(endpoint.split(marker, 1)[1])
@@ -791,18 +798,23 @@ class GitlinkGithub(GitHubRestClient):
             item = unquote(endpoint.split(marker, 1)[1])
             ref = parse_qs(parsed.query)["ref"][0]
             tree = self.commits[self.refs[ref]]
-            return {"sha": self.trees[tree][item], "type": "submodule"}
+            return {
+                "sha": self.trees[tree][item],
+                "type": "submodule",
+            }
         if endpoint.endswith("/git/trees") and method == "POST":
             tree_sha = self._new_sha()
             pins = dict(self.trees[body["base_tree"]])
-            entry = body["tree"][0]
-            pins[entry["path"]] = entry["sha"]
+            for entry in body["tree"]:
+                pins[entry["path"]] = entry["sha"]
+                self.pull_files.add(entry["path"])
             self.trees[tree_sha] = pins
-            self.tree_entries.append(dict(entry))
+            self.tree_entries.extend(dict(entry) for entry in body["tree"])
             return {"sha": tree_sha}
         if endpoint.endswith("/git/commits") and method == "POST":
             commit_sha = self._new_sha()
             self.commits[commit_sha] = body["tree"]
+            self.commit_parents[commit_sha] = list(body["parents"])
             self.assert_parent = body["parents"][0]
             return {"sha": commit_sha}
         if endpoint.endswith("/git/refs") and method == "POST":
@@ -931,6 +943,40 @@ class GitHubGitlinkWorkflowTests(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertIsNone(self.github.open_pull)
         self.assertEqual(self.github.tree_entries, [])
+
+    def test_open_parent_pull_reconciles_new_master_without_losing_pins(self):
+        agent_target = "4" * 40
+        skills_target = "5" * 40
+        first = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.agent, target_sha=agent_target
+        )
+
+        parent_tree = self.github._new_sha()
+        self.github.trees[parent_tree] = {
+            **self.github.trees[self.github.BASE_TREE],
+            "config.yaml": "6" * 40,
+        }
+        parent_commit = self.github._new_sha()
+        self.github.commits[parent_commit] = parent_tree
+        self.github.commit_parents[parent_commit] = [self.github.BASE_COMMIT]
+        self.github.refs["main"] = parent_commit
+        self.github.behind_by = 1
+
+        second = self.github.ensure_superproject_gitlink_pr(
+            self.parent, self.skills, target_sha=skills_target
+        )
+
+        branch_head = self.github.refs[first["branch"]]
+        self.assertEqual(
+            self.github.commit_parents[branch_head],
+            [first["parent_commit_sha"], parent_commit],
+        )
+        merged_tree = self.github.trees[self.github.commits[branch_head]]
+        self.assertEqual(merged_tree["config.yaml"], "6" * 40)
+        self.assertEqual(merged_tree["hermes-agent"], agent_target)
+        self.assertEqual(merged_tree[".sources/hermes-skills"], skills_target)
+        self.assertEqual(second["pull_number"], first["pull_number"])
+        self.assertFalse(self.github.ref_updates[-1]["force"])
 
 
 class UnreachableHostRunner(RepositoryGitRunner):
