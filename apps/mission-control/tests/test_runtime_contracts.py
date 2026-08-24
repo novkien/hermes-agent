@@ -1739,7 +1739,13 @@ async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
         router._request_profile = lambda request: None
         router.mutation_limiter = type("L", (), {"allow": lambda self, _k: True})()
         router._record_audit_result = lambda *a, **k: None
-        router.event_bus = None
+        published: list[tuple[tuple, dict]] = []
+
+        class _EventBus:
+            async def safe_publish(self, *args, **kwargs):
+                published.append((args, kwargs))
+
+        router.event_bus = _EventBus()
 
         ensure_calls: list[str] = []
 
@@ -1784,6 +1790,14 @@ async def test_chat_create_session_with_profile_name_spawns_a_runner() -> None:
         assert payload["execution_mode"] == "runner"
         assert store.get_persona("sess-1") == "jarvis"
         assert store.get_execution_mode("sess-1") == "runner"
+        assert len(published) == 1
+        event_args, event_kwargs = published[0]
+        assert event_args[:4] == ("session.changed", "chat", "session", "sess-1")
+        assert event_args[4] == {"reason": "created"}
+        assert event_kwargs["operation"] == "invalidate"
+        assert event_kwargs["profile_id"] == "", (
+            "cross-profile session directory changes must reach every document profile"
+        )
 
         # Unknown profile: fail closed before ever touching runner_manager.
         router.dashboard = FakeDashboard(body=[])

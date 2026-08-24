@@ -3128,16 +3128,20 @@ class Router:
         session_id = str((body or {}).get("session_id") or "")
         bus = getattr(self, "event_bus", None)
         if bus is not None:
-            # One event per turn (never per frame): marks activity on the
-            # session so subscribers can react without flooding the ring.
+            # One event per turn (never per frame). This payload is only a
+            # notification, not a complete session entity, so it must
+            # invalidate the bounded read model instead of replacing a rich
+            # sidebar row with {event: message_received}. Global scope lets a
+            # cross-profile Chat directory hear the change.
             await bus.safe_publish(
                 "session.changed",
                 "chat",
                 "session",
                 session_id,
-                {"event": "message_received"},
+                {"reason": "message_received"},
                 coverage="native",
-                profile_id=profile_id,
+                profile_id="",
+                operation="invalidate",
             )
 
         async def gen():
@@ -3892,9 +3896,10 @@ class Router:
                     "chat",
                     "session",
                     str(sid),
-                    {"event": "created"},
+                    {"reason": "created"},
                     coverage="native",
-                    profile_id=self._request_profile(request),
+                    profile_id="",
+                    operation="invalidate",
                 )
         return JSONResponse(content=result["body"], status_code=result["status"])
 

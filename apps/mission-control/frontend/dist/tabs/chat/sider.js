@@ -27,7 +27,7 @@ const GROUP_REVEAL_CHUNK = 25;
  */
 export function renderSider(container, ctx) {
   const {
-    sessions, selectedId, query, expandedPlatforms, gatewayAvailable,
+    sessions, selectedId, query, expandedPlatforms, gatewayAvailable, loading = false,
     gatewayUnavailableReason, onOpen, onCreate, onSearch, onRename, onDelete,
     onFork, onTogglePin, api, profile,
     // Sessions with a turn in flight right now. A Set rather than a single id:
@@ -66,6 +66,11 @@ export function renderSider(container, ctx) {
   const listWrap = el('div', { class: 'chat-sider-list' });
   container.append(listWrap);
 
+  if (loading) {
+    listWrap.append(skeleton({ lines: 6 }));
+    listWrap.prepend(el('div', { class: 'muted', text: 'Loading sessions…' }));
+    return;
+  }
   if (!sessions) {
     listWrap.append(unavailableState({ reason: 'Session source unavailable' }));
     return;

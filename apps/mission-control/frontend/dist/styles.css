@@ -716,16 +716,9 @@ html, body {
 }
 .md-table tbody tr:last-child td { border-bottom: 0; }
 .md-table tbody tr:hover td { background: rgba(var(--accent-rgb), 0.05); }
-/* `.streaming` stays a state hook — it hides the message actions until the
-   answer is final — and now also paints the DSH-style block caret so the
-   growing answer reads as live text. The activity line still narrates. */
-.msg-body.streaming::after {
-  content: ""; display: inline-block; width: 7px; height: 14px;
-  margin-left: 3px; vertical-align: -2px; border-radius: 1px;
-  background: var(--accent);
-  animation: chat-caret-blink 0.9s steps(2, start) infinite;
-}
-@keyframes chat-caret-blink { to { visibility: hidden; } }
+/* `.streaming` remains a lifecycle hook: message actions stay hidden until the
+   answer is final. The activity line already communicates liveness, so the
+   transcript does not add a blinking block caret after the growing text. */
 .msg-event, .msg-error { color: var(--text-faint); font-size: var(--fs-xs); }
 .msg-event { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .msg-event-note { color: var(--text-faint); }

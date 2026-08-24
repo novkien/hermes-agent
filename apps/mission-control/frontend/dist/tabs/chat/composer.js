@@ -117,6 +117,17 @@ export function createComposer(ctx) {
   // starved every ordinary request behind it until the app looked frozen.
   let remoteTurn = null;
   let remoteView = null;
+  // A reconnect can replay run.started after its prompt bubble is already on
+  // screen. Keep a bounded receipt set for this composer/session so one remote
+  // run contributes one optimistic user bubble, even if its frame ring is
+  // attached more than once.
+  const remoteRunStarts = new Set();
+
+  function rememberRemoteRun(runId) {
+    if (!runId) return;
+    remoteRunStarts.add(runId);
+    if (remoteRunStarts.size > 64) remoteRunStarts.delete(remoteRunStarts.values().next().value);
+  }
 
   // Frames that carry no turn state: they say something about the CONNECTION,
   // which the reducer has no opinion about.
@@ -194,17 +205,24 @@ export function createComposer(ctx) {
     }
 
     if (name === 'run.started') {
+      if (eventRunId && remoteRunStarts.has(eventRunId)) {
+        // If the original turn is still mounted, let the reducer's sequence
+        // guard consume the replay. Once it settled, the whole replay is stale.
+        if (!remoteTurn || (remoteTurn.runId && remoteTurn.runId !== eventRunId)) return;
+      } else {
+        rememberRemoteRun(eventRunId);
+      }
       // The prompt is persisted upstream, but the mirror poll stands down while
       // this stream is attached, so it has to be drawn from the frame that
       // announced it — otherwise an answer appears with nothing above it saying
       // what was asked.
       const asked = data && data.user_message;
       const askedText = asked && (typeof asked === 'string' ? asked : asked.content);
-      if (askedText) {
+      if (askedText && (!eventRunId || remoteTurn?.runId !== eventRunId)) {
         appendMessage(list, 'user', String(askedText), {});
         scrollToLatest(list);
       }
-      beginRemote();
+      if (!remoteTurn) beginRemote();
     } else if (!remoteTurn) {
       // Attached mid-turn and `run.started` had already aged out of the
       // gateway's replay buffer. Paint what is left rather than nothing — but

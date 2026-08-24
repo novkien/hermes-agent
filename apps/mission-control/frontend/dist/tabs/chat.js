@@ -62,7 +62,7 @@ import { createThreadSearch, openCommandPalette } from './chat/palette.js';
 import { fetchChainTips } from './_kit.js';
 import { CONTEXT_REFRESH_MS, fetchWorkerLinks, isWorkerRunning, mergeTaskChanged } from '../pure/session-operational-context.js';
 import { workerContextNodes } from '../components/session-operational-context.js';
-import { bindLiveResources, liveRows, mergeProjectedRows } from './_live.js';
+import { bindLiveResources, liveRows } from './_live.js';
 
 export const GATEWAY_UNAVAILABLE_REASON =
   'Hermes Gateway is not reachable from the Pi BFF. Session history remains readable; create/send actions are disabled.';
@@ -92,6 +92,14 @@ const MIRROR_HIDDEN_INTERVAL_MS = 30000;
 // detached worker's tool calls stay operationally live without imposing a
 // high-frequency read on every open, idle thread.
 const WATCH_SILENT_CATCHUP_MS = 1500;
+// Session events are the fast path; this visible backstop covers profile-
+// isolated sessions whose creator is outside the document profile's SSE
+// filter. Both paths read only the newest cross-profile slice and merge it
+// into the pages already held by the sidebar.
+const SESSION_LIST_EVENT_GAP_MS = 2000;
+const SESSION_LIST_BACKSTOP_MS = 5000;
+const SESSION_LIST_HIDDEN_BACKSTOP_MS = 30000;
+const MIRROR_BASELINE_BACKOFF_MS = [200, 600, 1200, 2500, 5500];
 
 export function createChat({ api, profile, sse, refreshInspector, onNavigate, liveStore }) {
   const root = el('div', { class: 'tab tab-chat' });
@@ -137,6 +145,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   let selectedSession = null;
   let loaded = false;
   let unsubscribeSessionChanged = null;
+  let unsubscribeSessionDirectory = null;
   let unsubscribeLiveSessions = null;
   let sessionQuery = '';
   let inspectorHost = null;
@@ -160,6 +169,12 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
   // marked "watching" even when its gateway bridge is unavailable.
   let lastChatFrameAt = 0;
   const mirrorBaselineBarrier = createMirrorBarrier();
+  let sessionListTimer = null;
+  let sessionListBackstopTimer = null;
+  let sessionListRefreshPromise = null;
+  let sessionListRefreshQueued = false;
+  let sessionListGeneration = 0;
+  let lastListRefresh = 0;
   // Paging state for the full session list. The aggregator's first page is only
   // the newest 500 of (here) 5,295; `pager` knows how to reach the rest.
   let pager = createPager({});
@@ -622,10 +637,11 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       // persisted rows, so the mirror has to be re-anchored exactly as it is
       // after a local turn — otherwise the next poll appends the whole thing
       // again as plain history.
-      onRemoteSettled: () => {
+      onRemoteSettled: (turn) => {
+        rememberTurnMessages(turn);
         syncMirrorBaseline(sessionId, sessionProfile).catch(() => null);
         patchLocalSession(session, { last_activity_at: Math.floor(Date.now() / 1000) });
-        refreshSessionList().catch(() => null);
+        requestSessionListRefresh();
         refreshOpenContext(); syncContextRefresh();
       },
       // Only the tab actually painting a turn knows one is running: the session
@@ -857,7 +873,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     // event or timer cannot squeeze a mirror append into the persistence gap.
     const release = mirrorBaselineBarrier.acquire(sessionId);
     try {
-      for (const delay of RELOAD_BACKOFF_MS) {
+      for (const delay of MIRROR_BASELINE_BACKOFF_MS) {
         await new Promise((resolve) => setTimeout(resolve, delay));
         if (selectedSessionId !== sessionId) return;
         const messages = await readMessages(sessionId, sessionProfile, 0).catch(() => []);
@@ -868,30 +884,87 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     }
   }
 
+  function rememberTurnMessages(turn) {
+    // run.completed already carries the authoritative turn transcript. Record
+    // those identities immediately, before the gateway's async persistence is
+    // visible to /messages, so the mirror cannot append the just-painted turn.
+    for (const key of messageKeys(turn?.messages || [])) renderedKeys.add(key);
+  }
+
   /**
    * Re-read the newest page of the session list and merge it in place.
    *
    * Deliberately not `load()`: that rebuilds the whole tab, re-opens the
    * thread and throws away paging progress. This only refreshes recency,
    * titles and message counts for the rows the aggregator considers newest,
-   * which is exactly what a session advancing elsewhere changes. Throttled,
-   * because `session.changed` is a fleet-wide topic and a busy fleet emits it
-   * far more often than a sidebar needs redrawing.
+   * which is exactly what a session advancing elsewhere changes. Concurrent
+   * reads are single-flight and stale generations are ignored, so switching
+   * tabs or profiles cannot let an old response overwrite the current view.
    */
-  let lastListRefresh = 0;
   async function refreshSessionList() {
-    const now = Date.now();
-    if (now - lastListRefresh < 10000) return;
-    lastListRefresh = now;
-    const response = await api
+    if (sessionListRefreshPromise) {
+      sessionListRefreshQueued = true;
+      return sessionListRefreshPromise;
+    }
+    const generation = sessionListGeneration;
+    sessionListRefreshPromise = api
       .get('/api/upstream/api/profiles/sessions?profile=all&limit=200&offset=0&order=recent', { profile })
-      .catch(() => null);
-    const rows = sessionRows(response?.data);
-    if (!rows.length) return;
-    allSessions = mergeSessions(allSessions || [], rows, idOf, sessionTimestamp);
-    await resolveChainTips();
-    applyPins();
-    notifyInspector();
+      .then(async (response) => {
+        if (generation !== sessionListGeneration || !root.isConnected) return;
+        const rows = sessionRows(response?.data);
+        if (!rows.length) return;
+        allSessions = mergeSessions(allSessions || [], rows, idOf, sessionTimestamp);
+        await resolveChainTips();
+        if (generation !== sessionListGeneration || !root.isConnected) return;
+        applyPins();
+        notifyInspector();
+      })
+      .catch(() => null)
+      .finally(() => {
+        lastListRefresh = Date.now();
+        sessionListRefreshPromise = null;
+        if (sessionListRefreshQueued) {
+          sessionListRefreshQueued = false;
+          requestSessionListRefresh();
+        }
+      });
+    return sessionListRefreshPromise;
+  }
+
+  function requestSessionListRefresh() {
+    if (!root.isConnected) return;
+    const wait = Math.max(0, SESSION_LIST_EVENT_GAP_MS - (Date.now() - lastListRefresh));
+    if (wait === 0 && !sessionListRefreshPromise) {
+      refreshSessionList().catch(() => null);
+      return;
+    }
+    if (sessionListTimer) return;
+    sessionListTimer = setTimeout(() => {
+      sessionListTimer = null;
+      refreshSessionList().catch(() => null);
+    }, wait || SESSION_LIST_EVENT_GAP_MS);
+  }
+
+  function stopSessionListRefresh() {
+    if (sessionListTimer) clearTimeout(sessionListTimer);
+    if (sessionListBackstopTimer) clearTimeout(sessionListBackstopTimer);
+    sessionListTimer = null;
+    sessionListBackstopTimer = null;
+    sessionListRefreshQueued = false;
+    sessionListGeneration += 1;
+  }
+
+  function startSessionListBackstop() {
+    stopSessionListRefresh();
+    const generation = sessionListGeneration;
+    const schedule = () => {
+      if (generation !== sessionListGeneration || !root.isConnected) return;
+      sessionListBackstopTimer = setTimeout(() => {
+        sessionListBackstopTimer = null;
+        refreshSessionList().catch(() => null).finally(schedule);
+      }, document.hidden ? SESSION_LIST_HIDDEN_BACKSTOP_MS : SESSION_LIST_BACKSTOP_MS);
+    };
+    schedule();
   }
 
   function applyLiveSessions() {
@@ -901,7 +974,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     const sameProfile = existing.filter((row) => (row.profile || profile) === profile);
     const otherProfiles = existing.filter((row) => (row.profile || profile) !== profile);
     const projected = live.rows.map((row) => ({ profile: row.profile || profile, ...row }));
-    const merged = mergeProjectedRows(sameProfile, projected, idOf);
+    const merged = mergeSessions(sameProfile, projected, idOf, sessionTimestamp);
     allSessions = mergeSessions(otherProfiles, merged, idOf, sessionTimestamp);
     if (selectedSession) {
       const next = allSessions.find((row) => idOf(row) === selectedSessionId || row.tip?.tip_id === selectedSessionId);
@@ -1012,6 +1085,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
     // The turn just drawn on screen came from SSE frames, not persisted rows.
     // Teach the mirror that those rows are already on screen, or its next poll
     // would append the whole turn again.
+    rememberTurnMessages(turn);
     syncMirrorBaseline(sessionId, sessionProfile).catch(() => null);
     // A long turn that finishes while the operator is elsewhere should say so.
     if (document.hidden && turn && !turn.error) {
@@ -1446,8 +1520,16 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       if (id && id !== selectedSessionId && id !== openTargetId(selectedSession)) return;
       mirrorThread(sessionId, sessionProfile, list).catch(() => null);
       refreshOpenContext();
-      // A list-level event also means the sider's ordering and counts moved.
-      if (!liveStore) refreshSessionList().catch(() => null);
+    });
+  }
+
+  function subscribeToSessionDirectory() {
+    if (unsubscribeSessionDirectory || !sse) return;
+    // Directory liveness is tab-scoped, not open-thread-scoped. A session
+    // created in another tab/profile must refresh the sider even while this
+    // tab is on the hero or reading a completely different conversation.
+    unsubscribeSessionDirectory = sse.on('session.changed', () => {
+      requestSessionListRefresh();
     });
   }
 
@@ -1533,6 +1615,7 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       // open, but one reset chain is one sidebar conversation, not a stack of
       // indistinguishable cards all pointing at the same live tip.
       sessions: collapseChainRows(allSessions, idOf),
+      loading: !loaded && allSessions === null,
       selectedId: selectedSessionId,
       runningIds: runningSet(),
       workerLinks,
@@ -1639,6 +1722,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       subscribeToChatFrames();
       subscribeToTaskChanges();
       subscribeToLiveSessions();
+      subscribeToSessionDirectory();
+      startSessionListBackstop();
       bindContextVisibility();
       const deepLinked = params.s || params.session || null;
       if (deepLinked) selectedSessionId = deepLinked;
@@ -1658,12 +1743,15 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       document.removeEventListener('keydown', onShortcut, true);
       stopStream();
       stopMirror();
+      stopSessionListRefresh();
       stopContextRefresh();
       if (contextVisibility) document.removeEventListener('visibilitychange', contextVisibility);
       contextVisibility = null;
       closeMenu();
       if (unsubscribeSessionChanged) unsubscribeSessionChanged();
       unsubscribeSessionChanged = null;
+      if (unsubscribeSessionDirectory) unsubscribeSessionDirectory();
+      unsubscribeSessionDirectory = null;
       if (unsubscribeRunning) unsubscribeRunning();
       unsubscribeRunning = null;
       if (unsubscribeChatFrame) unsubscribeChatFrame();
@@ -1690,6 +1778,8 @@ export function createChat({ api, profile, sse, refreshInspector, onNavigate, li
       subscribeToChatFrames();
       subscribeToTaskChanges();
       subscribeToLiveSessions();
+      subscribeToSessionDirectory();
+      startSessionListBackstop();
       bindContextVisibility();
       selectedSessionId = id;
       if (!loaded) await load();

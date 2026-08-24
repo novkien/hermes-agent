@@ -28,6 +28,16 @@ assert.match(chat, /visibilitychange/, 'chat has no event-driven background-tab 
 assert.match(chat, /setTimeout\(/, 'chat has no scheduled transcript catch-up');
 assert.match(chat, /lastChatFrameAt/, 'chat cannot recover when a watched stream goes silent');
 assert.match(chat, /WATCH_SILENT_CATCHUP_MS/, 'chat does not promptly catch up a silent remote watcher');
+assert.match(chat, /SESSION_LIST_EVENT_GAP_MS/, 'chat does not coalesce session-directory events');
+assert.match(chat, /SESSION_LIST_BACKSTOP_MS/, 'chat has no visible cross-profile session backstop');
+assert.match(chat, /function subscribeToSessionDirectory\(\)/,
+  'session-directory liveness is still scoped to whichever thread is open');
+assert.match(chat, /sse\.on\('session\.changed',[\s\S]*?requestSessionListRefresh\(\)/,
+  'session.changed does not refresh the cross-profile directory');
+assert.match(chat, /mergeSessions\(sameProfile, projected/,
+  'a bounded live session slice can still clobber loaded or optimistic rows');
+assert.doesNotMatch(chat, /if \(!liveStore\) refreshSessionList/,
+  'liveStore presence must not disable authoritative cross-profile refresh');
 assert.match(
   chat,
   /sse\.watch\(sessionId, workerLink \? null : sessionProfile\)/,

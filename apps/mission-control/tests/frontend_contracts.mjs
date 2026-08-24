@@ -669,6 +669,22 @@ assert.equal(replayed.blocks, blocksBeforeReplay);
 assert.equal(turnText(replayed), 'Only once.');
 assert.equal(replayed.blocks.filter((block) => block.kind === 'text').length, 1);
 
+// Older gateways may omit message_id on assistant.completed. A tool hand-off
+// closes the prose block before completion arrives; exact final text must seal
+// that block in place instead of opening an identical second bubble.
+let idlessCompletion = createTurn(0);
+idlessCompletion = reduceTurn(idlessCompletion, frame('assistant.delta', {
+  run_id: 'run_idless', seq: 1, delta: 'Same answer.',
+}), 1);
+idlessCompletion = reduceTurn(idlessCompletion, frame('tool.started', {
+  run_id: 'run_idless', seq: 2, tool_call_id: 'call_1', tool_name: 'noop',
+}), 2);
+idlessCompletion = reduceTurn(idlessCompletion, frame('assistant.completed', {
+  run_id: 'run_idless', seq: 3, content: 'Same answer.',
+}), 3);
+assert.equal(idlessCompletion.blocks.filter((block) => block.kind === 'text').length, 1);
+assert.equal(turnText(idlessCompletion), 'Same answer.');
+
 // `done` always fires in the gateway's finally, including after an error — it
 // must not overwrite the failure with success.
 let failing = reduceTurn(createTurn(0), frame('error', { message: 'provider 401' }), 10);
@@ -1434,11 +1450,22 @@ assert.match(composerSource,
   'Stop must call the gateway run-stop mutation instead of only aborting the browser stream');
 assert.match(composerSource, /suppressedRunIds\.has\(eventRunId\)/,
   'a locally stopped run must not re-attach through the session frame watcher');
+assert.match(composerSource, /remoteRunStarts\.has\(eventRunId\)/,
+  'a replayed remote run must not append its optimistic user bubble twice');
 assert.match(composerSource, /await findRunningRunId\(\)/,
   'an early Stop must resolve a run id even if run.started did not reach the browser');
 assert.match(chatTabSource,
   /mirrorBaselineBarrier\.active\(sessionId\)[\s\S]*?await readMessages\([\s\S]*?mirrorBaselineBarrier\.active\(sessionId\)/,
   'the mirror must re-check its baseline gate after an in-flight history read');
+assert.match(chatTabSource, /rememberTurnMessages\(turn\)[\s\S]*?syncMirrorBaseline/,
+  'run.completed message identities must be recorded before persistence catch-up');
+assert.match(chatTabSource, /SESSION_LIST_BACKSTOP_MS = 5000/,
+  'cross-profile session discovery needs a bounded visible backstop');
+assert.match(chatTabSource, /requestSessionListRefresh\(\)/,
+  'session.changed must schedule an authoritative directory refresh');
+const stylesSource = readFileSync(new URL('../frontend/dist/styles.css', import.meta.url), 'utf8');
+assert.doesNotMatch(stylesSource, /\.msg-body\.streaming::after/,
+  'streaming text must not paint the blue block caret');
 assert.match(composerSource, /accept:\s*['"]\*\/\*['"]/,
   'the chat file picker must accept every file type');
 assert.match(attachmentSource, /readAsDataURL\(file\)/,
