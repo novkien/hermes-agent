@@ -1117,7 +1117,12 @@ class GitHubRestClient:
                     "GitHub did not create the gitlink pull request",
                 )
 
-        verified = self._content_sha(superproject, child.superproject_path, ref=branch)
+        # Verify the immutable commit we just created. Reading the mutable
+        # branch name immediately after PATCH can briefly return its previous
+        # tree through GitHub's ref cache and falsely report partial success.
+        verified = self._content_sha(
+            superproject, child.superproject_path, ref=commit_sha
+        )
         if verified != target:
             raise GitHubApiError(
                 "superproject_pin_unverified",
