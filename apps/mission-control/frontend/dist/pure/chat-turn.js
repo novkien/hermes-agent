@@ -197,12 +197,22 @@ function streamBlock(next, kind, text, now, done = false) {
  * With no message id to go on, a closed block is left alone rather than risking
  * an overwrite of an earlier round.
  */
-function reconcileIndex(blocks, messageId) {
+function reconcileIndex(blocks, messageId, finalText = '') {
   const open = openIndex(blocks, 'text');
   if (open !== -1) return open;
-  if (!messageId) return -1;
+  if (messageId) {
+    for (let i = blocks.length - 1; i >= 0; i -= 1) {
+      if (blocks[i].kind === 'text' && blocks[i].messageId === messageId) return i;
+    }
+    return -1;
+  }
+  // Older gateways can omit message_id from the completion. If the newest
+  // closed prose block is already the exact authoritative text, completing it
+  // in place is safe and prevents a second identical bubble after a tool hand-
+  // off. Never search farther back: identical prose in an earlier round is a
+  // legitimate separate block.
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
-    if (blocks[i].kind === 'text' && blocks[i].messageId === messageId) return i;
+    if (blocks[i].kind === 'text') return blocks[i].text === finalText ? i : -1;
   }
   return -1;
 }
@@ -511,7 +521,7 @@ export function reduceTurn(turn, event, now = Date.now()) {
         // transport may have dropped — and must not overwrite what earlier
         // rounds already said.
         const id = data?.message_id || data?.message?.id || next.messageId;
-        const index = reconcileIndex(next.blocks, id ? String(id) : null);
+        const index = reconcileIndex(next.blocks, id ? String(id) : null, finalText);
         setBlocks(next, index === -1
           ? [...closeOpenBlocks(next.blocks, now), streamBlock(next, 'text', finalText, now, true)]
           : patchBlock(next.blocks, index, { text: finalText }));
