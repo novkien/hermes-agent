@@ -11,6 +11,7 @@ import {
   platformLabel, relativeTime, sessionId as idOf, sessionTimestamp, sessionTitle,
   sortByActivity, threadIdentity,
 } from '../../pure/chat-session.js';
+import { showWorkerStatusOnSessionCard } from '../../pure/session-operational-context.js';
 import { workerContextNodes } from '../../components/session-operational-context.js';
 
 // How many extra rows one "Show more" reveals inside a platform group. Small
@@ -247,12 +248,20 @@ export function renderSider(container, ctx) {
     // replaced an "active" chip that meant only "this session record has not
     // ended", which was true of nearly every row and so said nothing: a chip
     // that is always lit is not an indicator.
-    if (runningIds.has(openId) || runningIds.has(id)) {
+    const sessionRunning = runningIds.has(openId) || runningIds.has(id);
+    if (sessionRunning) {
       foot.append(el('span', { class: 'chip chip-live', text: 'running' }));
     } else if (session.archived) {
       foot.append(el('span', { class: 'chip chip-paused', text: 'archived' }));
     }
-    foot.append(...workerContextNodes(workerLink, { compact: true }));
+    // A live Kanban worker normally makes its owning session live too. Both
+    // facts matter, but painting the same word twice on one card does not.
+    // Suppress only the duplicate running badge; a different worker state
+    // (for example blocked while the turn winds down) remains visible.
+    foot.append(...workerContextNodes(workerLink, {
+      compact: true,
+      showStatus: showWorkerStatusOnSessionCard(workerLink, sessionRunning),
+    }));
     const messageCount = session.tip?.message_count ?? session.message_count;
     if (messageCount) foot.append(el('span', { class: 'chat-sider-item-stat', text: `${messageCount} msgs` }));
     const thread = threadIdentity(session);

@@ -68,7 +68,8 @@ import { attachChainTips, chainIdBatches, collapseChainRows } from '../frontend/
 import { shapeOpenRouterCatalog, supportsTools } from '../frontend/dist/pure/openrouter-catalog.js';
 import { createDeltaPacer } from '../frontend/dist/pure/delta-pacer.js';
 import {
-  CONTEXT_REFRESH_MS, isWorkerRunning, mergeTaskChanged, normalizeWorkerLink, workerStateLabel,
+  CONTEXT_REFRESH_MS, isWorkerRunning, mergeTaskChanged, normalizeWorkerLink,
+  showWorkerStatusOnSessionCard, workerStateLabel,
 } from '../frontend/dist/pure/session-operational-context.js';
 
 import {
@@ -102,6 +103,9 @@ const verifiedWorker = normalizeWorkerLink({
 assert.equal(CONTEXT_REFRESH_MS, 10_000);
 assert.equal(isWorkerRunning(verifiedWorker), true);
 assert.equal(workerStateLabel(verifiedWorker), 'Kanban · t_context');
+assert.equal(showWorkerStatusOnSessionCard(verifiedWorker, true), false);
+assert.equal(showWorkerStatusOnSessionCard(verifiedWorker, false), true);
+assert.equal(showWorkerStatusOnSessionCard({ ...verifiedWorker, status: 'blocked' }, true), true);
 assert.equal(isWorkerRunning(normalizeWorkerLink({ kind: 'kanban_worker', resolution: 'unresolved' })), false);
 assert.equal(workerStateLabel(normalizeWorkerLink({ kind: 'kanban_worker', resolution: 'unresolved', reason: 'seed' })), 'Kanban worker · card unresolved');
 assert.equal(normalizeWorkerLink({ kind: 'ordinary_session', status: 'running' }), null);
