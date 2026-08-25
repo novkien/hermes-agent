@@ -9,7 +9,8 @@ you are about to push:
     python3 scripts/audit_pr_attribution.py --fix      # create mapping files
 
 Logic (kept in sync with contributor-check.yml):
-  - scans ``git log $(git merge-base origin/main HEAD)..HEAD --format=%ae``
+  - scans commits since the PR/default branch's remote-tracking ref
+  - requires complete history so shallow boundaries cannot create false positives
   - skips teknium/bot emails and ``<id>+<login>@users.noreply.github.com``
     (CI auto-resolves those)
   - everything else must have ``contributors/emails/<email>`` or a legacy
@@ -26,6 +27,7 @@ Logic (kept in sync with contributor-check.yml):
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -55,8 +57,40 @@ def run(*args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def resolve_base_ref() -> str:
+    """Return the canonical remote-tracking base for this checkout."""
+    candidates = []
+    github_base = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if github_base:
+        candidates.append(f"origin/{github_base}")
+
+    origin_head = run(
+        "git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD", check=False
+    )
+    prefix = "refs/remotes/"
+    if origin_head.startswith(prefix):
+        candidates.append(origin_head[len(prefix):])
+
+    candidates.extend(("origin/master", "origin/main"))
+    for candidate in dict.fromkeys(candidates):
+        if run(
+            "git", "rev-parse", "--verify", "--quiet", candidate, check=False
+        ):
+            return candidate
+    raise RuntimeError(
+        "Could not resolve the PR/default base branch. Fetch origin and ensure "
+        "origin/master or origin/main exists."
+    )
+
+
 def new_emails() -> list[str]:
-    base = run("git", "merge-base", "origin/main", "HEAD")
+    if run("git", "rev-parse", "--is-shallow-repository", check=False) == "true":
+        raise RuntimeError(
+            "Contributor attribution audit requires complete history; run "
+            "`git fetch --unshallow origin` in an isolated clone and retry."
+        )
+    base_ref = resolve_base_ref()
+    base = run("git", "merge-base", base_ref, "HEAD")
     log = run("git", "log", f"{base}..HEAD", "--format=%ae", "--no-merges", check=False)
     return sorted({e for e in log.splitlines() if e.strip()})
 
