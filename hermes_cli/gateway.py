@@ -4107,11 +4107,9 @@ def systemd_start(system: bool = False):
         # Raises UserSystemdUnavailableError with a remediation message.
         _preflight_user_systemd()
     _require_service_installed("start", system=system)
-    # Start Mission Control without restarting it when it is already active.
-    # Failure is visible but cannot block the gateway's own startup.
-    from hermes_cli.mission_control import start_for_gateway
-
-    start_for_gateway(system=system)
+    # The generated gateway unit has a one-way Wants= dependency on Mission
+    # Control. Refresh the unit before starting so systemd owns that sibling
+    # startup without a second, independently-issued systemctl transaction.
     # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
     # systemd_unit_is_current gate (the single chokepoint), and the unit is
     # guaranteed to exist here by _require_service_installed, so the gate runs.
@@ -4155,11 +4153,9 @@ def systemd_restart(system: bool = False):
     else:
         _preflight_user_systemd()
     _require_service_installed("restart", system=system)
-    # A start job is idempotent: an active Mission Control process keeps its
-    # PID while the gateway restarts. Never issue a sibling restart here.
-    from hermes_cli.mission_control import start_for_gateway
-
-    start_for_gateway(system=system)
+    # The generated gateway unit has a one-way Wants= dependency on Mission
+    # Control. Refreshing it below keeps sibling startup under the same systemd
+    # transaction and never restarts an already-active Mission Control process.
     # HERMES_HOME sync happens inside refresh_systemd_unit_if_needed's
     # systemd_unit_is_current gate (the single chokepoint). The unit exists
     # here (_require_service_installed), so the gate runs and its os.environ

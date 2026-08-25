@@ -148,7 +148,8 @@ def test_telegram_and_channel_overrides_never_inherited(profile_env):
     for bad in ("group_topics", "room_slots", "room_chat_id", "channel_overrides", "system_prompt"):
         assert bad not in tg
     assert "platforms" not in cfg
-    assert "session" not in cfg
+    assert cfg.get("session") != "root-session"
+    assert cfg.get("session") == {"terminal_continue": True}
     sessions = cfg.get("sessions", {})
     assert "62769" not in sessions
     assert "channel_overrides" not in sessions

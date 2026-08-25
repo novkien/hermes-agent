@@ -72,7 +72,9 @@ def test_real_aiagent_builds_section_once_and_keeps_it_out_of_static_prefix(monk
     assert calls[0]["session_id"] == agent.session_id
     assert "## Plugin Context: example.rules" in first
     assert "rules render 1" in first
-    assert first.index("## Plugin Context: example.rules") < first.index("Current date:")
+    assert first.index("## Plugin Context: example.rules") < first.index(
+        "Conversation started:"
+    )
     assert "example.rules" not in agent._cached_system_prompt_static
 
 

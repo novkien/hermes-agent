@@ -233,7 +233,7 @@ def _restore_plugin_prompt_sections(prompt: str) -> tuple:
     if end < 0:
         return ()
     after_end = end + len(PLUGIN_SECTIONS_END)
-    if not prompt[after_end:].startswith("\n\nCurrent date:"):
+    if not prompt[after_end:].startswith(("\n\nConversation started:", "\n\nTimezone:")):
         return ()
     framed = prompt[start:after_end]
 

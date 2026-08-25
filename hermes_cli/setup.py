@@ -3479,7 +3479,21 @@ def _blank_slate_minimal_toolsets(config: dict):
                 # minimal Blank Slate surface (#57315).
             all_keys.add(k)
 
-        disabled = sorted(all_keys - keep)
+        from toolsets import resolve_toolset
+
+        kept_tools = set()
+        for key in keep:
+            kept_tools.update(resolve_toolset(key))
+
+        # Alias/compatibility toolsets can expose the same tools as a kept
+        # bundle (for example skills_read overlaps skills). Disabling one of
+        # those aliases still subtracts its tools globally, so exclude every
+        # overlapping toolset from the hard-suppression list.
+        disabled = sorted(
+            key
+            for key in all_keys - keep
+            if not (set(resolve_toolset(key)) & kept_tools)
+        )
         if disabled:
             config.setdefault("agent", {})["disabled_toolsets"] = disabled
     except Exception as exc:
