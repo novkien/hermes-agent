@@ -222,3 +222,40 @@ def test_finish_turn_relay_preserves_interrupted_stop_semantics():
     assert relay.events[1][1]["completed"] is False
     assert relay.events[1][1]["partial"] is True
     assert relay.events[1][1]["interrupted"] is True
+
+
+def test_finish_turn_relay_preserves_compression_deferred_soft_result():
+    from agent.conversation_loop import _compression_deferred_result
+
+    agent = SimpleNamespace(
+        session_id="session-1",
+        _compression_skipped_due_to_lock="sibling-turn",
+        _flush_status_buffer=lambda: None,
+    )
+    result = _compression_deferred_result(agent, [], 0)
+    relay = _RecordingTurnRelay()
+
+    relay_module.finish_turn_relay(relay, result)
+
+    assert _finish_event_names(relay) == [
+        "assistant.completed",
+        "run.completed",
+        "done",
+    ]
+    assert relay.events[0][1] == {
+        "message_id": "message-1",
+        "content": result["final_response"],
+        "completed": False,
+        "partial": True,
+        "interrupted": False,
+    }
+    assert relay.events[1][1] == {
+        "message_id": "message-1",
+        "completed": False,
+        "messages": [],
+        "usage": None,
+        "interrupted": False,
+        "partial": True,
+    }
+    assert relay.restored is True
+    assert relay.closed is True

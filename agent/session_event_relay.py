@@ -290,8 +290,12 @@ def finish_turn_relay(relay, result: Any = None) -> None:
             explicit_incomplete = (
                 "completed" in result and result.get("completed") is False
             )
+            compression_deferred = (
+                result.get("compression_deferred") is True
+                and result.get("failed") is False
+            )
             failed = bool(result.get("failed")) or (
-                explicit_incomplete and not interrupted
+                explicit_incomplete and not interrupted and not compression_deferred
             )
             error_text = (
                 result.get("error")
@@ -322,19 +326,23 @@ def finish_turn_relay(relay, result: Any = None) -> None:
             if interrupted:
                 partial = True
 
+            completed = not interrupted
+            if isinstance(result, dict) and "completed" in result:
+                completed = bool(result.get("completed"))
+
             relay.emit(
                 "assistant.completed",
                 {
                     "message_id": relay.message_id,
                     "content": _as_text(final),
-                    "completed": not interrupted,
+                    "completed": completed,
                     "partial": partial,
                     "interrupted": interrupted,
                 },
             )
             run_payload = {
                 "message_id": relay.message_id,
-                "completed": not interrupted,
+                "completed": completed,
                 "messages": [],
                 "usage": usage,
             }
