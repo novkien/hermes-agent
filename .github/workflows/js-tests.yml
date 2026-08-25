@@ -57,8 +57,13 @@ jobs:
         with:
           command: npm ci
 
-      # Every check runs at the same time. The step fails only after all of
-      # them finish. There are two reasons this is not ``npm run --ws check``.
+      # The upstream workflow ran every check at the same time on a 32-core
+      # runner. On this fork's standard hosted runner, each test command also
+      # creates its own worker pool, so running several commands concurrently
+      # causes timing-sensitive TUI tests to contend for the same few cores.
+      # Keep one workspace check active at a time; the individual test suites
+      # still retain their internal parallelism. The step fails only after all
+      # checks finish. There are two reasons this is not ``npm run --ws check``.
       #
       #   * ``--ws`` is serial and stops at the first workspace that fails. A
       #     run then reports one failure, where the matrix this replaced
@@ -75,4 +80,4 @@ jobs:
       # not an empty run, because an empty run reports green after it checks
       # nothing.
       - name: Run all workspace checks
-        run: node .github/scripts/run-workspace-checks.mjs
+        run: node .github/scripts/run-workspace-checks.mjs --concurrency 1
