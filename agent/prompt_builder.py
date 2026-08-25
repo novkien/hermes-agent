@@ -2092,6 +2092,8 @@ def _build_skills_system_prompt_inner(
                         continue
                     entry = _build_snapshot_entry(skill_file, proj_dir, frontmatter, desc)
                     fm_name = entry["frontmatter_name"]
+                    if enabled is not None and fm_name not in enabled:
+                        continue
                     if fm_name in project_names:
                         continue
                     if fm_name in disabled or entry["skill_name"] in disabled:
