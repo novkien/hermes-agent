@@ -4832,6 +4832,18 @@ class APIServerAdapter(BasePlatformAdapter):
         if len(session_id) > self._MAX_SESSION_HEADER_LEN:
             return web.json_response(_openai_error("Session ID too long", code="invalid_session_id"), status=400)
 
+        requested_model = body.get("model")
+        if requested_model:
+            model = requested_model
+        else:
+            # ``self._model_name`` is the OpenAI-compatible advertised model.
+            # For a named profile it intentionally resolves to the profile
+            # name (for example ``comfyui-worker``), which is not necessarily
+            # a runnable model or smart-routing alias. Empty session creates
+            # must instead inherit the profile's actual ``model.default``.
+            from gateway.run import _resolve_gateway_model
+
+            model = _resolve_gateway_model() or self._model_name
         system_prompt = body.get("system_prompt")
         if system_prompt is not None and not isinstance(system_prompt, str):
             return web.json_response(_openai_error("system_prompt must be a string", code="invalid_system_prompt"), status=400)
@@ -4852,7 +4864,11 @@ class APIServerAdapter(BasePlatformAdapter):
         # identifier" (#session-model-alias-leak). Re-deriving straight
         # from the raw body here would bypass that normalization and
         # reintroduce the leak for the provider-prefixed case.
-        model_name = self._clean_runtime_id(requested.get("model")) or None
+        # Owner merge note: when nothing was requested, fall back to the
+        # profile's resolved default model rather than storing NULL — a
+        # session created without an explicit model must inherit
+        # ``model.default`` (profile-default model selection).
+        model_name = self._clean_runtime_id(requested.get("model")) or (str(model) if model else None)
         model_config = None
         if requested.get("model") or requested.get("provider"):
             model_config = {

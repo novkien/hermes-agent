@@ -335,7 +335,7 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         expected_profile,
         "SYSTEM_MESSAGE",
         "CONTEXT_FILES",
-            "Current date: Friday, January 02, 2026",
+            "Conversation started: Friday, January 02, 2026",
     ))
 
     with (

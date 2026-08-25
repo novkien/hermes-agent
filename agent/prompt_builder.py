@@ -1963,6 +1963,8 @@ def build_skills_system_prompt(
             available_toolsets,
             compact_categories,
             project_dirs=project_dirs,
+            enabled_skills=enabled_skills,
+            mode=mode,
         )
     finally:
         if _home_token is not None:
@@ -1976,7 +1978,20 @@ def _build_skills_system_prompt_inner(
     available_toolsets: "set[str] | None",
     compact_categories: "frozenset[str] | None",
     project_dirs: "list[Path] | None" = None,
+    enabled_skills: "tuple[str, ...] | list[str] | None" = None,
+    mode: "dict[str, list[str] | tuple[str, ...]] | None" = None,
 ) -> str:
+    from agent.skill_context import (
+        SKILLS_MODE_INVISIBLE,
+        SKILLS_MODE_PRUNE,
+        empty_skills_mode,
+        prune_skill_description,
+        skill_mode_for_name,
+        skills_mode_cache_key,
+        validate_skills_mode,
+    )
+
+    mode = validate_skills_mode(mode if mode is not None else empty_skills_mode())
     # Include the resolved platform so per-platform disabled-skill lists
     # produce distinct cache entries (gateway serves multiple platforms).
     _platform_hint = _current_session_platform_hint()
