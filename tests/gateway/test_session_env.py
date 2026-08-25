@@ -273,3 +273,18 @@ def test_cron_session_set_clear_and_reset_tristate(monkeypatch):
     reset_session_vars()
     assert get_session_env("HERMES_CRON_SESSION") == "1"
 
+
+def test_transport_profile_clear_masks_stale_environment(monkeypatch):
+    # Handler cleanup must not leak a previous turn's transport profile.
+    monkeypatch.setenv(
+        "HERMES_SESSION_TRANSPORT_PROFILE", "ambient-profile"
+    )
+
+    tokens = set_session_vars(transport_profile="bound-profile")
+    assert (
+        get_session_env("HERMES_SESSION_TRANSPORT_PROFILE")
+        == "bound-profile"
+    )
+
+    clear_session_vars(tokens)
+    assert get_session_env("HERMES_SESSION_TRANSPORT_PROFILE") == ""

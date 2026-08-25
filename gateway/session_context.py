@@ -330,6 +330,7 @@ def clear_session_vars(tokens: list) -> None:
         _SESSION_UI_SESSION_ID,
         _SESSION_MESSAGE_ID,
         _SESSION_PROFILE,
+        _SESSION_TRANSPORT_PROFILE,
         _BROWSER_CONTROL_PRINCIPAL,
         _BROWSER_CONTROL_TRANSPORT_FAMILY,
         _CRON_SESSION,

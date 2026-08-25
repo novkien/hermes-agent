@@ -273,28 +273,76 @@ def start_turn_relay(
 
 
 def finish_turn_relay(relay, result: Any = None) -> None:
-    """Close a turn out for watchers. Safe to call with None, twice, or after an error."""
+    "Close a turn out for watchers. Safe to call with None, twice, or after an error."
     if relay is None:
         return
     try:
         final = ""
         usage = None
+        interrupted = False
+        failed = result is None
+        error_text: Any = None
+
         if isinstance(result, dict):
             final = result.get("final_response") or ""
             usage = result.get("usage")
-        relay.emit("assistant.completed", {
-            "message_id": relay.message_id,
-            "content": _as_text(final),
-            "completed": True,
-            "partial": False,
-            "interrupted": False,
-        })
-        relay.emit("run.completed", {
-            "message_id": relay.message_id,
-            "completed": True,
-            "messages": [],
-            "usage": usage,
-        })
+            interrupted = bool(result.get("interrupted"))
+            explicit_incomplete = (
+                "completed" in result and result.get("completed") is False
+            )
+            failed = bool(result.get("failed")) or (
+                explicit_incomplete and not interrupted
+            )
+            error_text = result.get("error") or final
+        elif result is not None:
+            failed = True
+            error_text = result
+
+        if failed:
+            relay.emit(
+                "error",
+                {
+                    "message_id": relay.message_id,
+                    "error": _as_text(
+                        error_text
+                        or "The relayed turn failed before producing a final response."
+                    ),
+                },
+            )
+        else:
+            partial = (
+                bool(result.get("partial"))
+                if isinstance(result, dict)
+                else False
+            )
+            if interrupted:
+                partial = True
+
+            relay.emit(
+                "assistant.completed",
+                {
+                    "message_id": relay.message_id,
+                    "content": _as_text(final),
+                    "completed": not interrupted,
+                    "partial": partial,
+                    "interrupted": interrupted,
+                },
+            )
+            run_payload = {
+                "message_id": relay.message_id,
+                "completed": not interrupted,
+                "messages": [],
+                "usage": usage,
+            }
+            if interrupted or partial:
+                run_payload.update(
+                    {
+                        "interrupted": interrupted,
+                        "partial": partial,
+                    }
+                )
+            relay.emit("run.completed", run_payload)
+
         relay.emit("done", {})
     except Exception:
         pass
@@ -307,7 +355,6 @@ def finish_turn_relay(relay, result: Any = None) -> None:
             relay.close()
         except Exception:
             pass
-
 
 def _as_text(value: Any) -> str:
     if isinstance(value, str):

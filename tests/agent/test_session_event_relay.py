@@ -71,3 +71,120 @@ def test_gateway_ingest_target_keeps_legacy_api_server_fallback(monkeypatch):
         "http://127.0.0.1:8765",
         "legacy-key",
     )
+
+
+class _RecordingTurnRelay:
+    message_id = "message-1"
+
+    def __init__(self):
+        self.events = []
+        self.restored = False
+        self.closed = False
+
+    def emit(self, name, payload):
+        self.events.append((name, payload))
+
+    def restore(self):
+        self.restored = True
+
+    def close(self):
+        self.closed = True
+
+
+def _finish_event_names(relay):
+    return [name for name, _payload in relay.events]
+
+
+def test_finish_turn_relay_preserves_success_sequence():
+    relay = _RecordingTurnRelay()
+
+    relay_module.finish_turn_relay(
+        relay,
+        {
+            "final_response": "done",
+            "usage": {"total_tokens": 7},
+            "completed": True,
+            "failed": False,
+            "interrupted": False,
+        },
+    )
+
+    assert _finish_event_names(relay) == [
+        "assistant.completed",
+        "run.completed",
+        "done",
+    ]
+    assert relay.events[0][1] == {
+        "message_id": "message-1",
+        "content": "done",
+        "completed": True,
+        "partial": False,
+        "interrupted": False,
+    }
+    assert relay.events[1][1] == {
+        "message_id": "message-1",
+        "completed": True,
+        "messages": [],
+        "usage": {"total_tokens": 7},
+    }
+    assert relay.restored is True
+    assert relay.closed is True
+
+
+def test_finish_turn_relay_emits_error_for_explicit_failure():
+    relay = _RecordingTurnRelay()
+
+    relay_module.finish_turn_relay(
+        relay,
+        {
+            "final_response": "partial answer",
+            "error": "provider failed",
+            "completed": False,
+            "failed": True,
+            "interrupted": False,
+        },
+    )
+
+    assert _finish_event_names(relay) == ["error", "done"]
+    assert relay.events[0][1] == {
+        "message_id": "message-1",
+        "error": "provider failed",
+    }
+
+
+def test_finish_turn_relay_emits_error_when_result_is_missing():
+    relay = _RecordingTurnRelay()
+
+    relay_module.finish_turn_relay(relay, None)
+
+    assert _finish_event_names(relay) == ["error", "done"]
+    assert relay.events[0][1]["error"] == (
+        "The relayed turn failed before producing a final response."
+    )
+
+
+def test_finish_turn_relay_preserves_interrupted_stop_semantics():
+    relay = _RecordingTurnRelay()
+
+    relay_module.finish_turn_relay(
+        relay,
+        {
+            "final_response": "partial answer",
+            "completed": False,
+            "failed": False,
+            "partial": False,
+            "interrupted": True,
+        },
+    )
+
+    assert _finish_event_names(relay) == [
+        "assistant.completed",
+        "run.completed",
+        "done",
+    ]
+    assert relay.events[0][1]["completed"] is False
+    assert relay.events[0][1]["partial"] is True
+    assert relay.events[0][1]["interrupted"] is True
+    assert relay.events[1][1]["completed"] is False
+    assert relay.events[1][1]["partial"] is True
+    assert relay.events[1][1]["interrupted"] is True
