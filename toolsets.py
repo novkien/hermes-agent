@@ -43,11 +43,7 @@ _HERMES_CORE_TOOLS = [
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
-    "vision_analyze",
-    # BFL FLUX 3 video generation (runtime-gated by its requirement checks)
-    "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
-    "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
-    "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
+    "vision_analyze", "image_generate",
     # Skills
     "skills_list", "skill_view", "skill_manage",
     # Browser automation
@@ -159,25 +155,6 @@ TOOLSETS = {
             "``hermes tools`` → Video Generation."
         ),
         "tools": ["video_generate", "xai_video_edit", "xai_video_extend"],
-        "includes": []
-    },
-
-    "bfl": {
-        "description": (
-            "Black Forest Labs FLUX 3 video generation through the Nous tool "
-            "gateway: per-mode submit tools (text, image, keyframes, "
-            "continuation), a poll tool, and a prompting guide. Generations "
-            "take minutes, so submit returns a job id and the model polls for "
-            "the result."
-        ),
-        "tools": [
-            "bfl_flux3_text_to_video",
-            "bfl_flux3_image_to_video",
-            "bfl_flux3_keyframes_to_video",
-            "bfl_flux3_video_continuation",
-            "bfl_flux3_get_result",
-            "bfl_flux3_prompting_guide",
-        ],
         "includes": []
     },
 
@@ -497,10 +474,6 @@ TOOLSETS = {
             "read_file", "write_file", "patch", "search_files",
             # Vision + image generation
             "vision_analyze", "image_generate",
-            # BFL FLUX 3 video generation
-            "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
-            "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
-            "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
             # Skills
             "skills_list", "skill_view", "skill_manage",
             # Browser automation
