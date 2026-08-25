@@ -1,0 +1,471 @@
+name: PR 31 focused repair
+
+on:
+  push:
+    branches:
+      - automation/pr31-fix-run-20260825
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      BASE_SHA: e4b160dd9eda66e4f1904c549e25ebb2d9d5b429
+      PR_BASE_SHA: 6873a2d8e03f2d7180bc405934f31d5ca09f599b
+      RESULT_BRANCH: automation/pr31-fixed-result-20260825
+
+    steps:
+      - name: Check out the exact reviewed PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: e4b160dd9eda66e4f1904c549e25ebb2d9d5b429
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify immutable input
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Apply the focused repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected exactly one replacement anchor, found {count}"
+                  )
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "agent/prompt_builder.py",
+              (
+                  '                    fm_name = entry["frontmatter_name"]\n'
+                  "                    if fm_name in project_names:\n"
+              ),
+              (
+                  '                    fm_name = entry["frontmatter_name"]\n'
+                  "                    if enabled is not None and fm_name not in enabled:\n"
+                  "                        continue\n"
+                  "                    if fm_name in project_names:\n"
+              ),
+          )
+
+          relay_path = Path("agent/session_event_relay.py")
+          relay_text = relay_path.read_text(encoding="utf-8")
+          relay_start = relay_text.index("def finish_turn_relay(")
+          relay_end = relay_text.index("\ndef _as_text", relay_start)
+          old_relay = relay_text[relay_start:relay_end]
+          required_markers = (
+              'relay.emit("assistant.completed"',
+              'relay.emit("run.completed"',
+              'relay.emit("done"',
+          )
+          if not all(marker in old_relay for marker in required_markers):
+              raise SystemExit("agent/session_event_relay.py: unexpected relay function body")
+          new_relay = dedent(
+              '''
+              def finish_turn_relay(relay, result: Any = None) -> None:
+                  "Close a turn out for watchers. Safe to call with None, twice, or after an error."
+                  if relay is None:
+                      return
+                  try:
+                      final = ""
+                      usage = None
+                      interrupted = False
+                      failed = result is None
+                      error_text: Any = None
+
+                      if isinstance(result, dict):
+                          final = result.get("final_response") or ""
+                          usage = result.get("usage")
+                          interrupted = bool(result.get("interrupted"))
+                          explicit_incomplete = (
+                              "completed" in result and result.get("completed") is False
+                          )
+                          failed = bool(result.get("failed")) or (
+                              explicit_incomplete and not interrupted
+                          )
+                          error_text = result.get("error") or final
+                      elif result is not None:
+                          failed = True
+                          error_text = result
+
+                      if failed:
+                          relay.emit(
+                              "error",
+                              {
+                                  "message_id": relay.message_id,
+                                  "error": _as_text(
+                                      error_text
+                                      or "The relayed turn failed before producing a final response."
+                                  ),
+                              },
+                          )
+                      else:
+                          partial = (
+                              bool(result.get("partial"))
+                              if isinstance(result, dict)
+                              else False
+                          )
+                          if interrupted:
+                              partial = True
+
+                          relay.emit(
+                              "assistant.completed",
+                              {
+                                  "message_id": relay.message_id,
+                                  "content": _as_text(final),
+                                  "completed": not interrupted,
+                                  "partial": partial,
+                                  "interrupted": interrupted,
+                              },
+                          )
+                          run_payload = {
+                              "message_id": relay.message_id,
+                              "completed": not interrupted,
+                              "messages": [],
+                              "usage": usage,
+                          }
+                          if interrupted or partial:
+                              run_payload.update(
+                                  {
+                                      "interrupted": interrupted,
+                                      "partial": partial,
+                                  }
+                              )
+                          relay.emit("run.completed", run_payload)
+
+                      relay.emit("done", {})
+                  except Exception:
+                      pass
+                  finally:
+                      try:
+                          relay.restore()
+                      except Exception:
+                          pass
+                      try:
+                          relay.close()
+                      except Exception:
+                          pass
+              '''
+          ).lstrip()
+          relay_path.write_text(
+              relay_text[:relay_start] + new_relay + relay_text[relay_end:],
+              encoding="utf-8",
+          )
+
+          replace_once(
+              "gateway/session_context.py",
+              (
+                  "        _SESSION_MESSAGE_ID,\n"
+                  "        _SESSION_PROFILE,\n"
+                  "        _BROWSER_CONTROL_PRINCIPAL,\n"
+              ),
+              (
+                  "        _SESSION_MESSAGE_ID,\n"
+                  "        _SESSION_PROFILE,\n"
+                  "        _SESSION_TRANSPORT_PROFILE,\n"
+                  "        _BROWSER_CONTROL_PRINCIPAL,\n"
+              ),
+          )
+
+          project_test = Path("tests/agent/test_project_skills.py")
+          project_text = project_test.read_text(encoding="utf-8")
+          project_marker = "def test_project_skill_index_respects_enabled_allowlist"
+          if project_marker in project_text:
+              raise SystemExit(f"{project_test}: regression test already exists")
+          project_test.write_text(
+              project_text.rstrip()
+              + dedent(
+                  '''
+
+
+                  def test_project_skill_index_respects_enabled_allowlist(project_env):
+                      # Topic allowlists must cover trusted project-local skills too.
+                      _trust(project_env["config"], project_env["repo"])
+
+                      from agent import prompt_builder
+
+                      prompt_builder._SKILLS_PROMPT_CACHE.clear()
+                      prompt = prompt_builder.build_skills_system_prompt(
+                          available_tools={"skills_list", "skill_view"},
+                          enabled_skills=("repo-skill",),
+                      )
+
+                      assert "repo-skill" in prompt
+                      assert "conv-skill" not in prompt
+                  '''
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+
+          relay_test = Path("tests/agent/test_session_event_relay.py")
+          relay_test_text = relay_test.read_text(encoding="utf-8")
+          relay_test_marker = "class _RecordingTurnRelay"
+          if relay_test_marker in relay_test_text:
+              raise SystemExit(f"{relay_test}: regression tests already exist")
+          relay_test.write_text(
+              relay_test_text.rstrip()
+              + dedent(
+                  '''
+
+
+                  class _RecordingTurnRelay:
+                      message_id = "message-1"
+
+                      def __init__(self):
+                          self.events = []
+                          self.restored = False
+                          self.closed = False
+
+                      def emit(self, name, payload):
+                          self.events.append((name, payload))
+
+                      def restore(self):
+                          self.restored = True
+
+                      def close(self):
+                          self.closed = True
+
+
+                  def _finish_event_names(relay):
+                      return [name for name, _payload in relay.events]
+
+
+                  def test_finish_turn_relay_preserves_success_sequence():
+                      relay = _RecordingTurnRelay()
+
+                      relay_module.finish_turn_relay(
+                          relay,
+                          {
+                              "final_response": "done",
+                              "usage": {"total_tokens": 7},
+                              "completed": True,
+                              "failed": False,
+                              "interrupted": False,
+                          },
+                      )
+
+                      assert _finish_event_names(relay) == [
+                          "assistant.completed",
+                          "run.completed",
+                          "done",
+                      ]
+                      assert relay.events[0][1] == {
+                          "message_id": "message-1",
+                          "content": "done",
+                          "completed": True,
+                          "partial": False,
+                          "interrupted": False,
+                      }
+                      assert relay.events[1][1] == {
+                          "message_id": "message-1",
+                          "completed": True,
+                          "messages": [],
+                          "usage": {"total_tokens": 7},
+                      }
+                      assert relay.restored is True
+                      assert relay.closed is True
+
+
+                  def test_finish_turn_relay_emits_error_for_explicit_failure():
+                      relay = _RecordingTurnRelay()
+
+                      relay_module.finish_turn_relay(
+                          relay,
+                          {
+                              "final_response": "partial answer",
+                              "error": "provider failed",
+                              "completed": False,
+                              "failed": True,
+                              "interrupted": False,
+                          },
+                      )
+
+                      assert _finish_event_names(relay) == ["error", "done"]
+                      assert relay.events[0][1] == {
+                          "message_id": "message-1",
+                          "error": "provider failed",
+                      }
+
+
+                  def test_finish_turn_relay_emits_error_when_result_is_missing():
+                      relay = _RecordingTurnRelay()
+
+                      relay_module.finish_turn_relay(relay, None)
+
+                      assert _finish_event_names(relay) == ["error", "done"]
+                      assert relay.events[0][1]["error"] == (
+                          "The relayed turn failed before producing a final response."
+                      )
+
+
+                  def test_finish_turn_relay_preserves_interrupted_stop_semantics():
+                      relay = _RecordingTurnRelay()
+
+                      relay_module.finish_turn_relay(
+                          relay,
+                          {
+                              "final_response": "partial answer",
+                              "completed": False,
+                              "failed": False,
+                              "partial": False,
+                              "interrupted": True,
+                          },
+                      )
+
+                      assert _finish_event_names(relay) == [
+                          "assistant.completed",
+                          "run.completed",
+                          "done",
+                      ]
+                      assert relay.events[0][1]["completed"] is False
+                      assert relay.events[0][1]["partial"] is True
+                      assert relay.events[0][1]["interrupted"] is True
+                      assert relay.events[1][1]["completed"] is False
+                      assert relay.events[1][1]["partial"] is True
+                      assert relay.events[1][1]["interrupted"] is True
+                  '''
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+
+          session_test = Path("tests/gateway/test_session_env.py")
+          session_test_text = session_test.read_text(encoding="utf-8")
+          session_test_marker = "def test_transport_profile_clear_masks_stale_environment"
+          if session_test_marker in session_test_text:
+              raise SystemExit(f"{session_test}: regression test already exists")
+          session_test.write_text(
+              session_test_text.rstrip()
+              + dedent(
+                  '''
+
+
+                  def test_transport_profile_clear_masks_stale_environment(monkeypatch):
+                      # Handler cleanup must not leak a previous turn's transport profile.
+                      monkeypatch.setenv(
+                          "HERMES_SESSION_TRANSPORT_PROFILE", "ambient-profile"
+                      )
+
+                      tokens = set_session_vars(transport_profile="bound-profile")
+                      assert (
+                          get_session_env("HERMES_SESSION_TRANSPORT_PROFILE")
+                          == "bound-profile"
+                      )
+
+                      clear_session_vars(tokens)
+                      assert get_session_env("HERMES_SESSION_TRANSPORT_PROFILE") == ""
+                  '''
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+
+          mappings = {
+              "1396641434@qq.com": "wanglufei-567",
+              "agent@Agents-Mac-mini.local": "skip-agent",
+              "brooklyn@nousresearch.com": "OutThisLife",
+              "dcdexhome@gmail.com": "dcdexhome",
+              "muhammedeminkamay92@gmail.com": "pierrenode",
+              "rroveri@nvidia.com": "rroverin",
+              "tom@spoct.com": "TomSpoct",
+          }
+          mapping_root = Path("contributors/emails")
+          for email, login in mappings.items():
+              destination = mapping_root / email
+              if destination.exists():
+                  raise SystemExit(f"{destination}: mapping already exists")
+              destination.write_text(login + "\n", encoding="utf-8")
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+
+      - name: Install Python 3.11
+        shell: bash
+        run: uv python install 3.11
+
+      - name: Install locked test dependencies
+        shell: bash
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run focused regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run pytest -q \
+            tests/agent/test_project_skills.py \
+            tests/agent/test_session_event_relay.py \
+            tests/gateway/test_session_env.py
+
+      - name: Run focused lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run ruff check \
+            agent/prompt_builder.py \
+            agent/session_event_relay.py \
+            gateway/session_context.py \
+            tests/agent/test_project_skills.py \
+            tests/agent/test_session_event_relay.py \
+            tests/gateway/test_session_env.py
+
+      - name: Audit imported contributor attribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git update-ref refs/remotes/origin/main "$PR_BASE_SHA"
+          python3 scripts/audit_pr_attribution.py
+
+      - name: Commit the verified repair on a clean result branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Primary ChatGPT via GitHub Actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$RESULT_BRANCH"
+          git add \
+            agent/prompt_builder.py \
+            agent/session_event_relay.py \
+            gateway/session_context.py \
+            tests/agent/test_project_skills.py \
+            tests/agent/test_session_event_relay.py \
+            tests/gateway/test_session_env.py \
+            contributors/emails
+          git diff --cached --check
+          git commit -m "fix: close upstream integration review gaps"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git push origin "HEAD:refs/heads/$RESULT_BRANCH"
+
+          {
+            echo "### PR #31 focused repair"
+            echo
+            echo "- Parent: \`$BASE_SHA\`"
+            echo "- Result: \`$(git rev-parse HEAD)\`"
+            echo "- Branch: \`$RESULT_BRANCH\`"
+            echo "- Focused tests, ruff, and attribution audit passed before commit."
+          } >> "$GITHUB_STEP_SUMMARY"
