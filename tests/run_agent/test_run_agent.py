@@ -999,7 +999,7 @@ class TestBuildSystemPrompt:
         prompt = agent._build_system_prompt()
         # Find the line and strip it for inspection
         for line in prompt.splitlines():
-            if line.startswith("Current date:"):
+            if line.startswith("Conversation started:"):
                 # Must NOT contain AM/PM indicator (minute precision had %I:%M %p)
                 assert " AM" not in line and " PM" not in line, (
                     f"Timestamp line has time-of-day, breaks daily cache stability: {line!r}"
@@ -1013,7 +1013,7 @@ class TestBuildSystemPrompt:
                 )
                 break
         else:
-            assert False, "Expected a 'Current date:' line in the system prompt"
+            assert False, "Expected a 'Conversation started:' line in the system prompt"
 
     def test_datetime_includes_utc_offset(self, agent):
         """Timestamp must carry an explicit UTC offset.

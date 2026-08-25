@@ -525,6 +525,6 @@ class TestStoredPromptCwdDrift:
                 )
             agent.platform = "cli"
             parts = build_system_prompt_parts(agent)
-            assert "Current date:" in parts["volatile"], (
+            assert "Conversation started:" in parts["volatile"], (
                 "Built prompt missing its volatile current-date boundary"
             )
