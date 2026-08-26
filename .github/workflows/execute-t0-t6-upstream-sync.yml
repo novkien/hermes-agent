@@ -30,17 +30,20 @@ jobs:
       ANTHROPIC_API_KEY: ""
       OPENROUTER_API_KEY: ""
     steps:
-      - name: Checkout staging branch with full history
+      - name: Checkout staging branch
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Configure publication identity and isolated runtime home
+      - name: Configure publication identity and exact owner history
         run: |
           set -euo pipefail
           git config user.name "LE TRUNG KIEN"
           git config user.email "mycompute1102@gmail.com"
           git config core.whitespace -trailing-space
+          git fetch --no-tags --unshallow origin \
+            "+refs/heads/master:refs/remotes/origin/master"
+          git cat-file -e "${OWNER_BASE_SHA}^{commit}"
           echo "HERMES_HOME=${RUNNER_TEMP}/hermes-home" >> "$GITHUB_ENV"
           cp .github/staging/execute_t0_t6.py "${RUNNER_TEMP}/execute_t0_t6.py"
 
@@ -69,12 +72,22 @@ jobs:
           )
           if text.count(invalid) != 1:
               raise SystemExit(f"expected one invalid runner.temp job env, found {text.count(invalid)}")
-          if text.count(checkout) != 1:
-              raise SystemExit(f"expected one generated checkout sequence, found {text.count(checkout)}")
-          path.write_text(
-              text.replace(invalid, "").replace(checkout, replacement),
-              encoding="utf-8",
+          job_start = text.find("  fork-python-regressions:\n")
+          if job_start < 0:
+              raise SystemExit("fork-python-regressions job not found")
+          checkout_index = text.find(checkout, job_start)
+          if checkout_index < 0:
+              raise SystemExit("fork-python-regressions checkout sequence not found")
+          patched = text.replace(invalid, "", 1)
+          checkout_index -= len(invalid)
+          patched = (
+              patched[:checkout_index]
+              + replacement
+              + patched[checkout_index + len(checkout):]
           )
+          if invalid in patched:
+              raise SystemExit("runner.temp job env remains after repair")
+          path.write_text(patched, encoding="utf-8")
           PY
 
       - name: Build T0-T6 isolation and ordinary two-parent upstream merge
