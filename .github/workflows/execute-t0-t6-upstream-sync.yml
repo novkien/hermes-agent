@@ -1,0 +1,136 @@
+name: Execute T0-T6 upstream test isolation
+
+on:
+  push:
+    branches:
+      - refactor/upstream-test-isolation-sync-20260826
+    paths:
+      - .github/workflows/execute-t0-t6-upstream-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OWNER_BASE_SHA: 6f04871ef0b1328bb5a40dcd2407cb3a4107b88d
+      FINAL_BRANCH: refactor/upstream-test-isolation-sync-20260826-t6
+      UPSTREAM_URL: https://github.com/NousResearch/hermes-agent.git
+      HERMES_HOME: ${{ runner.temp }}/hermes-home
+      HERMES_TEST_WORKERS: "8"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENROUTER_API_KEY: ""
+    steps:
+      - name: Checkout staging branch with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure exact publication identity
+        run: |
+          git config user.name "LE TRUNG KIEN"
+          git config user.email "mycompute1102@gmail.com"
+          # The upstream tree carries known trailing-space debt in eval fixtures.
+          # Preserve those blobs byte-for-byte while retaining all other merge checks.
+          git config core.whitespace -trailing-space
+          cp .github/staging/execute_t0_t6.py "${RUNNER_TEMP}/execute_t0_t6.py"
+
+      - name: Build clean isolation and two-parent upstream merge commits
+        id: build
+        run: |
+          python "${RUNNER_TEMP}/execute_t0_t6.py" \
+            --owner-base "${OWNER_BASE_SHA}" \
+            --upstream-url "${UPSTREAM_URL}" \
+            --final-branch "${FINAL_BRANCH}" \
+            --github-output "${GITHUB_OUTPUT}"
+          cp reports/upstream-sync/2026-08-26/candidate-build-result.json \
+            "${RUNNER_TEMP}/candidate-build-result.json"
+          rm reports/upstream-sync/2026-08-26/candidate-build-result.json
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install the merged locked environment
+        run: uv sync --frozen --all-extras
+
+      - name: Verify immutable upstream test ownership
+        run: |
+          python scripts/fork_ci/verify_upstream_tests_untouched.py
+          python scripts/fork_ci/inventory_tests.py
+
+      - name: Prepare disposable fork-test overlay
+        run: |
+          python scripts/fork_ci/prepare_overlay.py \
+            --destination "${RUNNER_TEMP}/fork-overlay"
+
+      - name: Run all extracted owner Python regression contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import subprocess
+
+          repo = Path(os.environ["GITHUB_WORKSPACE"])
+          overlay = Path(os.environ["RUNNER_TEMP"]) / "fork-overlay"
+          nodeids = [
+              line.strip()
+              for line in (repo / "fork_tests/nodeids-python.txt").read_text().splitlines()
+              if line.strip()
+          ]
+          if not nodeids:
+              print("No owner Python regression nodes were extracted.")
+              raise SystemExit(0)
+          python = repo / ".venv/bin/python"
+          command = [
+              str(python),
+              "-m",
+              "pytest",
+              "-q",
+              *nodeids,
+              f"--junitxml={repo / 'fork-regressions-python.xml'}",
+          ]
+          raise SystemExit(subprocess.run(command, cwd=overlay).returncode)
+          PY
+
+      - name: Run Mission Control fork contracts
+        run: |
+          python apps/mission-control/tests/test_runtime_contracts.py
+          python apps/mission-control/tests/test_static_repair_surface.py
+          node apps/mission-control/tests/frontend_contracts.mjs
+          node apps/mission-control/tests/skills_surface.mjs
+          python -m compileall -q apps/mission-control/agent_mission_control
+
+      - name: Validate merged Python and repository state
+        run: |
+          python -m compileall -q agent gateway hermes_cli tools
+          git diff --check "${OWNER_BASE_SHA}..HEAD" -- \
+            . ':(exclude)evals/**' ':(exclude)fork_tests/snapshots/**'
+          test -z "$(git status --porcelain --untracked-files=all \
+            | grep -v '^?? fork-regressions-python.xml$' || true)"
+
+      - name: Publish clean candidate branch non-force
+        run: |
+          git push origin "HEAD:refs/heads/${FINAL_BRANCH}"
+          git ls-remote --exit-code --heads origin "refs/heads/${FINAL_BRANCH}"
+
+      - name: Upload exact T0-T6 build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t0-t6-upstream-sync-evidence
+          path: |
+            ${{ runner.temp }}/candidate-build-result.json
+            reports/upstream-sync/2026-08-26/t0-t4-inventory.json
+            reports/upstream-sync/2026-08-26/t6-merge-validation.json
+            fork-regressions-python.xml
+          if-no-files-found: warn
+          retention-days: 14
