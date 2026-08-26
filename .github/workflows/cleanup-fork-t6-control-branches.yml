@@ -1,0 +1,61 @@
+name: Cleanup fork T6 control branches
+
+on:
+  push:
+    branches:
+      - automation/fork-test-t6-control-final-10
+    paths:
+      - .github/workflows/cleanup-fork-t6-control-branches.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: novkien/hermes-agent
+      FINAL_BRANCH: refactor/fork-tests-t6-upstream-sync-20260826-final
+      CONTROL_BRANCH: automation/fork-test-t6-control-final-10
+    steps:
+      - name: Delete obsolete bootstrap branches
+        run: |
+          set -euo pipefail
+          branches=(
+            refactor/upstream-test-isolation-sync-20260826
+            refactor/fork-tests-t6-upstream-sync-20260826
+            automation/fork-test-t6-builder-20260826
+            automation/fork-test-t6-builder-control-20260826
+            automation/fork-test-t6-builder-control-20260826-v2
+            automation/fork-test-t6-builder-control-20260826-v3
+            automation/fork-test-t6-builder-control-20260826-v4
+            automation/fork-test-t6-control-final
+            automation/fork-test-t6-control-final-2
+            automation/fork-test-t6-control-final-3
+            automation/fork-test-t6-control-final-4
+            automation/fork-test-t6-control-final-5
+            automation/fork-test-t6-control-final-6
+            automation/fork-test-t6-control-final-7
+            automation/fork-test-t6-control-final-8
+            automation/fork-test-t6-control-final-9
+          )
+          for branch in "${branches[@]}"; do
+            encoded="$(jq -rn --arg value "heads/$branch" '$value|@uri')"
+            gh api -X DELETE "/repos/$REPO/git/refs/$encoded" >/dev/null 2>&1 || true
+          done
+
+      - name: Delete final/control branches only after PR merge
+        run: |
+          set -euo pipefail
+          state="$(gh pr list --repo "$REPO" --state all --head "$FINAL_BRANCH" --json state,mergedAt --jq '.[0] | if .mergedAt then "merged" else (.state // "missing") end')"
+          if [ "$state" = merged ]; then
+            for branch in "$FINAL_BRANCH" "$CONTROL_BRANCH"; do
+              encoded="$(jq -rn --arg value "heads/$branch" '$value|@uri')"
+              gh api -X DELETE "/repos/$REPO/git/refs/$encoded" >/dev/null 2>&1 || true
+            done
+          else
+            echo "PR is not merged; preserving final and control branches."
+          fi
