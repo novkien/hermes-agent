@@ -18,15 +18,41 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: novkien/hermes-agent
-      FINAL_BRANCH: refactor/fork-tests-t6-upstream-sync-20260826-final
       CONTROL_BRANCH: automation/fork-test-t6-control-final-10
     steps:
-      - name: Delete obsolete bootstrap branches
+      - name: Delete task branches only after a validated final PR merge
         run: |
           set -euo pipefail
+
+          final_branches=(
+            refactor/upstream-test-isolation-sync-20260826-t6
+            refactor/fork-tests-t6-upstream-sync-20260826-final
+          )
+
+          merged_final=""
+          for final_branch in "${final_branches[@]}"; do
+            merged_url="$(gh pr list \
+              --repo "$REPO" \
+              --state merged \
+              --head "$final_branch" \
+              --json url \
+              --jq '.[0].url // empty')"
+            if test -n "$merged_url"; then
+              merged_final="$merged_url"
+              break
+            fi
+          done
+
+          if test -z "$merged_final"; then
+            echo "No validated final PR is merged; preserving every task and control branch."
+            exit 0
+          fi
+
           branches=(
             refactor/upstream-test-isolation-sync-20260826
+            refactor/upstream-test-isolation-sync-20260826-t6
             refactor/fork-tests-t6-upstream-sync-20260826
+            refactor/fork-tests-t6-upstream-sync-20260826-final
             automation/fork-test-t6-builder-20260826
             automation/fork-test-t6-builder-control-20260826
             automation/fork-test-t6-builder-control-20260826-v2
@@ -41,21 +67,11 @@ jobs:
             automation/fork-test-t6-control-final-7
             automation/fork-test-t6-control-final-8
             automation/fork-test-t6-control-final-9
+            "$CONTROL_BRANCH"
           )
+
+          echo "Validated final PR merged: $merged_final"
           for branch in "${branches[@]}"; do
             encoded="$(jq -rn --arg value "heads/$branch" '$value|@uri')"
             gh api -X DELETE "/repos/$REPO/git/refs/$encoded" >/dev/null 2>&1 || true
           done
-
-      - name: Delete final/control branches only after PR merge
-        run: |
-          set -euo pipefail
-          state="$(gh pr list --repo "$REPO" --state all --head "$FINAL_BRANCH" --json state,mergedAt --jq '.[0] | if .mergedAt then "merged" else (.state // "missing") end')"
-          if [ "$state" = merged ]; then
-            for branch in "$FINAL_BRANCH" "$CONTROL_BRANCH"; do
-              encoded="$(jq -rn --arg value "heads/$branch" '$value|@uri')"
-              gh api -X DELETE "/repos/$REPO/git/refs/$encoded" >/dev/null 2>&1 || true
-            done
-          else
-            echo "PR is not merged; preserving final and control branches."
-          fi
