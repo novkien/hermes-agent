@@ -7464,7 +7464,7 @@ def run_conversation(
                 terminal_run = getattr(
                     agent, "_kanban_terminal_run_state", None,
                 )
-                if terminal_run is None:
+                if not isinstance(terminal_run, dict):
                     try:
                         from tools.kanban_tools import (
                             current_worker_run_terminal_state_from_env,
@@ -7479,7 +7479,7 @@ def run_conversation(
                             exc_info=True,
                         )
                         terminal_run = None
-                if terminal_run is not None:
+                if isinstance(terminal_run, dict):
                     terminal_status = (
                         terminal_run.get("task_status")
                         or terminal_run.get("outcome")
