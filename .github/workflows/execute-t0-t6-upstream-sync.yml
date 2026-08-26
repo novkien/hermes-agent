@@ -47,7 +47,7 @@ jobs:
           echo "HERMES_HOME=${RUNNER_TEMP}/hermes-home" >> "$GITHUB_ENV"
           cp .github/staging/execute_t0_t6.py "${RUNNER_TEMP}/execute_t0_t6.py"
 
-      - name: Repair runner-scoped home in generated fork workflow
+      - name: Repair generated workflow and ownership helper namespace
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -87,6 +87,17 @@ jobs:
           )
           if invalid in patched:
               raise SystemExit("runner.temp job env remains after repair")
+
+          legacy_module = "test_ownership"
+          legacy_count = patched.count(legacy_module)
+          if legacy_count < 4:
+              raise SystemExit(
+                  f"ownership helper rename surface is incomplete: {legacy_count} occurrences"
+              )
+          patched = patched.replace(legacy_module, "ownership")
+          if legacy_module in patched:
+              raise SystemExit("legacy ownership helper name remains after repair")
+
           path.write_text(patched, encoding="utf-8")
           PY
 
