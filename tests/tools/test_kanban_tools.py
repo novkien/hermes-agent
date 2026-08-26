@@ -258,6 +258,38 @@ def test_block_happy_path(worker_env):
         conn.close()
 
 
+def test_terminal_state_tracks_exact_worker_run(monkeypatch, worker_env):
+    """The process handoff detector fires only for its exact ended run."""
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    conn = kb.connect()
+    try:
+        run = kb.latest_run(conn, worker_env)
+        assert run is not None
+        run_id = run.id
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
+    assert kt.current_worker_run_terminal_state_from_env() is None
+
+    out = json.loads(kt._handle_block({"reason": "need clarification"}))
+    assert out["ok"] is True
+
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id + 1))
+    assert kt.current_worker_run_terminal_state_from_env() is None
+
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
+    assert kt.current_worker_run_terminal_state_from_env() == {
+        "task_id": worker_env,
+        "run_id": run_id,
+        "task_status": "blocked",
+        "run_status": "blocked",
+        "outcome": "blocked",
+    }
+
+
 def _make_goal_mode_worker_env(monkeypatch, tmp_path):
     """Set up an isolated HERMES_HOME with one claimed goal_mode task,
     matching the pattern used by the kanban_complete judge gate tests."""

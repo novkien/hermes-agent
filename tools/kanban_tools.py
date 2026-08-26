@@ -189,6 +189,49 @@ def _worker_run_id(task_id: str) -> Optional[int]:
         return None
 
 
+def current_worker_run_terminal_state_from_env() -> Optional[dict[str, Any]]:
+    """Return terminal state for the exact dispatcher run in this process.
+
+    ``kanban_complete`` and ``kanban_block`` close the run in the board DB,
+    but the worker process owns its conversation loop.  Callers use this
+    helper after tool execution to stop that loop once its exact run has
+    ended.  Missing/invalid environment state and DB errors deliberately
+    return ``None`` so uncertainty cannot terminate an unrelated process.
+    """
+    task_id = os.environ.get("HERMES_KANBAN_TASK")
+    if not task_id or not _is_dispatcher_owned_worker():
+        return None
+    run_id = _worker_run_id(task_id)
+    if run_id is None:
+        return None
+
+    conn = None
+    try:
+        kb, conn = _connect()
+        run = kb.get_run(conn, run_id)
+        if run is None or run.task_id != task_id or run.ended_at is None:
+            return None
+        task = kb.get_task(conn, task_id)
+        return {
+            "task_id": task_id,
+            "run_id": run.id,
+            "task_status": task.status if task else None,
+            "run_status": run.status,
+            "outcome": run.outcome,
+        }
+    except Exception:
+        logger.warning(
+            "Could not inspect dispatcher run terminal state for task=%s run=%s",
+            task_id,
+            run_id,
+            exc_info=True,
+        )
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _stamp_worker_session_metadata(
     task_id: str, metadata: Optional[dict]
 ) -> Optional[dict]:
