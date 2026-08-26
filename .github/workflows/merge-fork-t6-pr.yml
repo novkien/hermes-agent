@@ -1,0 +1,97 @@
+name: Merge fork T6 PR after checks
+
+on:
+  push:
+    branches:
+      - automation/fork-test-t6-control-final-10
+    paths:
+      - .github/workflows/merge-fork-t6-pr.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: novkien/hermes-agent
+      HEAD_BRANCH: refactor/fork-tests-t6-upstream-sync-20260826-final
+    steps:
+      - name: Resolve exact PR and head
+        id: pr
+        run: |
+          set -euo pipefail
+          PR="$(gh pr list --repo "$REPO" --state open --head "$HEAD_BRANCH" --json number --jq '.[0].number // empty')"
+          test -n "$PR"
+          HEAD="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+          test -n "$HEAD"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          gh pr ready "$PR" --repo "$REPO" || true
+          printf 'PR=%s\nHEAD=%s\n' "$PR" "$HEAD"
+
+      - name: Wait for all PR checks and a stable check set
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          HEAD: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          stable=0
+          previous_names=""
+          for attempt in $(seq 1 220); do
+            CURRENT_HEAD="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+            test "$CURRENT_HEAD" = "$HEAD"
+
+            checks="$(gh api --paginate -H 'Accept: application/vnd.github+json' \
+              "/repos/$REPO/commits/$HEAD/check-runs?per_page=100" \
+              --jq '[.check_runs[] | {name, status, conclusion}] | unique_by(.name)')"
+            total="$(jq 'length' <<<"$checks")"
+            names="$(jq -r '.[].name' <<<"$checks" | sort)"
+            pending="$(jq '[.[] | select(.status != "completed")] | length' <<<"$checks")"
+            bad="$(jq '[.[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not))] | length' <<<"$checks")"
+            fork_gate="$(jq '[.[] | select(.name == "All fork contracts pass" and .status == "completed" and .conclusion == "success")] | length' <<<"$checks")"
+
+            echo "attempt=$attempt total=$total pending=$pending bad=$bad fork_gate=$fork_gate stable=$stable"
+            jq -r '.[] | "  \(.status)\t\(.conclusion // "-")\t\(.name)"' <<<"$checks"
+
+            if [ "$bad" -gt 0 ]; then
+              echo "One or more PR checks failed; leaving the PR open." >&2
+              exit 1
+            fi
+
+            if [ "$total" -ge 5 ] && [ "$pending" -eq 0 ] && [ "$fork_gate" -eq 1 ]; then
+              if [ "$names" = "$previous_names" ]; then
+                stable=$((stable + 1))
+              else
+                stable=1
+              fi
+              previous_names="$names"
+              # Five consecutive 30-second observations provide a 2-minute
+              # settle window for late-starting workflows.
+              if [ "$stable" -ge 5 ]; then
+                exit 0
+              fi
+            else
+              stable=0
+              previous_names="$names"
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for a stable successful PR check set." >&2
+          exit 1
+
+      - name: Merge exact reviewed head
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          HEAD: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR" --repo "$REPO" --merge --match-head-commit "$HEAD"
+          gh pr view "$PR" --repo "$REPO" --json number,state,mergedAt,mergeCommit,url
