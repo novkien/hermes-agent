@@ -1,24 +1,30 @@
 name: Execute T0-T6 upstream test isolation
 
-on:
+'on':
   push:
     branches:
       - refactor/upstream-test-isolation-sync-20260826
     paths:
       - .github/workflows/execute-t0-t6-upstream-sync.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: t0-t6-pr35-publication
+  cancel-in-progress: false
+
 jobs:
-  build-validate-publish:
+  build-validate-promote:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip t0-t6-bootstrap]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       OWNER_BASE_SHA: 6f04871ef0b1328bb5a40dcd2407cb3a4107b88d
       FINAL_BRANCH: refactor/upstream-test-isolation-sync-20260826-t6
+      STAGING_BRANCH: refactor/upstream-test-isolation-sync-20260826
       UPSTREAM_URL: https://github.com/NousResearch/hermes-agent.git
-      HERMES_HOME: ${{ runner.temp }}/hermes-home
       HERMES_TEST_WORKERS: "8"
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
@@ -29,18 +35,50 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure exact publication identity
+      - name: Configure publication identity and isolated runtime home
         run: |
+          set -euo pipefail
           git config user.name "LE TRUNG KIEN"
           git config user.email "mycompute1102@gmail.com"
-          # The upstream tree carries known trailing-space debt in eval fixtures.
-          # Preserve those blobs byte-for-byte while retaining all other merge checks.
           git config core.whitespace -trailing-space
+          echo "HERMES_HOME=${RUNNER_TEMP}/hermes-home" >> "$GITHUB_ENV"
           cp .github/staging/execute_t0_t6.py "${RUNNER_TEMP}/execute_t0_t6.py"
 
-      - name: Build clean isolation and two-parent upstream merge commits
+      - name: Repair runner-scoped home in generated fork workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "execute_t0_t6.py"
+          text = path.read_text(encoding="utf-8")
+          invalid = '      HERMES_HOME: $' + '{{ runner.temp }}/hermes-home\n'
+          checkout = '''      - uses: actions/checkout@v4
+                with:
+                  fetch-depth: 0
+              - uses: actions/setup-python@v5
+          '''
+          replacement = '''      - uses: actions/checkout@v4
+                with:
+                  fetch-depth: 0
+              - name: Initialize isolated Hermes home
+                run: echo "HERMES_HOME=${RUNNER_TEMP}/hermes-home" >> "$GITHUB_ENV"
+              - uses: actions/setup-python@v5
+          '''
+          if text.count(invalid) != 1:
+              raise SystemExit(f"expected one invalid runner.temp job env, found {text.count(invalid)}")
+          if text.count(checkout) != 1:
+              raise SystemExit(f"expected one generated checkout sequence, found {text.count(checkout)}")
+          path.write_text(
+              text.replace(invalid, "").replace(checkout, replacement),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Build T0-T6 isolation and ordinary two-parent upstream merge
         id: build
         run: |
+          set -euo pipefail
           python "${RUNNER_TEMP}/execute_t0_t6.py" \
             --owner-base "${OWNER_BASE_SHA}" \
             --upstream-url "${UPSTREAM_URL}" \
@@ -59,20 +97,22 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Install the merged locked environment
+      - name: Install merged locked environment
         run: uv sync --frozen --all-extras
 
-      - name: Verify immutable upstream test ownership
+      - name: Verify T0-T4 ownership contracts
         run: |
+          set -euo pipefail
           python scripts/fork_ci/verify_upstream_tests_untouched.py
           python scripts/fork_ci/inventory_tests.py
+          python -m compileall -q scripts/fork_ci
 
       - name: Prepare disposable fork-test overlay
         run: |
           python scripts/fork_ci/prepare_overlay.py \
             --destination "${RUNNER_TEMP}/fork-overlay"
 
-      - name: Run all extracted owner Python regression contracts
+      - name: Run extracted owner Python regression contracts
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -86,51 +126,83 @@ jobs:
               for line in (repo / "fork_tests/nodeids-python.txt").read_text().splitlines()
               if line.strip()
           ]
+          report = repo / "fork-regressions-python.xml"
           if not nodeids:
-              print("No owner Python regression nodes were extracted.")
+              report.write_text("<testsuite tests='0' failures='0' errors='0' />\n")
               raise SystemExit(0)
-          python = repo / ".venv/bin/python"
           command = [
-              str(python),
+              str(repo / ".venv/bin/python"),
               "-m",
               "pytest",
               "-q",
               *nodeids,
-              f"--junitxml={repo / 'fork-regressions-python.xml'}",
+              f"--junitxml={report}",
           ]
           raise SystemExit(subprocess.run(command, cwd=overlay).returncode)
           PY
 
       - name: Run Mission Control fork contracts
         run: |
+          set -euo pipefail
           python apps/mission-control/tests/test_runtime_contracts.py
           python apps/mission-control/tests/test_static_repair_surface.py
           node apps/mission-control/tests/frontend_contracts.mjs
           node apps/mission-control/tests/skills_surface.mjs
           python -m compileall -q apps/mission-control/agent_mission_control
 
-      - name: Validate merged Python and repository state
+      - name: Validate T5 classification and merged repository state
         run: |
+          set -euo pipefail
+          python scripts/fork_ci/report_contract_failures.py \
+            --junit fork-regressions-python.xml \
+            --output fork-regressions-classification.json
           python -m compileall -q agent gateway hermes_cli tools
+          git merge-base --is-ancestor "${{ steps.build.outputs.upstream_sha }}" HEAD
+          test "$(git show -s --format=%P "${{ steps.build.outputs.merge_sha }}" | wc -w)" -eq 2
           git diff --check "${OWNER_BASE_SHA}..HEAD" -- \
             . ':(exclude)evals/**' ':(exclude)fork_tests/snapshots/**'
           test -z "$(git status --porcelain --untracked-files=all \
-            | grep -v '^?? fork-regressions-python.xml$' || true)"
+            | grep -v '^?? fork-regressions-python.xml$' \
+            | grep -v '^?? fork-regressions-classification.json$' || true)"
 
-      - name: Publish clean candidate branch non-force
+      - name: Publish validated candidate branch non-force
         run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.build.outputs.merge_sha }}"
           git push origin "HEAD:refs/heads/${FINAL_BRANCH}"
           git ls-remote --exit-code --heads origin "refs/heads/${FINAL_BRANCH}"
 
-      - name: Upload exact T0-T6 build evidence
+      - name: Promote validated candidate into PR 35
+        id: promote
+        env:
+          CANDIDATE_SHA: ${{ steps.build.outputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/heads/${STAGING_BRANCH}:refs/remotes/origin/${STAGING_BRANCH}"
+          staging_sha="$(git rev-parse "refs/remotes/origin/${STAGING_BRANCH}")"
+          git switch --detach "$staging_sha"
+          git merge -s ours --no-ff --no-commit "$CANDIDATE_SHA"
+          git read-tree --reset -u "$CANDIDATE_SHA"
+          test "$(git write-tree)" = "$(git rev-parse "${CANDIDATE_SHA}^{tree}")"
+          test "$(git rev-parse -q --verify MERGE_HEAD)" = "$CANDIDATE_SHA"
+          git commit -m "test(fork): complete T0-T6 on PR 35 [skip t0-t6-bootstrap]"
+          promotion_sha="$(git rev-parse HEAD)"
+          test "$(git show -s --format=%P HEAD | wc -w)" -eq 2
+          test "$(git rev-parse "HEAD^{tree}")" = "$(git rev-parse "${CANDIDATE_SHA}^{tree}")"
+          git push origin "HEAD:refs/heads/${STAGING_BRANCH}"
+          echo "promotion_sha=${promotion_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact T0-T6 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: t0-t6-upstream-sync-evidence
+          name: t0-t6-pr35-evidence
           path: |
             ${{ runner.temp }}/candidate-build-result.json
             reports/upstream-sync/2026-08-26/t0-t4-inventory.json
             reports/upstream-sync/2026-08-26/t6-merge-validation.json
             fork-regressions-python.xml
+            fork-regressions-classification.json
           if-no-files-found: warn
           retention-days: 14
