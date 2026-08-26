@@ -77,7 +77,7 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate, li
     }
 
     const period = WINDOW_DAYS[currentWindow] || 14;
-    const [pulseResult, usageResult, taskResult, permitResult, issueResult, alertResult, capResult] =
+    const [pulseResult, usageResult, taskResult, permitResult, issueResult, alertResult, capResult, eventResult] =
       await Promise.all([
         loadEnvelope(api, `/api/pulse?window=${encodeURIComponent(currentWindow)}`, { profile, allowEmpty: false }),
         loadEnvelope(api, `/api/upstream/api/analytics/usage?days=${period}`, { profile, allowEmpty: false }),
@@ -86,6 +86,11 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate, li
         loadEnvelope(api, '/api/adapter/issues?limit=100', { profile, pick: (raw) => listFrom(raw, ['issues']) }),
         loadEnvelope(api, '/api/alerts', { profile, pick: alertRows }),
         loadEnvelope(api, '/api/capabilities', { profile, allowEmpty: false }),
+        loadEnvelope(api, '/api/events/recent?limit=50', {
+          profile,
+          pick: (raw) => (Array.isArray(raw) ? raw : raw?.events || []),
+          allowEmpty: false,
+        }),
       ]);
 
     pulse = pulseResult;
@@ -99,6 +104,7 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate, li
     // The shell also pushes capabilities in via setSourceHealth; whichever
     // arrives last wins, and both carry the same envelope shape.
     sourceHealth = capResult;
+    events = eventResult;
     loadedFromSource = true;
     render();
   }
@@ -118,7 +124,7 @@ export function createOverview({ api, profile, toolbar, onNavigate: navigate, li
     const healthRows = rowEnvelope('source.health');
     const overview = liveSummary(liveStore, 'overview.summary', profile);
     const analytics = liveSummary(liveStore, 'analytics.usage', profile);
-    if (![nextTasks, nextPermits, nextIssues, nextAlerts, healthRows, overview, analytics].some(Boolean)) return false;
+    if (![nextTasks, nextPermits, nextIssues, nextAlerts, nextEvents, healthRows, overview, analytics].some(Boolean)) return false;
     if (nextTasks) tasks = nextTasks;
     if (nextPermits) permits = nextPermits;
     if (nextIssues) issues = nextIssues;
