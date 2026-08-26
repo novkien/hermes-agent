@@ -1,0 +1,82 @@
+name: Build fork test isolation and upstream sync
+
+on:
+  push:
+    branches:
+      - automation/fork-test-t6-control-final-10
+    paths:
+      - .github/workflows/build-fork-t6.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FINAL_BRANCH: refactor/fork-tests-t6-upstream-sync-20260826-final
+    steps:
+      - name: Checkout control branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch exact owner and upstream refs
+        run: |
+          set -euo pipefail
+          git remote remove hermes-upstream 2>/dev/null || true
+          git remote add hermes-upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags origin master
+          git fetch --no-tags hermes-upstream main
+
+      - name: Build clean candidate from owner master
+        run: |
+          set -euo pipefail
+          OWNER_BASE="$(git rev-parse refs/remotes/origin/master)"
+          UPSTREAM_SHA="$(git rev-parse refs/remotes/hermes-upstream/main)"
+          rm -rf /tmp/hermes-fork-t6-candidate
+          git worktree add --detach /tmp/hermes-fork-t6-candidate "$OWNER_BASE"
+          git -C /tmp/hermes-fork-t6-candidate config user.name "LE TRUNG KIEN"
+          git -C /tmp/hermes-fork-t6-candidate config user.email "mycompute1102@gmail.com"
+
+          python "$GITHUB_WORKSPACE/.github/scripts/build_fork_t6.py" \
+            --repo /tmp/hermes-fork-t6-candidate \
+            --owner-base "$OWNER_BASE" \
+            --upstream "$UPSTREAM_SHA"
+
+          git -C /tmp/hermes-fork-t6-candidate merge --no-ff "$UPSTREAM_SHA" \
+            -m "merge: sync NousResearch/main after fork test isolation"
+
+          python /tmp/hermes-fork-t6-candidate/scripts/fork_ci/verify_upstream_tests_untouched.py
+          python /tmp/hermes-fork-t6-candidate/scripts/fork_ci/inventory_tests.py
+          python -m py_compile /tmp/hermes-fork-t6-candidate/scripts/fork_ci/*.py
+          git -C /tmp/hermes-fork-t6-candidate diff --check
+          test -z "$(git -C /tmp/hermes-fork-t6-candidate status --porcelain --untracked-files=all)"
+
+          {
+            echo "OWNER_BASE=$OWNER_BASE"
+            echo "UPSTREAM_SHA=$UPSTREAM_SHA"
+            echo "CANDIDATE_HEAD=$(git -C /tmp/hermes-fork-t6-candidate rev-parse HEAD)"
+            echo "CANDIDATE_PARENTS=$(git -C /tmp/hermes-fork-t6-candidate show -s --format=%P HEAD)"
+            echo "FINAL_BRANCH=$FINAL_BRANCH"
+          } | tee "$GITHUB_WORKSPACE/t6-build-refs.txt"
+
+      - name: Publish clean candidate branch
+        run: |
+          set -euo pipefail
+          git -C /tmp/hermes-fork-t6-candidate push origin \
+            "HEAD:refs/heads/$FINAL_BRANCH"
+
+      - name: Upload T6 build evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fork-test-t6-build-evidence
+          path: |
+            t6-build-refs.txt
+            /tmp/hermes-fork-t6-candidate/fork/manifests/build-report.json
+            /tmp/hermes-fork-t6-candidate/.fork-test-reports/
+          if-no-files-found: warn
+          retention-days: 7
