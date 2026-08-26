@@ -1,0 +1,273 @@
+name: Export integration snapshots
+
+on:
+  push:
+    branches:
+      - refactor/upstream-test-isolation-sync-20260826
+    paths:
+      - .github/workflows/export-integration-snapshots.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout owner branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Export merge and test ownership evidence
+        env:
+          LOCAL_SHA: 6f04871ef0b1328bb5a40dcd2407cb3a4107b88d
+        run: |
+          set -euo pipefail
+          git remote remove hermes-upstream 2>/dev/null || true
+          git remote add hermes-upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags hermes-upstream main
+
+          rm -rf snapshot
+          mkdir -p snapshot
+
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          OUT = Path("snapshot")
+          LOCAL = os.environ["LOCAL_SHA"]
+          UPSTREAM = subprocess.check_output(
+              ["git", "rev-parse", "refs/remotes/hermes-upstream/main"], text=True
+          ).strip()
+          BASE = subprocess.check_output(
+              ["git", "merge-base", LOCAL, UPSTREAM], text=True
+          ).strip()
+
+          def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+              return subprocess.run(
+                  list(args),
+                  check=check,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+              )
+
+          def parse_name_status(a: str, b: str) -> tuple[set[str], list[dict[str, object]]]:
+              raw = run(
+                  "git",
+                  "diff",
+                  "--name-status",
+                  "-z",
+                  "--find-renames",
+                  a,
+                  b,
+              ).stdout
+              parts = raw.split(b"\0")
+              if parts and parts[-1] == b"":
+                  parts.pop()
+              paths: set[str] = set()
+              rows: list[dict[str, object]] = []
+              i = 0
+              while i < len(parts):
+                  status = parts[i].decode("utf-8", "surrogateescape")
+                  i += 1
+                  if status.startswith(("R", "C")):
+                      old_path = parts[i].decode("utf-8", "surrogateescape")
+                      new_path = parts[i + 1].decode("utf-8", "surrogateescape")
+                      i += 2
+                      paths.update((old_path, new_path))
+                      rows.append({"status": status, "old_path": old_path, "path": new_path})
+                  else:
+                      path = parts[i].decode("utf-8", "surrogateescape")
+                      i += 1
+                      paths.add(path)
+                      rows.append({"status": status, "path": path})
+              return paths, rows
+
+          def read_tree(ref: str) -> dict[str, dict[str, object]]:
+              raw = run("git", "ls-tree", "-r", "-z", "-l", "--full-tree", ref).stdout
+              tree: dict[str, dict[str, object]] = {}
+              for record in raw.split(b"\0"):
+                  if not record:
+                      continue
+                  meta, path_raw = record.split(b"\t", 1)
+                  fields = meta.decode("ascii").split()
+                  mode, obj_type, sha = fields[:3]
+                  size = None if fields[3] == "-" else int(fields[3])
+                  path = path_raw.decode("utf-8", "surrogateescape")
+                  tree[path] = {
+                      "mode": mode,
+                      "type": obj_type,
+                      "sha": sha,
+                      "size": size,
+                  }
+              return tree
+
+          def is_test_owned(path: str) -> bool:
+              p = path.replace("\\", "/")
+              base = p.rsplit("/", 1)[-1]
+              return any(
+                  (
+                      p.startswith("tests/"),
+                      p.startswith("tests-js/"),
+                      "/tests/" in f"/{p}",
+                      "/__tests__/" in f"/{p}",
+                      "/e2e/" in f"/{p}",
+                      base == "conftest.py",
+                      bool(re.match(r"test_.*\.py$", base)),
+                      bool(re.match(r".*_test\.py$", base)),
+                      ".test." in base,
+                      ".spec." in base,
+                      "__snapshots__" in p,
+                  )
+              )
+
+          local_paths, local_status = parse_name_status(BASE, LOCAL)
+          upstream_paths, upstream_status = parse_name_status(BASE, UPSTREAM)
+          union = local_paths | upstream_paths
+
+          trees = {
+              "base": read_tree(BASE),
+              "local": read_tree(LOCAL),
+              "upstream": read_tree(UPSTREAM),
+          }
+
+          support_names = {
+              "AGENTS.md",
+              "CLAUDE.md",
+              "pyproject.toml",
+              "package.json",
+              "package-lock.json",
+              "uv.lock",
+              "pytest.ini",
+              "tox.ini",
+              "vitest.config.ts",
+              "vitest.config.js",
+              "scripts/run_tests.sh",
+          }
+          all_paths = set().union(*(tree.keys() for tree in trees.values()))
+          support = {
+              path
+              for path in all_paths
+              if path in support_names
+              or path.endswith("/AGENTS.md")
+              or path.endswith("/CLAUDE.md")
+              or path.startswith(".github/workflows/")
+          }
+          export_paths = sorted(union | support)
+
+          for label, tree in trees.items():
+              (OUT / "trees").mkdir(parents=True, exist_ok=True)
+              subset = {p: tree[p] for p in export_paths if p in tree}
+              (OUT / "trees" / f"{label}.json").write_text(
+                  json.dumps(subset, indent=2, sort_keys=True), encoding="utf-8"
+              )
+              test_manifest = {p: row for p, row in tree.items() if is_test_owned(p)}
+              (OUT / "trees" / f"{label}-tests.json").write_text(
+                  json.dumps(test_manifest, indent=2, sort_keys=True), encoding="utf-8"
+              )
+
+              for path in export_paths:
+                  row = tree.get(path)
+                  if not row or row["type"] != "blob":
+                      continue
+                  target = OUT / "files" / label / path
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(run("git", "cat-file", "blob", str(row["sha"])).stdout)
+
+          base_tests = {p for p in trees["base"] if is_test_owned(p)}
+          local_tests = {p for p in trees["local"] if is_test_owned(p)}
+          local_modified_upstream = sorted(local_paths & base_tests)
+          local_only_tests = sorted(
+              p
+              for p in local_tests - base_tests
+              if p.startswith(("tests/", "tests-js/"))
+              or (
+                  not p.startswith("apps/mission-control/")
+                  and is_test_owned(p)
+              )
+          )
+          already_isolated = sorted(
+              p for p in local_tests if p.startswith("apps/mission-control/tests/")
+          )
+
+          merge_preview = run(
+              "git",
+              "merge-tree",
+              "--write-tree",
+              "--name-only",
+              LOCAL,
+              UPSTREAM,
+              check=False,
+          )
+
+          metadata = {
+              "local_sha": LOCAL,
+              "upstream_sha": UPSTREAM,
+              "merge_base_sha": BASE,
+              "local_ahead_count": int(
+                  run("git", "rev-list", "--count", f"{BASE}..{LOCAL}").stdout
+              ),
+              "upstream_ahead_count": int(
+                  run("git", "rev-list", "--count", f"{BASE}..{UPSTREAM}").stdout
+              ),
+              "local_changed_path_count": len(local_paths),
+              "upstream_changed_path_count": len(upstream_paths),
+              "union_path_count": len(union),
+              "local_modified_upstream_tests": local_modified_upstream,
+              "local_only_tests_in_upstream_namespace": local_only_tests,
+              "already_isolated_fork_tests": already_isolated,
+              "merge_preview_exit_code": merge_preview.returncode,
+              "merge_preview_stdout": merge_preview.stdout.decode(
+                  "utf-8", "surrogateescape"
+              ),
+              "merge_preview_stderr": merge_preview.stderr.decode(
+                  "utf-8", "surrogateescape"
+              ),
+          }
+          (OUT / "metadata.json").write_text(
+              json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          (OUT / "local-name-status.json").write_text(
+              json.dumps(local_status, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          (OUT / "upstream-name-status.json").write_text(
+              json.dumps(upstream_status, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          (OUT / "union-paths.txt").write_text(
+              "\n".join(export_paths) + "\n", encoding="utf-8"
+          )
+
+          local_log = run(
+              "git",
+              "log",
+              "--reverse",
+              "--format=%H%x09%P%x09%s",
+              f"{BASE}..{LOCAL}",
+          ).stdout
+          upstream_log = run(
+              "git",
+              "log",
+              "--reverse",
+              "--format=%H%x09%P%x09%s",
+              f"{BASE}..{UPSTREAM}",
+          ).stdout
+          (OUT / "local-commits.tsv").write_bytes(local_log)
+          (OUT / "upstream-commits.tsv").write_bytes(upstream_log)
+          PY
+
+          tar -czf integration-snapshots.tar.gz snapshot
+
+      - name: Upload integration snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-snapshots
+          path: integration-snapshots.tar.gz
+          if-no-files-found: error
+          retention-days: 3
