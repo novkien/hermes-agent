@@ -53,18 +53,20 @@ jobs:
           path = Path(os.environ["RUNNER_TEMP"]) / "execute_t0_t6.py"
           text = path.read_text(encoding="utf-8")
           invalid = '      HERMES_HOME: $' + '{{ runner.temp }}/hermes-home\n'
-          checkout = '''      - uses: actions/checkout@v4
-                with:
-                  fetch-depth: 0
-              - uses: actions/setup-python@v5
-          '''
-          replacement = '''      - uses: actions/checkout@v4
-                with:
-                  fetch-depth: 0
-              - name: Initialize isolated Hermes home
-                run: echo "HERMES_HOME=${RUNNER_TEMP}/hermes-home" >> "$GITHUB_ENV"
-              - uses: actions/setup-python@v5
-          '''
+          checkout = (
+              "      - uses: actions/checkout@v4\n"
+              "        with:\n"
+              "          fetch-depth: 0\n"
+              "      - uses: actions/setup-python@v5\n"
+          )
+          replacement = (
+              "      - uses: actions/checkout@v4\n"
+              "        with:\n"
+              "          fetch-depth: 0\n"
+              "      - name: Initialize isolated Hermes home\n"
+              "        run: echo \"HERMES_HOME=${RUNNER_TEMP}/hermes-home\" >> \"$GITHUB_ENV\"\n"
+              "      - uses: actions/setup-python@v5\n"
+          )
           if text.count(invalid) != 1:
               raise SystemExit(f"expected one invalid runner.temp job env, found {text.count(invalid)}")
           if text.count(checkout) != 1:
