@@ -1,0 +1,92 @@
+name: Retry and merge fork T6 PR
+
+on:
+  push:
+    branches:
+      - automation/fork-test-t6-control-final-10
+    paths:
+      - .github/workflows/retry-merge-fork-t6-pr.yml
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+  issues: write
+
+jobs:
+  retry-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: novkien/hermes-agent
+      HEAD_BRANCH: refactor/fork-tests-t6-upstream-sync-20260826-final
+    steps:
+      - name: Resolve PR and retry failed workflow runs once
+        id: pr
+        run: |
+          set -euo pipefail
+          PR="$(gh pr list --repo "$REPO" --state open --head "$HEAD_BRANCH" --json number --jq '.[0].number // empty')"
+          if [ -z "$PR" ]; then
+            echo "No open PR remains; it may already be merged."
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HEAD="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          gh pr ready "$PR" --repo "$REPO" || true
+
+          mapfile -t failed_runs < <(gh api --paginate \
+            "/repos/$REPO/actions/runs?head_sha=$HEAD&per_page=100" \
+            --jq '.workflow_runs[] | select(.event == "pull_request" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")) | .id' | sort -u)
+          for run_id in "${failed_runs[@]:-}"; do
+            [ -n "$run_id" ] || continue
+            echo "Re-running failed jobs for workflow run $run_id"
+            gh run rerun "$run_id" --repo "$REPO" --failed || true
+          done
+
+      - name: Wait for stable green checks
+        if: steps.pr.outputs.pr != ''
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          HEAD: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          stable=0
+          previous=""
+          for attempt in $(seq 1 220); do
+            test "$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)" = "$HEAD"
+            checks="$(gh api --paginate "/repos/$REPO/commits/$HEAD/check-runs?per_page=100" --jq '[.check_runs[] | {name,status,conclusion,html_url}] | unique_by(.name)')"
+            total="$(jq 'length' <<<"$checks")"
+            pending="$(jq '[.[]|select(.status!="completed")]|length' <<<"$checks")"
+            bad="$(jq '[.[]|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")|not))]|length' <<<"$checks")"
+            gate="$(jq '[.[]|select(.name=="All fork contracts pass" and .conclusion=="success")]|length' <<<"$checks")"
+            names="$(jq -r '.[].name' <<<"$checks"|sort)"
+            echo "attempt=$attempt total=$total pending=$pending bad=$bad gate=$gate stable=$stable"
+            if [ "$bad" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              body="$(printf 'T6 validation remains blocked after one bounded retry.\n\n```text\n%s\n```\n' "$(jq -r '.[]|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")|not))|"\(.conclusion)\t\(.name)\t\(.html_url)"' <<<"$checks")")"
+              gh pr comment "$PR" --repo "$REPO" --body "$body"
+              exit 1
+            fi
+            if [ "$total" -ge 5 ] && [ "$pending" -eq 0 ] && [ "$bad" -eq 0 ] && [ "$gate" -eq 1 ]; then
+              if [ "$names" = "$previous" ]; then stable=$((stable+1)); else stable=1; fi
+              previous="$names"
+              [ "$stable" -lt 5 ] || exit 0
+            else
+              stable=0
+              previous="$names"
+            fi
+            sleep 30
+          done
+          exit 1
+
+      - name: Merge exact head
+        if: steps.pr.outputs.pr != ''
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          HEAD: ${{ steps.pr.outputs.head }}
+        run: gh pr merge "$PR" --repo "$REPO" --merge --match-head-commit "$HEAD"
