@@ -82,7 +82,12 @@ def main() -> None:
     # that call into the `loadEnvelope` pick rather than removing it, so the
     # marker follows the call, not the old local variable name.
     require(
-        "frontend/dist/tabs/overview.js", "pick: taskRows", "import { createStatRow }"
+        "frontend/dist/tabs/overview.js",
+        "pick: taskRows",
+        "import { createStatRow }",
+        "'/api/events/recent?limit=50'",
+        "events = eventResult",
+        "nextAlerts, nextEvents, healthRows",
     )
     # Same repair, same rule: pin the CALL, not the local variable that happens
     # to receive it. The Stage 7 filter work renamed it to `loaded` so the
