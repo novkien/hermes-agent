@@ -236,7 +236,10 @@ def _flush_session_db_after_tool_progress(
 def _terminal_kanban_worker_run(agent) -> Optional[dict[str, Any]]:
     """Cache and return terminal state for this process's exact Kanban run."""
     cached = getattr(agent, "_kanban_terminal_run_state", None)
-    if cached is not None:
+    # Lightweight tests and integrations sometimes supply proxy/mock agent
+    # objects whose missing attributes materialize as truthy sentinels.  Only
+    # a concrete state mapping may stop tool dispatch.
+    if isinstance(cached, dict):
         return cached
     try:
         from tools.kanban_tools import (
@@ -250,9 +253,10 @@ def _terminal_kanban_worker_run(agent) -> Optional[dict[str, Any]]:
             exc_info=True,
         )
         return None
-    if terminal_run is not None:
+    if isinstance(terminal_run, dict):
         agent._kanban_terminal_run_state = terminal_run
-    return terminal_run
+        return terminal_run
+    return None
 
 
 def _skip_tools_after_terminal_kanban_run(
