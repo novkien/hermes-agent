@@ -233,6 +233,62 @@ def _flush_session_db_after_tool_progress(
         return False
 
 
+def _terminal_kanban_worker_run(agent) -> Optional[dict[str, Any]]:
+    """Cache and return terminal state for this process's exact Kanban run."""
+    cached = getattr(agent, "_kanban_terminal_run_state", None)
+    if cached is not None:
+        return cached
+    try:
+        from tools.kanban_tools import (
+            current_worker_run_terminal_state_from_env,
+        )
+
+        terminal_run = current_worker_run_terminal_state_from_env()
+    except Exception:
+        logger.warning(
+            "Could not inspect Kanban worker terminal state",
+            exc_info=True,
+        )
+        return None
+    if terminal_run is not None:
+        agent._kanban_terminal_run_state = terminal_run
+    return terminal_run
+
+
+def _skip_tools_after_terminal_kanban_run(
+    agent,
+    messages: list,
+    tool_calls,
+    terminal_run: dict[str, Any],
+) -> bool:
+    """Persist balanced cancellation results without dispatching more tools."""
+    run_id = terminal_run.get("run_id")
+    status = (
+        terminal_run.get("task_status")
+        or terminal_run.get("outcome")
+        or terminal_run.get("run_status")
+        or "ended"
+    )
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        messages.append(make_tool_result_message(
+            function_name,
+            (
+                f"[Tool execution skipped — {function_name} was not started "
+                f"because Kanban run {run_id} is terminal ({status})]"
+            ),
+            _pairing_tool_call_id(tool_call),
+            effect_disposition="none",
+        ))
+        if not _flush_session_db_after_tool_progress(
+            agent,
+            messages,
+            stage=f"terminal Kanban run skipped tool {function_name}",
+        ):
+            return False
+    return True
+
+
 def _image_generate_parallel_limit() -> int:
     """Return the configured image-generation parallelism cap.
 
@@ -1962,6 +2018,15 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         tool_call_id = _pairing_tool_call_id(tool_call)
         if getattr(agent, "_incremental_persistence_failed", False):
             return
+        terminal_run = _terminal_kanban_worker_run(agent)
+        if terminal_run is not None:
+            _skip_tools_after_terminal_kanban_run(
+                agent,
+                messages,
+                assistant_message.tool_calls[i - 1:],
+                terminal_run,
+            )
+            break
         # SAFETY: check interrupt BEFORE starting each tool.
         # If the user sent "stop" during a previous tool's execution,
         # do NOT start any more tools -- skip them all immediately.
@@ -2888,6 +2953,13 @@ def execute_tool_calls_segmented(agent, assistant_message, messages: list, effec
     for kind, calls in segments:
         if getattr(agent, "_incremental_persistence_failed", False):
             return
+        terminal_run = _terminal_kanban_worker_run(agent)
+        if terminal_run is not None:
+            if not _skip_tools_after_terminal_kanban_run(
+                agent, messages, calls, terminal_run,
+            ):
+                return
+            continue
         segment_message = SimpleNamespace(tool_calls=list(calls))
         if kind == "parallel":
             execute_tool_calls_concurrent(

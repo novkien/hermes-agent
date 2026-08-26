@@ -7456,6 +7456,42 @@ def run_conversation(
                     failed = True
                     break
 
+                # Kanban lifecycle tools close the dispatcher run in SQLite,
+                # while this conversation loop owns the worker process.  Once
+                # the exact run launched for this process is terminal, do not
+                # make another provider/tool iteration: unwind normally so the
+                # CLI finalizer can close the session and exit the process.
+                terminal_run = getattr(
+                    agent, "_kanban_terminal_run_state", None,
+                )
+                if terminal_run is None:
+                    try:
+                        from tools.kanban_tools import (
+                            current_worker_run_terminal_state_from_env,
+                        )
+
+                        terminal_run = (
+                            current_worker_run_terminal_state_from_env()
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Could not inspect Kanban worker terminal state",
+                            exc_info=True,
+                        )
+                        terminal_run = None
+                if terminal_run is not None:
+                    terminal_status = (
+                        terminal_run.get("task_status")
+                        or terminal_run.get("outcome")
+                        or terminal_run.get("run_status")
+                        or "ended"
+                    )
+                    _turn_exit_reason = (
+                        f"kanban_run_terminal({terminal_status})"
+                    )
+                    final_response = ""
+                    break
+
                 if agent._tool_guardrail_halt_decision is not None:
                     decision = agent._tool_guardrail_halt_decision
                     _turn_exit_reason = "guardrail_halt"
