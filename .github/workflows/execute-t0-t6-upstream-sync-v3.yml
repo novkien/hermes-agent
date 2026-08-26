@@ -103,13 +103,13 @@ jobs:
       - name: Verify T0-T4 ownership contracts
         run: |
           set -euo pipefail
-          python scripts/fork_ci/verify_upstream_tests_untouched.py
-          python scripts/fork_ci/inventory_tests.py
-          python -m compileall -q scripts/fork_ci
+          .venv/bin/python scripts/fork_ci/verify_upstream_tests_untouched.py
+          .venv/bin/python scripts/fork_ci/inventory_tests.py
+          .venv/bin/python -m compileall -q scripts/fork_ci
 
       - name: Prepare disposable fork-test overlay
         run: |
-          python scripts/fork_ci/prepare_overlay.py \
+          .venv/bin/python scripts/fork_ci/prepare_overlay.py \
             --destination "${RUNNER_TEMP}/fork-overlay"
 
       - name: Run extracted owner Python regression contracts
@@ -144,19 +144,19 @@ jobs:
       - name: Run Mission Control fork contracts
         run: |
           set -euo pipefail
-          python apps/mission-control/tests/test_runtime_contracts.py
-          python apps/mission-control/tests/test_static_repair_surface.py
+          .venv/bin/python apps/mission-control/tests/test_runtime_contracts.py
+          .venv/bin/python apps/mission-control/tests/test_static_repair_surface.py
           node apps/mission-control/tests/frontend_contracts.mjs
           node apps/mission-control/tests/skills_surface.mjs
-          python -m compileall -q apps/mission-control/agent_mission_control
+          .venv/bin/python -m compileall -q apps/mission-control/agent_mission_control
 
       - name: Validate T5 classification and merged repository state
         run: |
           set -euo pipefail
-          python scripts/fork_ci/report_contract_failures.py \
+          .venv/bin/python scripts/fork_ci/report_contract_failures.py \
             --junit fork-regressions-python.xml \
             --output fork-regressions-classification.json
-          python -m compileall -q agent gateway hermes_cli tools
+          .venv/bin/python -m compileall -q agent gateway hermes_cli tools
           git merge-base --is-ancestor \
             "${{ steps.build.outputs.upstream_sha }}" HEAD
           git merge-base --is-ancestor \
