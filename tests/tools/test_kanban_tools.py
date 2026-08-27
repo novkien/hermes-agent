@@ -40,36 +40,6 @@ def test_kanban_tools_hidden_without_env_var(monkeypatch, tmp_path):
     )
 
 
-def test_kanban_tools_follow_explicit_session_toolset_grant(monkeypatch, tmp_path):
-    """A topic-level `enabled_toolsets` grant must override raw default config.
-
-    The immediate second build verifies the registry's TTL cache cannot carry
-    the enabled topic's verdict into a same-profile topic without Kanban.
-    """
-    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
-    home = tmp_path / ".hermes"
-    home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
-
-    import model_tools
-    import tools.kanban_tools  # noqa: F401 - ensure registered
-    from tools.registry import invalidate_check_fn_cache
-
-    invalidate_check_fn_cache()
-    model_tools._clear_tool_defs_cache()
-    enabled = model_tools.get_tool_definitions(
-        enabled_toolsets=["hermes-cli", "kanban"], quiet_mode=True,
-    )
-    enabled_names = {tool["function"]["name"] for tool in enabled}
-    assert {"kanban_create", "kanban_show", "kanban_list"}.issubset(enabled_names)
-
-    disabled = model_tools.get_tool_definitions(
-        enabled_toolsets=["hermes-cli"], quiet_mode=True,
-    )
-    disabled_names = {tool["function"]["name"] for tool in disabled}
-    assert not {name for name in disabled_names if name.startswith("kanban_")}
-
-
 # ---------------------------------------------------------------------------
 # Handler happy paths
 # ---------------------------------------------------------------------------
@@ -256,38 +226,6 @@ def test_block_happy_path(worker_env):
         assert kb.get_task(conn, worker_env).status == "blocked"
     finally:
         conn.close()
-
-
-def test_terminal_state_tracks_exact_worker_run(monkeypatch, worker_env):
-    """The process handoff detector fires only for its exact ended run."""
-    from hermes_cli import kanban_db as kb
-    from tools import kanban_tools as kt
-
-    conn = kb.connect()
-    try:
-        run = kb.latest_run(conn, worker_env)
-        assert run is not None
-        run_id = run.id
-    finally:
-        conn.close()
-
-    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
-    assert kt.current_worker_run_terminal_state_from_env() is None
-
-    out = json.loads(kt._handle_block({"reason": "need clarification"}))
-    assert out["ok"] is True
-
-    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id + 1))
-    assert kt.current_worker_run_terminal_state_from_env() is None
-
-    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
-    assert kt.current_worker_run_terminal_state_from_env() == {
-        "task_id": worker_env,
-        "run_id": run_id,
-        "task_status": "blocked",
-        "run_status": "blocked",
-        "outcome": "blocked",
-    }
 
 
 def _make_goal_mode_worker_env(monkeypatch, tmp_path):

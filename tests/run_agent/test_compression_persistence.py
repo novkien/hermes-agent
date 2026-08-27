@@ -299,11 +299,14 @@ class TestFlushAfterCompression:
             # The transcript must also be large enough that the provider-less
             # static fallback net-shrinks it (middle drops must outweigh the
             # fixed compaction marker overhead), or the no-growth commit guard
-            # correctly refuses the rotation this test exercises.
+            # correctly refuses the rotation this test exercises. Sized for
+            # the lean tail default: the 10K-token tail floor must leave a
+            # substantial compressible middle (~2K chars/message × 40 ≈ 20K
+            # estimated tokens total).
             messages = [
                 {
                     "role": "user" if i % 2 == 0 else "assistant",
-                    "content": f"message {i} " + "x" * 200,
+                    "content": f"message {i} " + "x" * 2000,
                     "_db_persisted": True,
                 }
                 for i in range(40)
@@ -500,8 +503,8 @@ class TestStoredPromptCwdDrift:
 
 
 
-    def test_built_prompt_contains_current_date_line(self):
-        """The volatile prompt retains its cache-boundary date metadata."""
+    def test_built_prompt_contains_platform_line(self):
+        """The built system prompt must carry a Platform: line so drift detection works."""
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
@@ -525,6 +528,6 @@ class TestStoredPromptCwdDrift:
                 )
             agent.platform = "cli"
             parts = build_system_prompt_parts(agent)
-            assert "Conversation started:" in parts["volatile"], (
-                "Built prompt missing its volatile current-date boundary"
+            assert "Platform: cli" in parts["volatile"], (
+                "Built prompt missing 'Platform: cli' — drift detection cannot read it"
             )

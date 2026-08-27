@@ -105,6 +105,36 @@ _DEFAULT_FILE_RETRIES = 1
 _DURATIONS_FILE = "test_durations.json"
 
 
+def _fork_replaced_nodeids(repo_root: Path) -> dict[str, list[str]]:
+    """Load pristine upstream nodes superseded by executable fork cases."""
+    manifest_path = repo_root / "fork_tests" / "manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rows = manifest.get("cases")
+    if not isinstance(rows, list):
+        raise RuntimeError(f"invalid fork case manifest: {manifest_path}")
+    replaced: dict[str, list[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("runner") != "python":
+            continue
+        shared_path = row.get("shared_path")
+        nodeids = row.get("replaced_upstream_nodeids")
+        if not isinstance(shared_path, str) or not isinstance(nodeids, list):
+            raise RuntimeError(
+                "Python fork case lacks replaced_upstream_nodeids; "
+                "run scripts/fork_ci/update_upstream_lock.py"
+            )
+        for nodeid in nodeids:
+            if not isinstance(nodeid, str) or not (
+                nodeid == shared_path or nodeid.startswith(f"{shared_path}::")
+            ):
+                raise RuntimeError(f"invalid replaced upstream node: {nodeid!r}")
+        if nodeids:
+            replaced[shared_path] = sorted(set(nodeids))
+    return replaced
+
+
 def _split_pathspec(value: str) -> List[str]:
     """Split a separator-joined path list (``--paths``/``--files``/
     ``HERMES_TEST_PATHS``) into individual paths.
@@ -985,6 +1015,7 @@ def main() -> int:
             sys.exit(2)
 
     repo_root = Path(__file__).resolve().parent.parent
+    fork_replacements = _fork_replaced_nodeids(repo_root)
 
     # --files: explicit file list from the CI generate job — skip discovery.
     if args.files:
@@ -1052,6 +1083,22 @@ def main() -> int:
         print(
             f"Running {len(files)} test files (~{approx_total_tests} tests) "
             f"with -j {args.jobs}",
+            flush=True,
+        )
+    active_paths = {
+        file.relative_to(repo_root).as_posix()
+        for file in files
+        if file.is_relative_to(repo_root)
+    }
+    replacement_count = sum(
+        len(nodes)
+        for path, nodes in fork_replacements.items()
+        if path in active_paths
+    )
+    if replacement_count:
+        print(
+            f"Deselecting {replacement_count} pristine upstream test nodes "
+            "that executable fork cases replace",
             flush=True,
         )
 
@@ -1126,8 +1173,21 @@ def main() -> int:
         futures: List[Future] = []
         for file in files:
             t0 = time.monotonic()
+            relative_file = (
+                file.relative_to(repo_root).as_posix()
+                if file.is_relative_to(repo_root)
+                else None
+            )
+            file_pytest_args = pytest_passthrough + [
+                f"--deselect={nodeid}"
+                for nodeid in (
+                    fork_replacements.get(relative_file, [])
+                    if relative_file is not None
+                    else []
+                )
+            ]
             fut = pool.submit(
-                _run_one_file, file, pytest_passthrough, repo_root,
+                _run_one_file, file, file_pytest_args, repo_root,
                 args.file_timeout, args.file_retries,
             )
             fut.add_done_callback(lambda f, file=file, t0=t0: _on_done(file, t0, f))

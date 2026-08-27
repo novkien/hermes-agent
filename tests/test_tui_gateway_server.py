@@ -50,13 +50,6 @@ def _neuter_agent_prewarm_timer(request, monkeypatch):
     exercise the deferred build itself opt back in with
     ``@pytest.mark.real_agent_prewarm``.
     """
-    # Other test modules legitimately reload the gateway module while probing
-    # transport behavior. Keep this large legacy module's imported `server`
-    # object canonical for string-based patch targets and lazy imports during
-    # every test, regardless of collection order.
-    monkeypatch.setitem(sys.modules, "tui_gateway.server", server)
-    monkeypatch.setattr(sys.modules["tui_gateway"], "server", server)
-
     if request.node.get_closest_marker("real_agent_prewarm"):
         yield
         return
@@ -378,6 +371,13 @@ def test_prompt_submit_unknown_session_logs_warning(caplog):
     assert any(
         "session-scoped RPC rejected" in rec.message and "gone-sid" in rec.message
         for rec in caplog.records
+    )
+    # The method name must be in the line. Without it this warning cannot
+    # identify WHICH client call is looping on a stale runtime id — the gap
+    # that made a 5s `process.list` poll storm (18,614 rejections against one
+    # id) unattributable from the logs alone.
+    assert any(
+        "method=prompt.submit" in rec.message for rec in caplog.records
     )
 
 
@@ -2489,9 +2489,8 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    fork_coordination = {"a2a_coordination", "kanban_coordination"}
-    assert {"kanban", "memory", "project", *fork_coordination} <= set(result)
-    assert set(result) - {"kanban", "memory", "project", *fork_coordination} <= _RECENTLY_SHIPPED_TOOLSETS
+    assert {"kanban", "memory", "project"} <= set(result)
+    assert set(result) - {"kanban", "memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -2516,9 +2515,8 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
 
     result = server._load_enabled_toolsets()
     assert result is not None
-    fork_coordination = {"a2a_coordination", "kanban_coordination"}
-    assert {"kanban", "memory", "project", *fork_coordination} <= set(result)
-    assert set(result) - {"kanban", "memory", "project", *fork_coordination} <= _RECENTLY_SHIPPED_TOOLSETS
+    assert {"kanban", "memory", "project"} <= set(result)
+    assert set(result) - {"kanban", "memory", "project"} <= _RECENTLY_SHIPPED_TOOLSETS
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 
@@ -20945,6 +20943,70 @@ def test_persist_live_session_system_prompt_restores_pre_existing_override(tmp_p
     finally:
         reset_hermes_home_override(outer_token)
     assert get_hermes_home_override() is None
+
+
+def test_persist_live_session_system_prompt_binds_session_cwd(monkeypatch, tmp_path):
+    """The prompt rebuild after a live model switch must record the SESSION's
+    working directory, not the process TERMINAL_CWD.
+
+    The function runs on the RPC dispatcher thread (model.switch, config.set
+    model). On that thread the _SESSION_CWD contextvar is not set, so
+    resolve_agent_cwd() falls back to TERMINAL_CWD, which the desktop pins
+    to the home directory. The wrong cwd line then persists into the stored
+    prompt. Later turns restore the stored bytes without change (the
+    prologue rebuilds only when _cached_system_prompt is None), so the
+    poisoned line never self-heals.
+    """
+    session_cwd = tmp_path / "project"
+    session_cwd.mkdir()
+    process_cwd = tmp_path / "home-fallback"
+    process_cwd.mkdir()
+    monkeypatch.setenv("TERMINAL_CWD", str(process_cwd))
+
+    persisted = {}
+
+    class FakeAgent:
+        model = "test-model"
+        provider = "test"
+        session_id = "cwd-test-session"
+        _cached_system_prompt = None
+        _session_db = None
+
+        def _build_system_prompt(self, system_message=None):
+            # The real builder embeds resolve_agent_cwd() via
+            # prompt_builder.build_environment_hints().
+            from agent.runtime_cwd import resolve_agent_cwd
+
+            return f"Current working directory: {resolve_agent_cwd()}"
+
+    class FakeDB:
+        def update_system_prompt(self, session_id, prompt):
+            persisted["prompt"] = prompt
+
+    agent = FakeAgent()
+    agent._session_db = FakeDB()
+    session = {
+        "agent": agent,
+        "session_key": "cwd-test-session",
+        "cwd": str(session_cwd),
+        "explicit_cwd": True,
+        "profile_home": None,
+    }
+
+    # A bare thread has no _SESSION_CWD contextvar — the RPC dispatcher shape.
+    result = {}
+
+    def dispatcher_thread():
+        server._persist_live_session_system_prompt(session)
+        result["cached"] = agent._cached_system_prompt
+
+    t = threading.Thread(target=dispatcher_thread)
+    t.start()
+    t.join()
+
+    expected = f"Current working directory: {session_cwd}"
+    assert result["cached"] == expected, result["cached"]
+    assert persisted["prompt"] == expected, persisted["prompt"]
 
 
 def test_workspace_move_rehomes_running_session(monkeypatch, tmp_path):

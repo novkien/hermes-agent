@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent.artifact_filesystem_contract import ARTIFACT_FILESYSTEM_CONTRACT
 from agent.system_prompt import build_system_prompt, build_system_prompt_parts
 
 
@@ -48,7 +47,6 @@ def _captured_context_cwd(agent):
 
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", side_effect=fake_context_files),
     ):
@@ -71,7 +69,6 @@ class TestContextFileCwd:
 def _stable_prompt(agent):
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=""),
     ):
@@ -81,7 +78,6 @@ def _stable_prompt(agent):
 def _prompt_parts(agent):
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=""),
     ):
@@ -271,7 +267,6 @@ def test_build_system_prompt_records_stable_prefix():
     agent = _make_agent()
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value="context"),
     ):
@@ -279,28 +274,6 @@ def test_build_system_prompt_records_stable_prefix():
 
     assert prompt.startswith(agent._cached_system_prompt_static)
     assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
-
-
-def test_artifact_filesystem_contract_is_small_and_unconditional():
-    assert len(ARTIFACT_FILESYSTEM_CONTRACT.splitlines()) <= 50
-    agent = _make_agent(skip_context_files=True, load_soul_identity=False)
-    stable = _stable_prompt(agent)
-    assert stable.startswith(ARTIFACT_FILESYSTEM_CONTRACT)
-    assert stable.count("## Artifact Filesystem Contract") == 1
-
-
-def test_auto_loaded_skill_is_in_stable_system_prefix_once():
-    marker = "# Auto-Loaded Authoritative Skills\n\nAUDIT PROCEDURE"
-    agent = _make_agent(_auto_loaded_skill_prompt=marker)
-    with (
-        patch("run_agent.load_soul_md", return_value="IDENTITY"),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
-        patch("run_agent.build_environment_hints", return_value=""),
-        patch("run_agent.build_context_files_prompt", return_value=""),
-    ):
-        prompt = build_system_prompt(agent)
-    assert prompt.count(marker) == 1
-    assert marker in agent._cached_system_prompt_static
 
 
 def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
@@ -325,7 +298,6 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         "unless the user explicitly directs you to."
     )
     expected = "\n\n".join((
-        ARTIFACT_FILESYSTEM_CONTRACT,
         "IDENTITY",
         "HELP",
         "STEER",
@@ -335,12 +307,11 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         expected_profile,
         "SYSTEM_MESSAGE",
         "CONTEXT_FILES",
-            "Conversation started: Friday, January 02, 2026",
+        "Conversation started: Friday, January 02, 2026",
     ))
 
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value="CONTEXT_FILES"),
         patch(
@@ -357,13 +328,7 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join((
-        ARTIFACT_FILESYSTEM_CONTRACT,
-        "IDENTITY",
-        "HELP",
-        "STEER",
-        "CODING_STABLE",
-    ))
+    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
 
 
 class TestTelegramRichMessagesHint:
@@ -491,7 +456,6 @@ def _build(builder, **overrides):
     agent = _make_agent(valid_tool_names=["skills_list"], **overrides)
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=_CONTEXT),
         patch("run_agent.get_toolset_for_tool", return_value=None),

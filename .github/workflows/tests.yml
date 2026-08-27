@@ -18,10 +18,15 @@ jobs:
     # not provisioned here and otherwise leaves this required lane queued
     # forever with no runner assigned.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Fork verification proves that the immutable upstream lock is an
+          # ancestor and reads its exact blobs. A depth-1 PR merge checkout
+          # contains neither the parent graph nor those locked objects.
+          fetch-depth: 0
 
       - name: Install ripgrep (prebuilt binary)
         run: |
@@ -83,14 +88,18 @@ jobs:
         # re-download, keeping the persisted cache small and fast to restore.
         run: uv cache prune --ci
 
+      - name: Verify shared upstream tests are immutable
+        run: .venv/bin/python scripts/fork_ci/verify_shared_tests.py
+
       - name: Run tests
         # Per-file isolation via scripts/run_tests.sh: each test file runs
         # in its own freshly-spawned `python -m pytest <file>` subprocess
         # with bounded parallelism. No xdist, no shared workers, no
         # module-level state leakage between files.
         #
-        # No --files: the runner discovers the suite itself. The discovered
-        # set is identical to the list the removed matrix job used to pass in.
+        # No --files: the runner discovers the suite itself. It runs every
+        # pristine upstream node except the exact manifest entries replaced by
+        # executable fork cases in the later overlay step.
         run: |
           source .venv/bin/activate
           scripts/run_tests.sh
@@ -107,6 +116,29 @@ jobs:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
+
+      - name: Test fork tooling and merge semantics
+        run: .venv/bin/python -m pytest -q fork_tests/test_*.py
+
+      - name: Run isolated fork Python regression cases
+        run: |
+          .venv/bin/python scripts/fork_ci/run_python_cases.py \
+            --python .venv/bin/python \
+            --junit fork-regressions-python.xml
+        env:
+          HERMES_TEST_WORKERS: 8
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Upload fork regression results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fork-python-regression-results
+          path: fork-regressions-python.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   e2e:
     runs-on: ubuntu-latest

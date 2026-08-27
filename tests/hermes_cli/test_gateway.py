@@ -364,15 +364,7 @@ def test_spawn_detached_gateway_timestamps_stderr(monkeypatch, tmp_path):
     reason="systemd user-linger is Linux-only (drives os.getuid())",
 )
 def test_systemd_install_checks_linger_status(monkeypatch, tmp_path, capsys):
-    from hermes_cli import mission_control
-
     unit_path = tmp_path / "systemd" / "user" / "hermes-gateway.service"
-    mission_control_unit_path = (
-        tmp_path / "systemd" / "user" / "hermes-mission-control.service"
-    )
-
-    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: True)
-    monkeypatch.setattr(gateway, "_preflight_user_systemd", lambda: None)
 
     monkeypatch.setattr(gateway, "get_systemd_unit_path", lambda system=False: unit_path)
     # Synthetic unit with a non-temp home: the real generator bakes the
@@ -380,18 +372,6 @@ def test_systemd_install_checks_linger_status(monkeypatch, tmp_path, capsys):
     # guard correctly refuses.
     monkeypatch.setattr(
         gateway,
-        "generate_systemd_unit",
-        lambda system=False, run_as_user=None: (
-            '[Service]\nEnvironment="HERMES_HOME=/home/alice/.hermes"\n'
-        ),
-    )
-    monkeypatch.setattr(
-        mission_control,
-        "get_systemd_unit_path",
-        lambda system=False: mission_control_unit_path,
-    )
-    monkeypatch.setattr(
-        mission_control,
         "generate_systemd_unit",
         lambda system=False, run_as_user=None: (
             '[Service]\nEnvironment="HERMES_HOME=/home/alice/.hermes"\n'
@@ -411,17 +391,11 @@ def test_systemd_install_checks_linger_status(monkeypatch, tmp_path, capsys):
     gateway.systemd_install(force=False)
 
     out = capsys.readouterr().out
-    command_history = [cmd for cmd, _ in calls]
     assert unit_path.exists()
-    assert mission_control_unit_path.exists()
-    assert command_history.count(["systemctl", "--user", "daemon-reload"]) >= 2
-    assert [
-        "systemctl",
-        "--user",
-        "enable",
-        mission_control.SERVICE_NAME,
-    ] in command_history
-    assert ["systemctl", "--user", "enable", gateway.get_service_name()] in command_history
+    assert [cmd for cmd, _ in calls] == [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", gateway.get_service_name()],
+    ]
     assert helper_calls == [True]
     assert "User service installed and enabled" in out
 
@@ -1033,3 +1007,151 @@ class TestWindowsScheduledTaskSupervisorGuard:
             monkeypatch.setattr(gateway, "_windows_scheduled_task_state", lambda name, s=state: s)
             assert gateway._windows_scheduled_task_supervises("Hermes_Gateway") is expected, state
             assert gateway._windows_scheduled_task_running("Hermes_Gateway") is (state == "Running")
+
+
+def test_find_windows_gateway_services_maps_verified_pid_tree(monkeypatch):
+    """Only an SCM service whose subtree contains a validated gateway PID is returned."""
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    profile = SimpleNamespace(profile="default", pid=300, create_time=300.0)
+
+    class FakeService:
+        def __init__(self, name, pid):
+            self.name = name
+            self.pid = pid
+
+        def as_dict(self):
+            return {
+                "name": self.name,
+                "pid": self.pid,
+                "status": "running",
+            }
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def parents(self):
+            return [FakeProcess(200), FakeProcess(100)]
+
+        def children(self, recursive=False):
+            assert self.pid == 100
+            assert recursive is True
+            return [FakeProcess(200), FakeProcess(300)]
+
+        def create_time(self):
+            return float(self.pid)
+
+    fake_psutil = SimpleNamespace(
+        win_service_iter=lambda: [
+            FakeService("HermesGateway", 100),
+            FakeService("UnrelatedService", 900),
+        ],
+        Process=FakeProcess,
+    )
+
+    result = gateway.find_windows_gateway_services(
+        psutil_module=fake_psutil,
+        profile_processes=[profile],
+    )
+
+    assert result == [
+        gateway.WindowsGatewayService(
+            name="HermesGateway",
+            profile="default",
+            service_pid=100,
+            gateway_pid=300,
+            descendant_pids=frozenset({200, 300}),
+            descendant_identities=((200, 200.0), (300, 300.0)),
+            service_create_time=100.0,
+            gateway_create_time=300.0,
+        )
+    ]
+
+
+def test_find_windows_gateway_services_rejects_shared_service_host_pid(monkeypatch):
+    """A shared host PID cannot prove which service owns the gateway subtree."""
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    profile = SimpleNamespace(profile="default", pid=300, create_time=300.0)
+
+    class FakeService:
+        def __init__(self, name):
+            self.name = name
+
+        def as_dict(self):
+            return {"name": self.name, "pid": 100, "status": "running"}
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def parents(self):
+            return [FakeProcess(100)]
+
+        def children(self, recursive=False):
+            return [FakeProcess(300)]
+
+        def create_time(self):
+            return float(self.pid)
+
+    fake_psutil = SimpleNamespace(
+        win_service_iter=lambda: [FakeService("ServiceA"), FakeService("ServiceB")],
+        Process=FakeProcess,
+    )
+
+    with pytest.raises(RuntimeError, match="shared SCM host"):
+        gateway.find_windows_gateway_services(
+            psutil_module=fake_psutil,
+            profile_processes=[profile],
+        )
+
+
+def test_find_windows_gateway_services_fails_closed_on_service_access_error(
+    monkeypatch,
+):
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    profile = SimpleNamespace(profile="default", pid=300, create_time=300.0)
+
+    class InaccessibleService:
+        def as_dict(self):
+            raise PermissionError("access denied")
+
+    fake_psutil = SimpleNamespace(
+        win_service_iter=lambda: [InaccessibleService()],
+    )
+
+    with pytest.raises(RuntimeError, match="SCM"):
+        gateway.find_windows_gateway_services(
+            psutil_module=fake_psutil,
+            profile_processes=[profile],
+        )
+
+
+def test_find_windows_gateway_services_fails_closed_when_scm_scan_is_indeterminate(
+    monkeypatch,
+):
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    profile = SimpleNamespace(profile="default", pid=300, create_time=300.0)
+    fake_psutil = SimpleNamespace(
+        win_service_iter=lambda: (_ for _ in ()).throw(OSError("SCM unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="SCM"):
+        gateway.find_windows_gateway_services(
+            psutil_module=fake_psutil,
+            profile_processes=[profile],
+        )
+
+
+def test_find_profile_gateway_processes_strict_propagates_profile_listing_failure(
+    monkeypatch,
+):
+    import hermes_cli.profiles as profiles_mod
+
+    monkeypatch.setattr(
+        profiles_mod,
+        "list_profiles",
+        lambda: (_ for _ in ()).throw(RuntimeError("profile listing failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="profile listing failed"):
+        gateway.find_profile_gateway_processes(strict=True)

@@ -81,3 +81,9 @@ jobs:
       # nothing.
       - name: Run all workspace checks
         run: node .github/scripts/run-workspace-checks.mjs --concurrency 1
+
+      # Shared JS/TS tests run above exactly as upstream ships them. Fork
+      # cases are then overlaid temporarily and run through each affected
+      # workspace's test script. The helper restores the checkout in finally.
+      - name: Run isolated fork JavaScript regression cases
+        run: python3 scripts/fork_ci/run_javascript_cases.py

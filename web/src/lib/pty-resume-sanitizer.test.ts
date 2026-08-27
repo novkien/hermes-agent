@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyPtyFilters,
-  DASHBOARD_RESUME_COMPLETE_MARKER,
-  PtyResumeSanitizer,
-} from "./pty-resume-sanitizer";
+import { applyPtyFilters, PtyResumeSanitizer } from "./pty-resume-sanitizer";
 
 /**
  * Fixture note — why most cases use CRLF, not LF.
@@ -218,37 +214,5 @@ describe("PtyResumeSanitizer — bounded erase suppression", () => {
     s.endEraseSuppression();
     const spinner = "Loading 10%\r\x1b[KLoading 20%\r\x1b[KDone";
     expect(drain(s, [spinner])).toBe(spinner);
-  });
-
-  it("consumes the explicit TUI boundary and preserves the following redraw", () => {
-    const s = new PtyResumeSanitizer();
-    const redraw = "tool running\r\x1b[Ktool complete 148ms";
-
-    expect(s.next(DASHBOARD_RESUME_COMPLETE_MARKER)).toBe("");
-    expect(s.isSuppressingErase).toBe(false);
-    expect(s.next(redraw)).toBe(redraw);
-  });
-
-  it("opens erase suppression before filtering a redraw in the same frame", () => {
-    const s = new PtyResumeSanitizer();
-    const redraw = "old tool\r\x1b[Kcompleted tool";
-
-    expect(s.next(`${DASHBOARD_RESUME_COMPLETE_MARKER}${redraw}`)).toBe(
-      redraw,
-    );
-    expect(s.isSuppressingErase).toBe(false);
-  });
-
-  it("reassembles a resume boundary split across PTY frames", () => {
-    const s = new PtyResumeSanitizer();
-    const splitAt = 9;
-    const first = DASHBOARD_RESUME_COMPLETE_MARKER.slice(0, splitAt);
-    const second = DASHBOARD_RESUME_COMPLETE_MARKER.slice(splitAt);
-
-    expect(s.next(first)).toBe("");
-    expect(s.isSuppressingErase).toBe(true);
-    expect(s.next(second)).toBe("");
-    expect(s.isSuppressingErase).toBe(false);
-    expect(s.next("a\x1b[Kb")).toBe("a\x1b[Kb");
   });
 });

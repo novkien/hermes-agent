@@ -51,28 +51,6 @@ def test_breakdown_includes_major_categories():
 
 
 
-def test_skills_index_in_volatile_tier_is_attributed_to_skills():
-    """The <available_skills> block lives in the volatile tier.
-
-    It was moved there so a skill edit no longer invalidates the cached
-    identity prefix. Searching only ``stable`` reported Skills as 0 and folded
-    the whole block into "System prompt" instead.
-    """
-    skills_block = (
-        "<available_skills>\n" + ("  - demo: a demo skill\n" * 40) + "</available_skills>"
-    )
-    volatile = "Current time: now\n" + skills_block
-    agent, parts = _make_agent(stable="base guidance", volatile=volatile)
-
-    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts):
-        data = compute_session_context_breakdown(agent, [])
-
-    by_id = {item["id"]: item["tokens"] for item in data["categories"]}
-    assert by_id.get("skills", 0) > 0
-    # The block must not be double-counted into the system prompt as well.
-    assert by_id["system_prompt"] < by_id["skills"]
-
-
 # ── /context renderers (pure functions over the payload) ────────────────────
 
 from agent.context_breakdown import (  # noqa: E402
@@ -147,33 +125,4 @@ def test_details_lines_caps_listing():
     lines = render_context_details_lines(details)
     assert any("… and 5 more" in line for line in lines)
 
-
-def test_context_details_measures_live_volatile_skills_index():
-    agent, parts = _make_agent(
-        stable="stable identity",
-        volatile=(
-            "volatile prefix\n<available_skills>\n"
-            "  writing:\n    - demo: pruned description…\n"
-            "</available_skills>"
-        ),
-        tools=[],
-    )
-    captured = {}
-
-    def skill_breakdown(block):
-        captured["block"] = block
-        return [{"name": "demo", "index_line_bytes": 32, "skill_md_bytes": 400}]
-
-    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts), patch(
-        "hermes_cli.prompt_size._compute_skills_breakdown",
-        side_effect=skill_breakdown,
-    ), patch(
-        "hermes_cli.prompt_size._compute_toolsets_breakdown", return_value=[]
-    ):
-        details = compute_context_details(agent)
-
-    assert "pruned description…" in captured["block"]
-    assert details["skills"] == [{
-        "name": "demo", "index_tokens": 8, "skill_md_tokens": 100,
-    }]
 

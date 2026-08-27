@@ -1,0 +1,179 @@
+"""Tests for live session context breakdown."""
+
+from unittest.mock import MagicMock, patch
+
+from agent.context_breakdown import compute_session_context_breakdown
+
+
+def _make_agent(
+    *,
+    stable: str = "identity and guidance",
+    context: str = "",
+    volatile: str = "timestamp line",
+    tools: list | None = None,
+    context_length: int = 200_000,
+    last_prompt_tokens: int = 0,
+):
+    agent = MagicMock()
+    agent.model = "openai/gpt-5.4"
+    agent.tools = tools or [
+        {"type": "function", "function": {"name": "terminal", "description": "run"}},
+        {"type": "function", "function": {"name": "mcp_demo_tool", "description": "mcp"}},
+        {"type": "function", "function": {"name": "delegate_task", "description": "spawn"}},
+    ]
+    agent._memory_store = None
+    agent._memory_enabled = True
+    agent._user_profile_enabled = True
+    agent.context_compressor = MagicMock(
+        context_length=context_length,
+        last_prompt_tokens=last_prompt_tokens,
+    )
+    return agent, {"stable": stable, "context": context, "volatile": volatile}
+
+
+def test_breakdown_includes_major_categories():
+    stable = (
+        "base guidance\n"
+        "<available_skills>\n  demo:\n    - hello: hi\n</available_skills>"
+    )
+    context = "# Project Context\nFollow AGENTS.md"
+    volatile = "Current time: now"
+    history = [{"role": "user", "content": "hello there"}]
+    agent, parts = _make_agent(stable=stable, context=context, volatile=volatile)
+
+    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts):
+        data = compute_session_context_breakdown(agent, history)
+
+    ids = {item["id"] for item in data["categories"]}
+    assert {"system_prompt", "tool_definitions", "rules", "skills", "mcp", "subagent_definitions", "conversation"} <= ids
+    assert data["context_max"] == 200_000
+    assert data["estimated_total"] > 0
+
+
+
+def test_skills_index_in_volatile_tier_is_attributed_to_skills():
+    """The <available_skills> block lives in the volatile tier.
+
+    It was moved there so a skill edit no longer invalidates the cached
+    identity prefix. Searching only ``stable`` reported Skills as 0 and folded
+    the whole block into "System prompt" instead.
+    """
+    skills_block = (
+        "<available_skills>\n" + ("  - demo: a demo skill\n" * 40) + "</available_skills>"
+    )
+    volatile = "Current time: now\n" + skills_block
+    agent, parts = _make_agent(stable="base guidance", volatile=volatile)
+
+    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts):
+        data = compute_session_context_breakdown(agent, [])
+
+    by_id = {item["id"]: item["tokens"] for item in data["categories"]}
+    assert by_id.get("skills", 0) > 0
+    # The block must not be double-counted into the system prompt as well.
+    assert by_id["system_prompt"] < by_id["skills"]
+
+
+# ── /context renderers (pure functions over the payload) ────────────────────
+
+from agent.context_breakdown import (  # noqa: E402
+    compute_context_details,
+    render_context_breakdown_lines,
+    render_context_category_lines,
+    render_context_details_lines,
+    render_context_grid,
+)
+
+
+def _payload(**overrides):
+    base = {
+        "categories": [
+            {"id": "system_prompt", "label": "System prompt", "tokens": 10_000},
+            {"id": "tool_definitions", "label": "Tool definitions", "tokens": 20_000},
+            {"id": "skills", "label": "Skills", "tokens": 5_000},
+            {"id": "conversation", "label": "Conversation", "tokens": 15_000},
+        ],
+        "context_max": 200_000,
+        "context_percent": 25,
+        "context_used": 50_000,
+        "estimated_total": 50_000,
+        "model": "openai/gpt-test",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_grid_is_5x20_and_mostly_free():
+    rows = render_context_grid(_payload())
+    assert len(rows) == 5
+    cells = " ".join(rows).split(" ")
+    assert len(cells) == 100
+    # 50k / 200k → 25 used cells, 75 free
+    assert cells.count("·") == 75
+    # Category glyphs proportional: 10k→5, 20k→10, 5k→2-3, 15k→7-8 cells
+    assert cells.count("■") == 5
+    assert cells.count("▣") == 10
+
+
+
+
+
+
+
+
+
+
+def test_breakdown_lines_grid_toggle():
+    with_grid = render_context_breakdown_lines(_payload(), grid=True)
+    without = render_context_breakdown_lines(_payload(), grid=False)
+    assert any("·" in line for line in with_grid[:5])
+    assert not any("·" in line for line in without[:2])
+    # Both include the window summary and the expand hint
+    for lines in (with_grid, without):
+        text = "\n".join(lines)
+        assert "Context window: 50,000 / 200,000 tokens (25%)" in text
+        assert "/context all" in text
+
+
+
+
+def test_details_lines_caps_listing():
+    details = {
+        "skills": [
+            {"name": f"skill-{i}", "index_tokens": 10, "skill_md_tokens": 100}
+            for i in range(20)
+        ],
+        "toolsets": [],
+    }
+    lines = render_context_details_lines(details)
+    assert any("… and 5 more" in line for line in lines)
+
+
+def test_context_details_measures_live_volatile_skills_index():
+    agent, parts = _make_agent(
+        stable="stable identity",
+        volatile=(
+            "volatile prefix\n<available_skills>\n"
+            "  writing:\n    - demo: pruned description…\n"
+            "</available_skills>"
+        ),
+        tools=[],
+    )
+    captured = {}
+
+    def skill_breakdown(block):
+        captured["block"] = block
+        return [{"name": "demo", "index_line_bytes": 32, "skill_md_bytes": 400}]
+
+    with patch("agent.system_prompt.build_system_prompt_parts", return_value=parts), patch(
+        "hermes_cli.prompt_size._compute_skills_breakdown",
+        side_effect=skill_breakdown,
+    ), patch(
+        "hermes_cli.prompt_size._compute_toolsets_breakdown", return_value=[]
+    ):
+        details = compute_context_details(agent)
+
+    assert "pruned description…" in captured["block"]
+    assert details["skills"] == [{
+        "name": "demo", "index_tokens": 8, "skill_md_tokens": 100,
+    }]
+

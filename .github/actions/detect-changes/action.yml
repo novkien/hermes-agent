@@ -3,7 +3,8 @@ description: >-
   Classify a PR's changed files into CI work lanes (python, frontend, site,
   scan, deps, mcp_catalog) so the orchestrator can conditionally call only
   the sub-workflows a PR can affect. Outputs are always "true" on push/dispatch
-  events and fail open (everything "true") when the diff cannot be computed.
+  events and fail open (everything "true") when the exact diff cannot be
+  computed or the GitHub Compare API truncates a large pull request.
 
 inputs:
   github-token:
@@ -78,6 +79,7 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EXPECTED_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
       run: |
         set -euo pipefail
 
@@ -98,8 +100,10 @@ runs:
           # commits ahead of its merge-base paginates the compare, and pages
           # after the first carry `files: null` — bare `.files[]` makes jq
           # die with "cannot iterate over: null", which fails every retry
-          # and forces the fail-open path (seen on stacked PRs). The full
-          # file list (up to the API's 300-file cap) is on page one.
+          # and forces the fail-open path (seen on stacked PRs). GitHub caps
+          # this array at 300 files, so after a successful request we compare
+          # its length with the immutable event payload. A mismatch fails
+          # open: a partial list must never skip a lane that file 301 affects.
           CHANGED=""
           for i in 1 2 3; do
             if CHANGED="$(gh api \
@@ -116,6 +120,17 @@ runs:
             echo "::warning::compare API failed (attempt $i); retrying in 10s"
             sleep 10
           done
+
+          if [[ "$EXPECTED_CHANGED_FILES" =~ ^[0-9]+$ ]]; then
+            OBSERVED_CHANGED_FILES="$(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$OBSERVED_CHANGED_FILES" -ne "$EXPECTED_CHANGED_FILES" ]; then
+              echo "::warning::compare API returned ${OBSERVED_CHANGED_FILES}/${EXPECTED_CHANGED_FILES} changed files — failing open (all lanes run)"
+              CHANGED=""
+            fi
+          else
+            echo "::warning::event payload has no changed-files count — failing open (all lanes run)"
+            CHANGED=""
+          fi
         fi
 
         echo "Changed files:"
