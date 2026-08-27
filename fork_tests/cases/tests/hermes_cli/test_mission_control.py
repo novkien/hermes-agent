@@ -67,6 +67,33 @@ def test_gateway_coupling_uses_start_not_restart(monkeypatch) -> None:
     assert commands == [["start", mission_control.SERVICE_NAME]]
 
 
+def test_gateway_install_refuses_temp_home_before_writing_user_unit(
+    monkeypatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+    gateway_cli = mission_control._gateway_cli()
+    ctx = _context(tmp_path)
+    unit_path = tmp_path / "real-user-config" / "hermes-mission-control.service"
+
+    monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
+    monkeypatch.setattr(gateway_cli, "_preflight_user_systemd", lambda: None)
+    monkeypatch.setattr(
+        gateway_cli,
+        "_run_systemctl",
+        lambda args, **kwargs: commands.append(list(args)),
+    )
+    monkeypatch.setattr(mission_control, "_resolve_unit_context", lambda **_: ctx)
+    monkeypatch.setattr(
+        mission_control, "get_systemd_unit_path", lambda system=False: unit_path
+    )
+
+    changed = mission_control.systemd_install(quiet=True)
+
+    assert changed is False
+    assert not unit_path.exists()
+    assert commands == []
+
+
 def test_mission_control_restart_targets_only_its_service(monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(mission_control, "_configured_gateway_user", lambda _system: None)
