@@ -111,7 +111,7 @@ jobs:
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
 
-      - name: Test fork isolation tooling
+      - name: Test fork tooling and merge semantics
         run: .venv/bin/python -m pytest -q fork_tests/test_*.py
 
       - name: Run isolated fork Python regression cases

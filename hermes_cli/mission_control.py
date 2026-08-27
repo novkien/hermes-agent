@@ -8,6 +8,7 @@ does not restart the gateway.
 
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import sys
@@ -19,6 +20,11 @@ SERVICE_NAME = "hermes-mission-control"
 SERVICE_DESCRIPTION = "Hermes AgentOS Mission Control"
 DEFAULT_PORT = 51763
 _SOURCE_COMMIT = "42a9c191fdebc66ace4aac98a1e581d9ab7a13d1"
+
+
+def _gateway_cli():
+    """Resolve the current gateway module without retaining a stale package binding."""
+    return importlib.import_module("hermes_cli.gateway")
 
 
 @dataclass(frozen=True)
@@ -67,7 +73,7 @@ def _resolve_unit_context(
     *, system: bool = False, run_as_user: str | None = None
 ) -> MissionControlUnitContext:
     """Resolve stable paths and identity for a Mission Control unit."""
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     app_root = get_app_root().resolve()
     python_path = Path(gateway_cli.get_python_path())
@@ -180,7 +186,7 @@ def systemd_install(
     quiet: bool = False,
 ) -> bool:
     """Install or refresh the independent Mission Control systemd unit."""
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     if not gateway_cli.supports_systemd_services():
         raise RuntimeError("Mission Control service installation requires systemd")
@@ -222,7 +228,7 @@ def _configured_gateway_user(system: bool) -> str | None:
     if not system:
         return None
     try:
-        from hermes_cli import gateway as gateway_cli
+        gateway_cli = _gateway_cli()
 
         return gateway_cli._read_systemd_user_from_unit(
             gateway_cli.get_systemd_unit_path(system=True)
@@ -264,7 +270,7 @@ def start_for_gateway(*, system: bool) -> bool:
             enable_on_startup=True,
             quiet=True,
         )
-        from hermes_cli import gateway as gateway_cli
+        gateway_cli = _gateway_cli()
 
         result = gateway_cli._run_systemctl(
             ["start", SERVICE_NAME],
@@ -286,7 +292,7 @@ def start_for_gateway(*, system: bool) -> bool:
 
 def systemd_start(*, system: bool = False) -> None:
     systemd_install(system=system, run_as_user=_configured_gateway_user(system), quiet=True)
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     gateway_cli._run_systemctl(
         ["start", SERVICE_NAME], system=system, check=True, timeout=30
@@ -295,7 +301,7 @@ def systemd_start(*, system: bool = False) -> None:
 
 
 def systemd_stop(*, system: bool = False) -> None:
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     gateway_cli._run_systemctl(
         ["stop", SERVICE_NAME], system=system, check=True, timeout=90
@@ -305,7 +311,7 @@ def systemd_stop(*, system: bool = False) -> None:
 
 def systemd_restart(*, system: bool = False) -> None:
     systemd_install(system=system, run_as_user=_configured_gateway_user(system), quiet=True)
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     gateway_cli._run_systemctl(
         ["restart", SERVICE_NAME], system=system, check=True, timeout=90
@@ -314,7 +320,7 @@ def systemd_restart(*, system: bool = False) -> None:
 
 
 def systemd_status(*, system: bool = False, full: bool = False) -> bool:
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     status_args = ["status", SERVICE_NAME, "--no-pager"]
     if full:
@@ -336,7 +342,7 @@ def systemd_status(*, system: bool = False, full: bool = False) -> bool:
 
 
 def systemd_uninstall(*, system: bool = False) -> None:
-    from hermes_cli import gateway as gateway_cli
+    gateway_cli = _gateway_cli()
 
     if system:
         gateway_cli._require_root_for_system_service("Mission Control uninstall")

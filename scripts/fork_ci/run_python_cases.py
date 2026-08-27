@@ -14,6 +14,19 @@ from ownership import FORK_MANIFEST, ensure_repository, git, read_json
 from prepare_overlay import prepare_overlay
 
 
+def selected_python_nodeids(manifest: dict) -> list[str]:
+    """Return generated and explicitly preserved Python regression nodes."""
+    return sorted(
+        {
+            str(nodeid)
+            for row in manifest.get("cases", [])
+            if row.get("runner") == "python"
+            for field in ("nodeids", "semantic_nodeids")
+            for nodeid in row.get(field, [])
+        }
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -24,14 +37,7 @@ def main() -> int:
     manifest = read_json(repo / FORK_MANIFEST)
     if not isinstance(manifest, dict):
         raise RuntimeError("fork_tests/manifest.json is missing")
-    nodeids = sorted(
-        {
-            str(nodeid)
-            for row in manifest.get("cases", [])
-            if row.get("runner") == "python"
-            for nodeid in row.get("nodeids", [])
-        }
-    )
+    nodeids = selected_python_nodeids(manifest)
     if not nodeids:
         print(json.dumps({"status": "PASS", "python_case_nodeids": 0}, indent=2))
         return 0

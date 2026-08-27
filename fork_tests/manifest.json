@@ -64,6 +64,11 @@
         "tests/agent/test_prompt_builder.py::test_soul_is_scanned_but_never_truncated"
       ],
       "runner": "python",
+      "semantic_nodeids": [
+        "tests/agent/test_prompt_builder.py::TestBuildNousSubscriptionPrompt::test_feature_flag_off_returns_empty_prompt",
+        "tests/agent/test_prompt_builder.py::TestBuildNousSubscriptionPrompt::test_includes_active_subscription_features",
+        "tests/agent/test_prompt_builder.py::TestBuildNousSubscriptionPrompt::test_non_subscriber_prompt_includes_relevant_upgrade_guidance"
+      ],
       "sha256": "889492331d6dd411d65617dcfd046a24c75302af4b320e4e1793c1d68e227fd6",
       "shared_path": "tests/agent/test_prompt_builder.py"
     },
@@ -366,6 +371,9 @@
         "tests/run_agent/test_run_agent.py::test_direct_session_db_flushes_share_marker_claim"
       ],
       "runner": "python",
+      "semantic_nodeids": [
+        "tests/run_agent/test_run_agent.py::TestBuildSystemPrompt::test_includes_nous_subscription_prompt"
+      ],
       "sha256": "585c21ba2eefbd364f5040594c4cb0e64db7462dc4b0be78a745932e5d32ea34",
       "shared_path": "tests/run_agent/test_run_agent.py"
     },

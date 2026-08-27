@@ -59,7 +59,7 @@ The main Python lane runs, in order:
 
 1. the immutable shared-test verification;
 2. the complete normal Python suite;
-3. the fork-isolation tooling tests;
+3. the fork tooling and explicit merge-semantics tests;
 4. Python fork cases in a disposable worktree overlay.
 
 The JS/TS lane runs all normal workspace checks, then temporarily overlays
@@ -68,5 +68,12 @@ checkout is restored in a `finally` block.
 
 The manifest at `fork_tests/manifest.json` records each case's shared path,
 case path, runner, selected node IDs, checksum, and JavaScript workspace when
-applicable. A changed checksum is a hard error; update the manifest through the
-isolation command instead of editing metadata by hand.
+applicable. `nodeids` are derived from fork changes after the common base.
+`semantic_nodeids` are an explicit review decision for behavior that upstream
+removed or rewrote but the owner deliberately preserved during the merge. This
+second list prevents an inherited assertion from silently becoming present but
+unexecuted. Record every such promotion in the conflict ledger.
+
+A changed case checksum is a hard error. Regenerate case content and checksum
+through the isolation command; only the reviewed `semantic_nodeids` list is
+maintained as part of semantic conflict resolution.
