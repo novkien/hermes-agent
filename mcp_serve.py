@@ -352,6 +352,10 @@ class EventBridge:
         self._pending_approvals: Dict[str, dict] = {}
         # mtime cache — skip expensive work when state.db hasn't changed
         self._state_db_mtime: float = 0.0
+        # The first poll after the startup baseline must still inspect the DB.
+        # A write immediately after baseline can share the same filesystem
+        # timestamp tick; the per-session timestamps suppress history safely.
+        self._baseline_poll_pending = False
         self._cached_sessions_index: dict = {}
 
     def start(self):
@@ -497,6 +501,7 @@ class EventBridge:
             self._state_db_mtime = db_file.stat().st_mtime if db_file.exists() else 0.0
         except OSError:
             self._state_db_mtime = 0.0
+        self._baseline_poll_pending = True
         try:
             self._cached_sessions_index = _load_sessions_index()
         except Exception:
@@ -556,9 +561,10 @@ class EventBridge:
         except OSError:
             db_mtime = 0.0
 
-        if db_mtime == self._state_db_mtime:
+        if db_mtime == self._state_db_mtime and not self._baseline_poll_pending:
             return  # Nothing changed since last poll — skip entirely
 
+        self._baseline_poll_pending = False
         self._state_db_mtime = db_mtime
         # Refresh the routing index from state.db on every change tick —
         # it's a single indexed query and it can never lag the messages

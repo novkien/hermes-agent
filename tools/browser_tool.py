@@ -307,6 +307,7 @@ _cached_command_timeout: Optional[int] = None
 _command_timeout_resolved = False
 _cached_snapshot_threshold: Optional[int] = None
 _snapshot_threshold_resolved = False
+_cached_snapshot_threshold_home: Optional[str] = None
 
 
 def _sanitize_url_for_logs(value: object) -> str:
@@ -369,13 +370,24 @@ def get_browser_snapshot_threshold() -> int:
     reset by :func:`cleanup_all_browsers`.
     """
     global _cached_snapshot_threshold, _snapshot_threshold_resolved
-    if _snapshot_threshold_resolved and _cached_snapshot_threshold is not None:
+    global _cached_snapshot_threshold_home
+    config_path = get_hermes_home() / "config.yaml"
+    config_home = str(config_path.parent)
+    if (
+        _snapshot_threshold_resolved
+        and _cached_snapshot_threshold is not None
+        and _cached_snapshot_threshold_home == config_home
+    ):
         return _cached_snapshot_threshold
 
     result = DEFAULT_SNAPSHOT_THRESHOLD
     try:
-        from hermes_cli.config import read_raw_config
-        cfg = read_raw_config()
+        from hermes_cli.config import read_user_config_raw
+
+        # This function already caches once per browser lifecycle. Read the
+        # source file without the process-wide mtime cache when that lifecycle
+        # is reset, because same-size writes can share one timestamp tick.
+        cfg = read_user_config_raw(config_path)
         val = cfg_get(cfg, "browser", "snapshot_threshold")
         if val is not None:
             result = max(int(val), MIN_SNAPSHOT_THRESHOLD)
@@ -384,6 +396,7 @@ def get_browser_snapshot_threshold() -> int:
 
     # Preserve the same race-safety invariant as the command-timeout cache.
     _cached_snapshot_threshold = result
+    _cached_snapshot_threshold_home = config_home
     _snapshot_threshold_resolved = True
     return result
 
@@ -5071,6 +5084,7 @@ def cleanup_all_browsers() -> None:
     global _cached_agent_browser, _agent_browser_resolved
     global _cached_command_timeout, _command_timeout_resolved
     global _cached_snapshot_threshold, _snapshot_threshold_resolved
+    global _cached_snapshot_threshold_home
     global _cached_chromium_installed
     global _cached_browser_engine, _browser_engine_resolved
     _cached_agent_browser = None
@@ -5082,6 +5096,7 @@ def cleanup_all_browsers() -> None:
     _cached_command_timeout = None
     _snapshot_threshold_resolved = False
     _cached_snapshot_threshold = None
+    _cached_snapshot_threshold_home = None
     _cached_chromium_installed = None
     global _chromium_autoinstall_attempted
     _chromium_autoinstall_attempted = False
