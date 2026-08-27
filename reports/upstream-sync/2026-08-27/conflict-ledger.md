@@ -104,6 +104,9 @@ GitHub Checkout records the canonical HTTPS origin without the optional
 spellings while continuing to reject every other repository. The lock refresh
 also updates each case checksum, so lint-only comments and later intentional
 case edits cannot leave a stale manifest that fails only in the overlay job.
+The Python test job uses full Git history because the verifier must prove the
+locked upstream commit is an ancestor and read its exact blobs; a depth-one PR
+merge checkout contains neither the parent graph nor those objects.
 
 The aggregate gate previously failed only for a literal `failure` result. A
 cancelled detector therefore skipped every downstream lane while the aggregate
