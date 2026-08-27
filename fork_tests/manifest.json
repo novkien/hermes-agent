@@ -628,7 +628,7 @@
       ],
       "replaced_upstream_nodeids": [],
       "runner": "python",
-      "sha256": "575fa5baa598d4712ef0bf0b2126b7ef53f9660b508dbb8c6692ea5c104be043",
+      "sha256": "7273a0a53d3c8337ee6d75023cc32c877f838f069878ee9463cc778a459cf860",
       "shared_path": "tests/hermes_cli/test_mission_control.py"
     },
     {
