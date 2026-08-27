@@ -27,6 +27,11 @@ def selected_python_nodeids(manifest: dict) -> list[str]:
     )
 
 
+def python_command_path(repo: Path, requested: Path) -> Path:
+    """Make the interpreter path absolute without dereferencing venv symlinks."""
+    return requested if requested.is_absolute() else repo / requested
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -46,7 +51,8 @@ def main() -> int:
     overlay = temporary_root / "worktree"
     try:
         prepare_overlay(repo, overlay)
-        command = [str(args.python.resolve()), "-m", "pytest", "-q", *nodeids]
+        python = python_command_path(repo, args.python)
+        command = [str(python), "-m", "pytest", "-q", *nodeids]
         if args.junit:
             command.append(f"--junitxml={Path(args.junit).resolve()}")
         result = subprocess.run(command, cwd=overlay, check=False)

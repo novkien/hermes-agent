@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/fork_ci"))
 
-from run_python_cases import selected_python_nodeids  # noqa: E402
+from run_python_cases import python_command_path, selected_python_nodeids  # noqa: E402
 
 
 def test_generated_and_semantic_python_nodes_are_both_executed() -> None:
@@ -28,3 +28,9 @@ def test_generated_and_semantic_python_nodes_are_both_executed() -> None:
         "tests/test_owner.py::test_owner_delta",
         "tests/test_owner.py::test_preserved_behavior",
     ]
+
+
+def test_relative_venv_interpreter_keeps_the_venv_symlink_path(tmp_path: Path) -> None:
+    requested = Path(".venv/bin/python")
+
+    assert python_command_path(tmp_path, requested) == tmp_path / requested

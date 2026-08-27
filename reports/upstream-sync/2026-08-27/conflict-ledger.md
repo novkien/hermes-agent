@@ -71,3 +71,9 @@ local `detect-changes` action even though that action declares neither input.
 GitHub rejects undeclared local-action inputs before classification runs; the
 two misplaced inputs were removed. `actionlint` validates the caller and the
 referenced composite action together.
+
+The Python overlay runner also resolved `.venv/bin/python` through its symlink
+to uv's base interpreter. That bypassed the virtual environment and made pytest
+unavailable despite a successful dependency install. The runner now makes the
+requested path absolute relative to the repository without dereferencing the
+venv symlink; a fork tooling test locks this command-path contract.
