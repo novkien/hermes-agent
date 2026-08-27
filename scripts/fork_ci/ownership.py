@@ -215,6 +215,49 @@ def _python_test_nodes(source: bytes) -> dict[str, str] | None:
     return found
 
 
+def _python_support_digest(source: bytes) -> str | None:
+    """Return the AST for everything that can shape multiple test nodes.
+
+    Imports, module constants, fixtures, helpers, and non-test members on
+    ``Test*`` classes are shared execution context.  If the fork changes that
+    context, an unchanged test function AST is not evidence that the pristine
+    upstream node still expresses the fork's semantics.
+    """
+    try:
+        module = ast.parse(source.decode("utf-8"))
+    except (SyntaxError, UnicodeDecodeError):
+        return None
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    support: list[object] = []
+    for node in module.body:
+        if isinstance(node, functions) and node.name.startswith("test_"):
+            continue
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            support.append(
+                (
+                    "test-class-support",
+                    node.name,
+                    [ast.dump(item, include_attributes=False) for item in node.bases],
+                    [ast.dump(item, include_attributes=False) for item in node.keywords],
+                    [
+                        ast.dump(item, include_attributes=False)
+                        for item in node.decorator_list
+                    ],
+                    [
+                        ast.dump(child, include_attributes=False)
+                        for child in node.body
+                        if not (
+                            isinstance(child, functions)
+                            and child.name.startswith("test_")
+                        )
+                    ],
+                )
+            )
+            continue
+        support.append(ast.dump(node, include_attributes=False))
+    return repr(support)
+
+
 def changed_python_nodeids(
     shared_path: str,
     owner_source: bytes,
@@ -227,14 +270,24 @@ def changed_python_nodeids(
     base_nodes = _python_test_nodes(base_source)
     if owner_nodes is None or base_nodes is None:
         return [shared_path]
+    support_changed = _python_support_digest(owner_source) != _python_support_digest(
+        base_source
+    )
+    if support_changed:
+        # Use concrete nodes instead of the whole-file selector.  The owner
+        # case then supplies fork fixtures/helpers for every inherited node,
+        # while genuinely new upstream nodes in the same file remain active in
+        # the pristine suite.
+        return [f"{shared_path}::{name}" for name in sorted(owner_nodes)] or [
+            shared_path
+        ]
     changed = [
         f"{shared_path}::{name}"
         for name, digest in sorted(owner_nodes.items())
         if base_nodes.get(name) != digest
     ]
-    # Module fixtures, imports, parametrization helpers, or support constants
-    # can change without changing a function AST.  Running the complete file
-    # is the conservative choice in that case.
+    # A non-Python or dynamically generated test surface cannot be classified
+    # at node granularity.
     return changed or [shared_path]
 
 
@@ -265,6 +318,17 @@ def python_case_nodeids(
         return owner_selected, []
     if upstream_nodes is None:
         return owner_selected, [shared_path]
+
+    support_changed = _python_support_digest(owner_source) != _python_support_digest(
+        base_source
+    )
+    if support_changed:
+        replaced = [
+            f"{shared_path}::{name}"
+            for name in sorted(upstream_nodes)
+            if name in base_nodes
+        ]
+        return owner_selected, replaced
 
     replacement_names = {
         name

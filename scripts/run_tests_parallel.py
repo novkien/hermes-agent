@@ -1085,7 +1085,11 @@ def main() -> int:
             f"with -j {args.jobs}",
             flush=True,
         )
-    active_paths = {file.relative_to(repo_root).as_posix() for file in files}
+    active_paths = {
+        file.relative_to(repo_root).as_posix()
+        for file in files
+        if file.is_relative_to(repo_root)
+    }
     replacement_count = sum(
         len(nodes)
         for path, nodes in fork_replacements.items()
@@ -1169,10 +1173,18 @@ def main() -> int:
         futures: List[Future] = []
         for file in files:
             t0 = time.monotonic()
-            relative_file = file.relative_to(repo_root).as_posix()
+            relative_file = (
+                file.relative_to(repo_root).as_posix()
+                if file.is_relative_to(repo_root)
+                else None
+            )
             file_pytest_args = pytest_passthrough + [
                 f"--deselect={nodeid}"
-                for nodeid in fork_replacements.get(relative_file, [])
+                for nodeid in (
+                    fork_replacements.get(relative_file, [])
+                    if relative_file is not None
+                    else []
+                )
             ]
             fut = pool.submit(
                 _run_one_file, file, file_pytest_args, repo_root,

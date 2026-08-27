@@ -82,9 +82,10 @@ def main() -> int:
                 if shared_path in tree
                 else None
             )
-            _, replaced = python_case_nodeids(
+            selected, replaced = python_case_nodeids(
                 shared_path, case_source, base_source, upstream_source
             )
+            row["nodeids"] = sorted(set(selected))
             if upstream_source is not None:
                 upstream_nodeids = python_source_nodeids(shared_path, upstream_source)
                 replaced.extend(

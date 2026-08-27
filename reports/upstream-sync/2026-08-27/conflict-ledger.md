@@ -73,6 +73,20 @@ exclusive policies. The manifest therefore records both sides of a replacement:
 canonical per-file runner. Unrelated upstream tests in the same file still run;
 neither the whole shared file nor the whole upstream suite is suppressed.
 
+Test-function ASTs are not the complete semantics of a test file. A fork can
+change a fixture, helper, import, constant, or non-test `Test*` class member
+without changing the inherited test function itself. The classifier now runs
+each such inherited node against the fork case's support context and replaces
+only common-base upstream nodes; newly added upstream nodes in the same file
+remain active. For this lock that produces 802 selected fork nodes and 750 exact
+upstream replacements, including the owner steer-window helper required by 34
+inherited `tests/run_agent/test_steer.py` nodes.
+
+The canonical runner also retains its public support for absolute test paths
+outside the repository. Fork replacement lookup is applied only to repo-local
+paths, so `/tmp` probes used by the runner's own regression suite are neither
+rejected by `Path.relative_to()` nor accidentally classified as shared tests.
+
 `ci.yaml` also passed `sparse-checkout` and `sparse-checkout-cone-mode` to the
 local `detect-changes` action even though that action declares neither input.
 GitHub rejects undeclared local-action inputs before classification runs; the
@@ -84,3 +98,21 @@ to uv's base interpreter. That bypassed the virtual environment and made pytest
 unavailable despite a successful dependency install. The runner now makes the
 requested path absolute relative to the repository without dereferencing the
 venv symlink; a fork tooling test locks this command-path contract.
+
+## Full-suite regressions repaired
+
+The first retry-disabled full Python run exposed three deterministic cache
+boundaries in otherwise pristine upstream tests:
+
+- Honcho's gateway cache used only `(path, mtime_ns)`, so two writes in one
+  filesystem timestamp tick could retain a stale `pinPeerName`. The small JSON
+  file's content digest now participates in the key.
+- `EventBridge` could miss the first post-baseline message when the SQLite file
+  retained the baseline mtime. The first poll after baselining now always
+  inspects the DB; per-session message timestamps still suppress history.
+- the browser snapshot threshold combined a process-wide raw-config cache with
+  a profile-agnostic lifecycle cache. It now performs one uncached explicit
+  profile read per browser lifecycle and keys the local cache by Hermes home.
+
+The existing unmodified shared tests are the regression proof for all three
+fixes; no fork assertion was added to the upstream-owned paths.

@@ -69,7 +69,11 @@ checkout is restored in a `finally` block.
 
 The manifest at `fork_tests/manifest.json` records each case's shared path,
 case path, runner, selected node IDs, checksum, and JavaScript workspace when
-applicable. `nodeids` are derived from fork changes after the common base.
+applicable. `nodeids` are derived from fork changes after the common base. A
+fork change to shared fixtures, helpers, imports, constants, or `Test*` class
+support selects every inherited owner node that executes in that changed
+context; this is semantic coverage, not a blanket file skip. New upstream
+nodes in the same file remain active in the pristine suite.
 `replaced_upstream_nodeids` are the pristine upstream assertions superseded by
 those fork cases; the canonical test runner deselects only this explicit list.
 `semantic_nodeids` are an explicit review decision for behavior that upstream

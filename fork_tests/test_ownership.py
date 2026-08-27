@@ -36,12 +36,29 @@ def test_changed_python_nodeids_selects_only_changed_tests() -> None:
     ]
 
 
-def test_module_level_change_falls_back_to_complete_file() -> None:
-    base = b"VALUE = 1\n\ndef test_value():\n    assert VALUE\n"
-    owner = b"VALUE = 2\n\ndef test_value():\n    assert VALUE\n"
+def test_module_support_change_selects_every_concrete_owner_node() -> None:
+    base = b"VALUE = 1\n\ndef test_value():\n    assert VALUE\n\ndef test_other():\n    assert True\n"
+    owner = b"VALUE = 2\n\ndef test_value():\n    assert VALUE\n\ndef test_other():\n    assert True\n"
     assert changed_python_nodeids("tests/test_sample.py", owner, base) == [
-        "tests/test_sample.py"
+        "tests/test_sample.py::test_other",
+        "tests/test_sample.py::test_value",
     ]
+
+
+def test_support_change_replaces_only_base_nodes_not_new_upstream_nodes() -> None:
+    base = b"VALUE = 1\n\ndef test_existing():\n    assert VALUE\n"
+    owner = b"VALUE = 2\n\ndef test_existing():\n    assert VALUE\n"
+    upstream = (
+        b"VALUE = 1\n\ndef test_existing():\n    assert VALUE\n"
+        b"\ndef test_new_upstream():\n    assert True\n"
+    )
+
+    selected, replaced = python_case_nodeids(
+        "tests/test_sample.py", owner, base, upstream
+    )
+
+    assert selected == ["tests/test_sample.py::test_existing"]
+    assert replaced == ["tests/test_sample.py::test_existing"]
 
 
 def test_renamed_fork_test_replaces_the_original_upstream_node() -> None:

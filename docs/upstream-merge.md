@@ -41,6 +41,13 @@ This step prevents test-path conflicts; it does not suppress source conflicts
 or reinterpret failing tests. A shared test changed by upstream remains an
 upstream test and must pass unmodified after the merge.
 
+The isolation manifest works at semantic node granularity. If the fork changes
+shared test support code such as fixtures, imports, helpers, constants, or
+non-test class members, inherited common-base nodes run from the fork overlay
+so they receive that support context. Exact newly added upstream nodes in the
+same file continue to run from the pristine shared surface; never replace a
+whole file merely because one support definition changed.
+
 ## Merge source semantically
 
 Preview and merge the captured SHA:
