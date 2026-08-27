@@ -99,6 +99,17 @@ unavailable despite a successful dependency install. The runner now makes the
 requested path absolute relative to the repository without dereferencing the
 venv symlink; a fork tooling test locks this command-path contract.
 
+GitHub Checkout records the canonical HTTPS origin without the optional
+`.git` suffix. Fork verification now accepts the two equivalent canonical URL
+spellings while continuing to reject every other repository. The lock refresh
+also updates each case checksum, so lint-only comments and later intentional
+case edits cannot leave a stale manifest that fails only in the overlay job.
+
+The aggregate gate previously failed only for a literal `failure` result. A
+cancelled detector therefore skipped every downstream lane while the aggregate
+reported success. Cancelled required jobs now fail the gate, and `detect` must
+specifically succeed before classifier-approved downstream skips are accepted.
+
 ## Full-suite regressions repaired
 
 The first retry-disabled full Python run exposed three deterministic cache
