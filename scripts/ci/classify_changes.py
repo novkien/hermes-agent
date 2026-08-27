@@ -60,6 +60,8 @@ import os
 import sys
 
 _FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
+_FORK_TESTS = "fork_tests/"
+_JS_TEST_EXTENSIONS = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
 _ROOT_NPM = {"package.json", "package-lock.json"}  # shifts every package's tree
 _DOCKER_META = ("docker/", ".hadolint.yml", "Dockerfile") # docker setup
 _NIX_PATHS = ("nix/",) # nix files
@@ -129,6 +131,8 @@ def _is_nix(p: str) -> bool:
 def _py_irrelevant(p: str) -> bool:
     if p.startswith(_PY_RELEVANT_SITE):
         return False
+    if p.startswith(_FORK_TESTS) and p.endswith(_JS_TEST_EXTENSIONS):
+        return True
     return (
         _is_docs(p)
         or p in _ROOT_NPM
@@ -147,7 +151,7 @@ def _py_test_only(p: str) -> bool:
     NOT test-only: they are runner infrastructure, and a bad edit there can
     mask real failures, so they stay conservative (python_prod=true).
     """
-    return p.startswith("tests/")
+    return p.startswith(("tests/", _FORK_TESTS))
 
 
 def _is_scan(p: str) -> bool:
@@ -188,7 +192,12 @@ def classify(files: list[str]) -> dict[str, bool]:
     files = [f.strip() for f in files if f.strip()]
     python = any(not _py_irrelevant(f) for f in files)
     python_prod = any(not _py_irrelevant(f) and not _py_test_only(f) for f in files)
-    frontend = any(f.startswith(_FRONTEND) or f in _ROOT_NPM for f in files)
+    frontend = any(
+        f.startswith(_FRONTEND)
+        or f in _ROOT_NPM
+        or (f.startswith(_FORK_TESTS) and f.endswith(_JS_TEST_EXTENSIONS))
+        for f in files
+    )
     deps = any(f == "pyproject.toml" for f in files)
     npm_lock = any(f.split("/")[-1] == "package-lock.json" for f in files)
     docker_meta = any(f.startswith(_DOCKER_META) for f in files)
