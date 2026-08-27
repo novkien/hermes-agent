@@ -381,48 +381,6 @@ def test_execute_tool_calls_sequential_flushes_each_tool_result_before_next_disp
     ]
 
 
-def test_terminal_kanban_run_skips_remaining_sequential_tools():
-    """A tool after kanban_block in the same model batch must not run."""
-    agent = _make_agent()
-    block = _mock_tool_call(name="kanban_block", call_id="block")
-    command = _mock_tool_call(name="terminal", call_id="must-not-run")
-    assistant_message = SimpleNamespace(content="", tool_calls=[block, command])
-    messages: list = []
-    terminal_run = {
-        "task_id": "t_blocked",
-        "run_id": 42,
-        "task_status": "blocked",
-        "run_status": "blocked",
-        "outcome": "blocked",
-    }
-
-    with (
-        patch(
-            "run_agent.handle_function_call",
-            return_value='{"ok": true, "status": "blocked"}',
-        ) as dispatch,
-        patch(
-            "agent.tool_executor.maybe_persist_tool_result",
-            side_effect=lambda **kwargs: kwargs["content"],
-        ),
-        patch(
-            "tools.kanban_tools.current_worker_run_terminal_state_from_env",
-            side_effect=[None, terminal_run],
-        ),
-    ):
-        agent._execute_tool_calls_sequential(
-            assistant_message, messages, "task-1",
-        )
-
-    dispatch.assert_called_once()
-    assert [message["tool_call_id"] for message in messages] == [
-        "block",
-        "must-not-run",
-    ]
-    assert "was not started" in messages[-1]["content"]
-    assert agent._kanban_terminal_run_state == terminal_run
-
-
 def test_sequential_keyboard_interrupt_emits_results_for_all_calls():
     """A KeyboardInterrupt mid-batch must not leave dangling tool_calls.
 

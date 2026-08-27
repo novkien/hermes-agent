@@ -241,19 +241,3 @@ class TestQuarantine:
         su.is_quarantined_project_skill(evil_dir / "SKILL.md")
         assert not (project_env["repo"] / ".hermes" / "skills" / ".scan-cache").exists()
         assert (project_env["home"] / "cache" / "project_skill_scans").exists()
-
-
-def test_project_skill_index_respects_enabled_allowlist(project_env):
-    # Topic allowlists must cover trusted project-local skills too.
-    _trust(project_env["config"], project_env["repo"])
-
-    from agent import prompt_builder
-
-    prompt_builder._SKILLS_PROMPT_CACHE.clear()
-    prompt = prompt_builder.build_skills_system_prompt(
-        available_tools={"skills_list", "skill_view"},
-        enabled_skills=("repo-skill",),
-    )
-
-    assert "repo-skill" in prompt
-    assert "conv-skill" not in prompt

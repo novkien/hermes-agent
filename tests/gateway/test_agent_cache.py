@@ -105,48 +105,6 @@ class TestAgentConfigSignature:
         )
         assert sig_a == sig_b
 
-    def test_topic_skill_policy_and_payload_bust_cache(self):
-        from gateway.run import GatewayRunner
-
-        runtime = {"api_key": "k", "base_url": "u", "provider": "p"}
-        base = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "",
-            enabled_skills=["audit"],
-            topic_policy_fingerprint="policy-a",
-            auto_loaded_skill_prompt="audit instructions",
-        )
-        changed_allowlist = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "",
-            enabled_skills=["coding"],
-            topic_policy_fingerprint="policy-a",
-            auto_loaded_skill_prompt="audit instructions",
-        )
-        changed_payload = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "",
-            enabled_skills=["audit"],
-            topic_policy_fingerprint="policy-a",
-            auto_loaded_skill_prompt="updated audit instructions",
-        )
-
-        assert base != changed_allowlist
-        assert base != changed_payload
-
-    def test_skills_mode_change_busts_cache(self):
-        from gateway.run import GatewayRunner
-
-        runtime = {"api_key": "k", "base_url": "u", "provider": "p"}
-        visible = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode={}
-        )
-        pruned = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode={"prune": ["research"]}
-        )
-        invisible = GatewayRunner._agent_config_signature(
-            "m", runtime, ["terminal"], "", skills_mode={"invisible": ["research"]}
-        )
-
-        assert len({visible, pruned, invisible}) == 3
-
 
 class TestExtractCacheBustingConfig:
     """Verify _extract_cache_busting_config pulls the documented subset of
@@ -1103,3 +1061,4 @@ class TestCrossProcessInvalidationDefersCleanup:
         # Stale entry was popped, hard-teardown path never used.
         assert "telegram:s1" not in runner._agent_cache
         runner._cleanup_agent_resources.assert_not_called()
+

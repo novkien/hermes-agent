@@ -41,7 +41,6 @@ def auth_adapter(session_db):
 def _create_session_app(adapter: APIServerAdapter) -> web.Application:
     app = web.Application()
     app.router.add_get("/v1/capabilities", adapter._handle_capabilities)
-    app.router.add_get("/v1/toolsets", adapter._handle_toolsets)
     app.router.add_get("/api/sessions", adapter._handle_list_sessions)
     app.router.add_post("/api/sessions", adapter._handle_create_session)
     app.router.add_get("/api/sessions/{session_id}", adapter._handle_get_session)
@@ -52,125 +51,6 @@ def _create_session_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_post("/api/sessions/{session_id}/chat", adapter._handle_session_chat)
     app.router.add_post("/api/sessions/{session_id}/chat/stream", adapter._handle_session_chat_stream)
     return app
-
-
-@pytest.mark.asyncio
-async def test_session_toolsets_require_and_return_confirmed_snapshot(adapter, session_db):
-    session_db.create_session("legacy", "api_server")
-    snapshot = {
-        "version": 1,
-        "profile": "default",
-        "captured_at": 123.5,
-        "enabled_toolsets": ["terminal"],
-        "toolsets": [
-            {
-                "name": "terminal",
-                "label": "Terminal & Processes",
-                "description": "Shell tools",
-                "enabled": True,
-                "configured": True,
-                "tools": ["terminal", "process"],
-                "must_not_escape": "row-secret",
-            }
-        ],
-        "must_not_escape": "snapshot-secret",
-    }
-    session_db.create_session(
-        "confirmed",
-        "api_server",
-        model_config={
-            "capability_snapshot_v1": snapshot,
-            "provider_secret": "model-config-secret",
-        },
-    )
-
-    app = _create_session_app(adapter)
-    async with TestClient(TestServer(app)) as cli:
-        legacy_resp = await cli.get("/v1/toolsets?session_id=legacy")
-        assert legacy_resp.status == 409
-        legacy = await legacy_resp.json()
-
-        confirmed_resp = await cli.get("/v1/toolsets?session_id=confirmed")
-        assert confirmed_resp.status == 200
-        confirmed_text = await confirmed_resp.text()
-
-    assert legacy["session_confirmed"] is False
-    assert legacy["error"]["code"] == "session_capabilities_unavailable"
-    assert '"session_confirmed": true' in confirmed_text
-    assert '"profile": "default"' in confirmed_text
-    assert '"tools": ["terminal", "process"]' in confirmed_text
-    assert "model_config" not in confirmed_text
-    assert "model-config-secret" not in confirmed_text
-    assert "snapshot-secret" not in confirmed_text
-    assert "row-secret" not in confirmed_text
-
-
-def test_capability_snapshot_is_first_build_only_and_non_secret(adapter, session_db, monkeypatch):
-    session_db.create_session("first-build", "api_server")
-    rows = [{
-        "name": "terminal",
-        "enabled": True,
-        "tools": ["terminal"],
-        "tool_count": 1,
-    }]
-    monkeypatch.setattr(adapter, "_capability_toolset_rows", lambda *a, **k: rows)
-    agent = MagicMock(valid_tool_names={"terminal"})
-
-    adapter._persist_session_capability_snapshot(
-        session_id="first-build",
-        agent=agent,
-        config={"api_key": "must-not-persist"},
-        enabled_toolsets=["terminal"],
-    )
-    first = session_db.get_session_model_config_value(
-        "first-build", "capability_snapshot_v1"
-    )
-    adapter._persist_session_capability_snapshot(
-        session_id="first-build",
-        agent=agent,
-        config={"api_key": "different-secret"},
-        enabled_toolsets=["web"],
-    )
-    second = session_db.get_session_model_config_value(
-        "first-build", "capability_snapshot_v1"
-    )
-
-    assert first == second
-    assert first["enabled_toolsets"] == ["terminal"]
-    assert first["toolsets"] == rows
-    assert "must-not-persist" not in str(first)
-    assert "different-secret" not in str(first)
-
-
-@pytest.mark.asyncio
-async def test_fork_inherits_only_capability_snapshot(adapter, session_db):
-    snapshot = {
-        "version": 1,
-        "profile": "default",
-        "captured_at": 9.0,
-        "enabled_toolsets": [],
-        "toolsets": [],
-    }
-    session_db.create_session(
-        "parent",
-        "api_server",
-        model_config={
-            "capability_snapshot_v1": snapshot,
-            "browser_model_lock": {"api_key": "must-not-copy"},
-        },
-    )
-
-    app = _create_session_app(adapter)
-    async with TestClient(TestServer(app)) as cli:
-        resp = await cli.post(
-            "/api/sessions/parent/fork", json={"id": "child"}
-        )
-        assert resp.status == 201
-
-    child_config = adapter._parse_session_model_config(
-        session_db.get_session("child")["model_config"]
-    )
-    assert child_config == {"capability_snapshot_v1": snapshot}
 
 
 @pytest.mark.asyncio
@@ -616,55 +496,6 @@ def _patch_api_server_runtime(monkeypatch):
     )
 
 
-def test_session_model_refreshes_named_custom_provider_not_bare_kind(
-    adapter,
-    monkeypatch,
-):
-    _patch_api_server_runtime(monkeypatch)
-    monkeypatch.setattr(
-        "gateway.run._resolve_runtime_agent_kwargs",
-        lambda: {
-            "provider": "custom",
-            "requested_provider": "9router",
-            "api_key": "profile-key",
-            "base_url": "http://9router.example/v1",
-            "api_mode": "chat_completions",
-        },
-    )
-    resolved = MagicMock(
-        return_value={
-            "provider": "custom",
-            "api_key": "profile-key",
-            "base_url": "http://9router.example/v1",
-            "api_mode": "chat_completions",
-        }
-    )
-    monkeypatch.setattr(
-        "gateway.platforms.api_server._resolve_request_runtime_agent_kwargs",
-        resolved,
-    )
-    captured = {}
-
-    class FakeAgent:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-            self.provider = kwargs.get("provider")
-            self.model = kwargs.get("model")
-
-    monkeypatch.setattr("run_agent.AIAgent", FakeAgent)
-
-    adapter._create_agent(
-        session_id="profile-default-session",
-        requested_model="normal",
-        session_model="normal",
-    )
-
-    resolved.assert_called_once_with("9router", target_model="normal")
-    assert captured["provider"] == "custom"
-    assert captured["base_url"] == "http://9router.example/v1"
-    assert captured["api_key"] == "profile-key"
-
-
 @pytest.mark.asyncio
 async def test_create_session_respects_browser_source_and_model_lock(adapter, session_db):
     app = _create_session_app(adapter)
@@ -696,27 +527,6 @@ async def test_create_session_respects_browser_source_and_model_lock(adapter, se
     assert model_config["browser_model_lock"]["provider"] == "nous"
     assert model_config["browser_model_lock"]["model"] == "x-ai/grok-4.5"
     assert model_config["browser_model_lock"]["confirmed"] is True
-
-
-@pytest.mark.asyncio
-async def test_create_session_without_model_uses_profile_default_not_advertised_name(
-    adapter,
-    session_db,
-):
-    adapter._model_name = "comfyui-worker"
-    app = _create_session_app(adapter)
-
-    with patch("gateway.run._resolve_gateway_model", return_value="normal"):
-        async with TestClient(TestServer(app)) as cli:
-            resp = await cli.post(
-                "/api/sessions",
-                json={"id": "profile-default-session", "source": "api_server"},
-            )
-            assert resp.status == 201, await resp.text()
-            payload = await resp.json()
-
-    assert payload["session"]["model"] == "normal"
-    assert session_db.get_session("profile-default-session")["model"] == "normal"
 
 
 @pytest.mark.asyncio
@@ -902,97 +712,6 @@ async def test_run_agent_reports_actual_agent_runtime_not_requested_metadata(ada
     }
     assert usage["runtime"]["provider"] == "actual-provider"
     assert usage["runtime"]["model"] == "actual-model"
-
-
-@pytest.mark.asyncio
-async def test_confirmed_runtime_lock_accepts_custom_provider_by_name(adapter, monkeypatch):
-    """A lock requested by provider NAME must not fail on the resolved KIND.
-
-    Providers are picked by name -- "9router" is what config.yaml keys and what
-    /api/model/options advertises -- but resolve_runtime_provider() answers
-    with the kind, and every custom provider resolves to "custom".  Comparing
-    the requested name against the agent's resolved kind rejected turns that
-    had routed exactly right ("expected provider=9router model=local; actual
-    provider=custom model=local"), which made the lock unusable on any
-    deployment whose main provider is a custom one.  _create_agent records the
-    name the run resolved from, so either spelling is a match.
-    """
-    class FakeAgent:
-        session_prompt_tokens = 0
-        session_completion_tokens = 0
-        session_total_tokens = 0
-
-        def __init__(self):
-            self.session_id = "custom-provider-session"
-            self.provider = "custom"
-            self.model = "local"
-            self._hermes_api_runtime = {
-                "provider": "custom",
-                "provider_name": "9router",
-                "model": "local",
-                "route_source": "session_model_lock",
-            }
-
-        def run_conversation(self, user_message, conversation_history, task_id):
-            return {"final_response": "ok", "session_id": self.session_id}
-
-    monkeypatch.setattr(adapter, "_create_agent", lambda **kwargs: FakeAgent())
-
-    result, _usage = await adapter._run_agent(
-        user_message="hello",
-        conversation_history=[],
-        session_id="custom-provider-session",
-        route={"provider": "9router", "model": "local"},
-        requested_runtime={"provider": "9router", "model": "local"},
-        route_source="session_model_lock",
-        confirmed_runtime_lock=True,
-    )
-
-    # The response still reports what actually ran, not what was asked for.
-    assert result["runtime"]["provider"] == "custom"
-    assert result["runtime"]["model"] == "local"
-    assert result["runtime"]["requested"] == {"provider": "9router", "model": "local"}
-
-
-@pytest.mark.asyncio
-async def test_confirmed_runtime_lock_rejects_a_different_provider_name(adapter, monkeypatch):
-    """Name-matching must not become a way to pass any lock.
-
-    Two custom providers both resolve to the kind "custom", so the kind alone
-    can no longer prove the locked one was used -- the recorded name has to
-    disagree for the guard to still fire.
-    """
-    class FakeAgent:
-        session_prompt_tokens = 0
-        session_completion_tokens = 0
-        session_total_tokens = 0
-
-        def __init__(self):
-            self.session_id = "other-custom-session"
-            self.provider = "custom"
-            self.model = "local"
-            self._hermes_api_runtime = {
-                "provider": "custom",
-                "provider_name": "some-other-router",
-                "model": "local",
-                "route_source": "session_model_lock",
-            }
-
-        def run_conversation(self, user_message, conversation_history, task_id):
-            return {"final_response": "ok", "session_id": self.session_id}
-
-    monkeypatch.setattr(adapter, "_create_agent", lambda **kwargs: FakeAgent())
-
-    with pytest.raises(RuntimeError, match="confirmed model lock runtime mismatch"):
-        await adapter._run_agent(
-            user_message="hello",
-            conversation_history=[],
-            session_id="other-custom-session",
-            route={"provider": "9router", "model": "local"},
-            requested_runtime={"provider": "9router", "model": "local"},
-            route_source="session_model_lock",
-            confirmed_runtime_lock=True,
-        )
 
 
 @pytest.mark.asyncio

@@ -115,20 +115,6 @@ async def test_math_outside_details_still_uses_rich_send():
 
 
 @pytest.mark.asyncio
-async def test_horizontal_rule_footer_uses_rich_send():
-    """The standard response/footer separator must keep the reply rich."""
-    adapter = _make_adapter()
-
-    result = await adapter.send("12345", "Answer content.\n\n---\n\nsmart · 1K / 8K")
-
-    assert result.success is True
-    bot = adapter._bot
-    assert bot is not None
-    bot.do_api_request.assert_awaited_once()
-    bot.send_message.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_astral_cjk_rich_content_skips_rich_send_to_avoid_tdesktop_garble():
     adapter = _make_adapter()
 

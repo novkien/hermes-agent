@@ -1,0 +1,522 @@
+{
+  "case_root": "fork_tests/cases",
+  "cases": [
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_artifact_filesystem_contract.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/agent/test_artifact_filesystem_contract.py"
+      ],
+      "runner": "python",
+      "sha256": "fb9b309ca8ad0a086556aadb971e31845eb32f061e85096d993a39171db54b3c",
+      "shared_path": "tests/agent/test_artifact_filesystem_contract.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_context_breakdown.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_context_breakdown.py::test_context_details_measures_live_volatile_skills_index",
+        "tests/agent/test_context_breakdown.py::test_skills_index_in_volatile_tier_is_attributed_to_skills"
+      ],
+      "runner": "python",
+      "sha256": "ce7a8bfdaa2bb183314f980734bc5f745ceee1ae0c3229af9342a87001e04479",
+      "shared_path": "tests/agent/test_context_breakdown.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_org_skill_namespace.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_org_skill_namespace.py::TestListingCollisionsAndLabels::test_org_skill_listed_with_provenance_tag"
+      ],
+      "runner": "python",
+      "sha256": "b05c04c0f778b22ef66fa16d58db70d4d72a7c02857e04e2c4bc4b63adc4c2eb",
+      "shared_path": "tests/agent/test_org_skill_namespace.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_plugin_prompt_sections.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_plugin_prompt_sections.py"
+      ],
+      "runner": "python",
+      "sha256": "a974c988b4943703fa0f06ab7f8e8d792976f9ca187565180e5349e522ad264a",
+      "shared_path": "tests/agent/test_plugin_prompt_sections.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_project_skills.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_project_skills.py::test_project_skill_index_respects_enabled_allowlist"
+      ],
+      "runner": "python",
+      "sha256": "3ec33b2227152a2b16eee5bf794f5b2a4fc42d8928a96b6b4a6e1bed3ba24b21",
+      "shared_path": "tests/agent/test_project_skills.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_prompt_builder.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_prompt_builder.py::TestBuildSkillsSystemPrompt::test_invalid_visibility_mode_is_rejected",
+        "tests/agent/test_prompt_builder.py::TestBuildSkillsSystemPrompt::test_invisible_preserves_enabled_external_names_and_disabled_policy",
+        "tests/agent/test_prompt_builder.py::TestBuildSkillsSystemPrompt::test_per_skill_visibility_lists_are_exact_and_cache_isolated",
+        "tests/agent/test_prompt_builder.py::TestBuildSkillsSystemPrompt::test_visible_mode_overrides_coding_focus_category_demotion",
+        "tests/agent/test_prompt_builder.py::TestParseSkillFile::test_long_description_truncated",
+        "tests/agent/test_prompt_builder.py::test_soul_is_scanned_but_never_truncated"
+      ],
+      "runner": "python",
+      "sha256": "889492331d6dd411d65617dcfd046a24c75302af4b320e4e1793c1d68e227fd6",
+      "shared_path": "tests/agent/test_prompt_builder.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_session_event_relay.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/agent/test_session_event_relay.py"
+      ],
+      "runner": "python",
+      "sha256": "f91b77a429ce58350c8146be95945aa2fa85af3f8fb34c571b5ffeb7d64c5632",
+      "shared_path": "tests/agent/test_session_event_relay.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_skill_artifact_contracts.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/agent/test_skill_artifact_contracts.py"
+      ],
+      "runner": "python",
+      "sha256": "2d494d000192fd46e25da9ec3c2e84fbf54c18805388c312bc495f9e723b93f4",
+      "shared_path": "tests/agent/test_skill_artifact_contracts.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_skill_context.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/agent/test_skill_context.py"
+      ],
+      "runner": "python",
+      "sha256": "f827eec359896099f8fcf5d4a12638df3ebf65a42fae9564ce22e3f42b57a7ad",
+      "shared_path": "tests/agent/test_skill_context.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/agent/test_system_prompt.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/agent/test_system_prompt.py::test_artifact_filesystem_contract_is_small_and_unconditional",
+        "tests/agent/test_system_prompt.py::test_auto_loaded_skill_is_in_stable_system_prefix_once",
+        "tests/agent/test_system_prompt.py::test_coding_prompt_preserves_legacy_workspace_order"
+      ],
+      "runner": "python",
+      "sha256": "92d795987df691150f15b67076a048f0cdca1bd392063e9133faebab7ab84be8",
+      "shared_path": "tests/agent/test_system_prompt.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_73771_media_resend_dedup.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_73771_media_resend_dedup.py::test_media_tag_plus_bare_path_is_not_duplicated"
+      ],
+      "runner": "python",
+      "sha256": "ed9c79168ad17fe2f351cfd88fcf9857a617d27e4b31ae3fa5706dbad9845561",
+      "shared_path": "tests/gateway/test_73771_media_resend_dedup.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_active_session_text_merge.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_active_session_text_merge.py::test_a2a_handoff_acknowledges_queue_and_skips_busy_interceptors",
+        "tests/gateway/test_active_session_text_merge.py::test_a2a_handoff_acknowledges_started_runtime_task",
+        "tests/gateway/test_active_session_text_merge.py::test_a2a_handoff_rejects_when_runtime_handler_is_unavailable"
+      ],
+      "runner": "python",
+      "sha256": "1c2990e3e491b4c047a2aa3aadf0662704a0403eff76c77bb62a8b7d061121b4",
+      "shared_path": "tests/gateway/test_active_session_text_merge.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_agent_cache.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_agent_cache.py::TestAgentConfigSignature::test_skills_mode_change_busts_cache",
+        "tests/gateway/test_agent_cache.py::TestAgentConfigSignature::test_topic_skill_policy_and_payload_bust_cache"
+      ],
+      "runner": "python",
+      "sha256": "5452431b8517494e612c75bc5155d00459d018bf36dab68a0d0b5277dbc9d33a",
+      "shared_path": "tests/gateway/test_agent_cache.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_kanban_notifier.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_kanban_notifier.py::test_default_transport_fallback_requires_provenance_marker"
+      ],
+      "runner": "python",
+      "sha256": "4b5f6a6f3376cc40056a51dc7d5e84d5d2d4c95de40d37a9065fa3a8b6a12a75",
+      "shared_path": "tests/gateway/test_kanban_notifier.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_pii_redaction.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_pii_redaction.py::TestBuildSessionContextPromptRedaction::test_home_channel_routing_ids_preserved_with_redaction"
+      ],
+      "runner": "python",
+      "sha256": "196e717bce5fde6f27cb02fa9c1711f5fd47ace5f24e08e42abecd39177ad03e",
+      "shared_path": "tests/gateway/test_pii_redaction.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_prompt_tail_freeze.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_prompt_tail_freeze.py::TestEphemeralChangeKeyParity::test_redact_pii_flip_changes_key"
+      ],
+      "runner": "python",
+      "sha256": "27bad0f19e8b5ad7f25af3efe9e88872cae6063b9ea06353ad8bbf5a35bc6add",
+      "shared_path": "tests/gateway/test_prompt_tail_freeze.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_runtime_footer.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_runtime_footer.py::test_telegram_footer_divider_for_joined_and_trailing_paths",
+        "tests/gateway/test_runtime_footer.py::test_tokens_field_uses_compact_counts"
+      ],
+      "runner": "python",
+      "sha256": "fb6bcbc03e0ed3feee01306c991c3dbe6ca5ed72bb20d8c78b064b9f4dd2f680",
+      "shared_path": "tests/gateway/test_runtime_footer.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_session_api.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_session_api.py::test_capability_snapshot_is_first_build_only_and_non_secret",
+        "tests/gateway/test_session_api.py::test_confirmed_runtime_lock_accepts_custom_provider_by_name",
+        "tests/gateway/test_session_api.py::test_confirmed_runtime_lock_rejects_a_different_provider_name",
+        "tests/gateway/test_session_api.py::test_create_session_without_model_uses_profile_default_not_advertised_name",
+        "tests/gateway/test_session_api.py::test_fork_inherits_only_capability_snapshot",
+        "tests/gateway/test_session_api.py::test_session_model_refreshes_named_custom_provider_not_bare_kind",
+        "tests/gateway/test_session_api.py::test_session_toolsets_require_and_return_confirmed_snapshot"
+      ],
+      "runner": "python",
+      "sha256": "f79b3321cf90addd85575a59c602eb3f20720613664742c94151281cdd687693",
+      "shared_path": "tests/gateway/test_session_api.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_session_env.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_session_env.py::test_transport_profile_clear_masks_stale_environment"
+      ],
+      "runner": "python",
+      "sha256": "64ac62ddfbff78c068680c45df5999e1c2c07150690d594e951160793375d6de",
+      "shared_path": "tests/gateway/test_session_env.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_session_events.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/gateway/test_session_events.py"
+      ],
+      "runner": "python",
+      "sha256": "c5b2b81997df43fe95ab5d0c505c69a21bee7cb4087b353f29c4183b5fd7120c",
+      "shared_path": "tests/gateway/test_session_events.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_session_info.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_session_info.py::TestFormatSessionInfo::test_optional_new_session_id_is_first_line"
+      ],
+      "runner": "python",
+      "sha256": "1bb60b0b010a941f25b7a49ee2342677b86f6850451b471de42d6a10da2f354b",
+      "shared_path": "tests/gateway/test_session_info.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_rich_messages.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/gateway/test_telegram_rich_messages.py::test_horizontal_rule_footer_uses_rich_send"
+      ],
+      "runner": "python",
+      "sha256": "fab683192814e4768b954117605063f9c2933b6dd49aa396a94687bc5f8a0849",
+      "shared_path": "tests/gateway/test_telegram_rich_messages.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_topic_policy_local.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/gateway/test_topic_policy_local.py"
+      ],
+      "runner": "python",
+      "sha256": "e549a86764a923d834c1cde41293e48cd8b99173d8988f77bc2ffd595860c449",
+      "shared_path": "tests/gateway/test_topic_policy_local.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_gateway.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_gateway.py::test_systemd_install_checks_linger_status"
+      ],
+      "runner": "python",
+      "sha256": "d19834a9c4c461e794966290a6ae61763736bed8e5a47144071226fb996014c5",
+      "shared_path": "tests/hermes_cli/test_gateway.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_gateway_linger.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_gateway_linger.py::test_systemd_install_calls_linger_helper"
+      ],
+      "runner": "python",
+      "sha256": "ca715714f1800f3fc52bd94d306fb51f0954131eb64da580a832ccfb42386ca6",
+      "shared_path": "tests/hermes_cli/test_gateway_linger.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_kanban_block_worker_lifecycle.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_kanban_block_worker_lifecycle.py"
+      ],
+      "runner": "python",
+      "sha256": "8ea556b4d6e2324d4f92a59bd27df6cc2eeb131ba0d00330ad46bf464f3573a6",
+      "shared_path": "tests/hermes_cli/test_kanban_block_worker_lifecycle.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_kanban_core_functionality.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_kanban_core_functionality.py::test_child_inherits_notification_transport_provenance"
+      ],
+      "runner": "python",
+      "sha256": "7a394d9512463a251f9619a9f1be4f860b3606d24a51a7c7d9d6b1a6af4630cc",
+      "shared_path": "tests/hermes_cli/test_kanban_core_functionality.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_kanban_worker_session_source.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_kanban_worker_session_source.py::test_worker_spawn_tags_session_source_kanban"
+      ],
+      "runner": "python",
+      "sha256": "92d3b5875ece0fbf331e75fa75f2250f36aa70cd5600383f90dcd9903e454e48",
+      "shared_path": "tests/hermes_cli/test_kanban_worker_session_source.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_mission_control.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_mission_control.py"
+      ],
+      "runner": "python",
+      "sha256": "575fa5baa598d4712ef0bf0b2126b7ef53f9660b508dbb8c6692ea5c104be043",
+      "shared_path": "tests/hermes_cli/test_mission_control.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_profile_config_inheritance.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_profile_config_inheritance.py"
+      ],
+      "runner": "python",
+      "sha256": "286bbce085b4f99d49878994232235bf86ab30e78410d7488eda033757218ab2",
+      "shared_path": "tests/hermes_cli/test_profile_config_inheritance.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_prompt_size.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/hermes_cli/test_prompt_size.py::test_skills_breakdown_attributes_per_skill_invisible_lines"
+      ],
+      "runner": "python",
+      "sha256": "c638bf34491fa157ea9e49d08ef7bae3d85c9ee5995ee8612afcc20888d6a106",
+      "shared_path": "tests/hermes_cli/test_prompt_size.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_compression_persistence.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_compression_persistence.py::TestStoredPromptCwdDrift::test_built_prompt_contains_current_date_line"
+      ],
+      "runner": "python",
+      "sha256": "64c4a4475e7f48f8155877150ca848c4e51f0c5a7142bcff1be4ebdb859f4464",
+      "shared_path": "tests/run_agent/test_compression_persistence.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_custom_provider_preserve_thinking.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_custom_provider_preserve_thinking.py"
+      ],
+      "runner": "python",
+      "sha256": "73af723932b61cd6882c5564351fba4a34bee954910e0c8f4799a97b5854d3c7",
+      "shared_path": "tests/run_agent/test_custom_provider_preserve_thinking.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_kanban_terminal_handoff_exit.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_kanban_terminal_handoff_exit.py"
+      ],
+      "runner": "python",
+      "sha256": "685b27f2036552907a15e81996cd3ce9e8a9dae5da42e0d3e85a1425e4bf0d2e",
+      "shared_path": "tests/run_agent/test_kanban_terminal_handoff_exit.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_run_agent.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_run_agent.py::test_direct_session_db_flushes_share_marker_claim"
+      ],
+      "runner": "python",
+      "sha256": "585c21ba2eefbd364f5040594c4cb0e64db7462dc4b0be78a745932e5d32ea34",
+      "shared_path": "tests/run_agent/test_run_agent.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_steer.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_steer.py::TestSteerAcceptance::test_rejects_when_turn_window_is_closed",
+        "tests/run_agent/test_steer.py::TestSteerClearedOnInterrupt::test_clear_interrupt_drops_pending_steer",
+        "tests/run_agent/test_steer.py::TestSteerTurnWindow::test_accepted_before_close_is_drained",
+        "tests/run_agent/test_steer.py::TestSteerTurnWindow::test_close_race_has_no_false_success_loss"
+      ],
+      "runner": "python",
+      "sha256": "659353ca50aeb79657333f7a7352926a02034bbd165c5160a497300972b4094d",
+      "shared_path": "tests/run_agent/test_steer.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_tool_batch_segmentation.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_tool_batch_segmentation.py"
+      ],
+      "runner": "python",
+      "sha256": "eb991e28d4f08d9c4adbba76bcbb49138cf40340a5984774fa5a219b9fd5e71c",
+      "shared_path": "tests/run_agent/test_tool_batch_segmentation.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/run_agent/test_tool_call_incremental_persistence.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/run_agent/test_tool_call_incremental_persistence.py::test_terminal_kanban_run_skips_remaining_sequential_tools"
+      ],
+      "runner": "python",
+      "sha256": "c83c4a31359da8da6b90467e145172e2ee846ee77d15de08864e1ac6dd785407",
+      "shared_path": "tests/run_agent/test_tool_call_incremental_persistence.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/scripts/test_audit_pr_attribution.py",
+      "kind": "owner-only-shared-test",
+      "nodeids": [
+        "tests/scripts/test_audit_pr_attribution.py"
+      ],
+      "runner": "python",
+      "sha256": "b6874199700f1797de6bbcab5cad3e8aabd1464a1e3b655dae1233cb4f3bd3a7",
+      "shared_path": "tests/scripts/test_audit_pr_attribution.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/test_hermes_state.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/test_hermes_state.py::TestFTS5Search::test_search_projection_skips_context_enrichment_queries"
+      ],
+      "runner": "python",
+      "sha256": "1d84644090a6982774782ea947ffbe5008bbdd16037eddcc7fbaacee1873a9bb",
+      "shared_path": "tests/test_hermes_state.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/test_tui_gateway_server.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/test_tui_gateway_server.py::test_load_enabled_toolsets_falls_back_when_tui_env_invalid",
+        "tests/test_tui_gateway_server.py::test_load_enabled_toolsets_rejects_disabled_mcp_env"
+      ],
+      "runner": "python",
+      "sha256": "d13719d2102550f01aa0f478e6a5c2206fcbdf237f7f423731caa6046ff40c8a",
+      "shared_path": "tests/test_tui_gateway_server.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tools/test_execution_flag_detection.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tools/test_execution_flag_detection.py::test_real_binaries_execute_leading_dash_program_payload"
+      ],
+      "runner": "python",
+      "sha256": "20e69de1b8f7ba36e8887177e3e253d8796eec9113583dae60a2cb5b1d83af20",
+      "shared_path": "tests/tools/test_execution_flag_detection.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tools/test_kanban_tools.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tools/test_kanban_tools.py::test_kanban_tools_follow_explicit_session_toolset_grant",
+        "tests/tools/test_kanban_tools.py::test_terminal_state_tracks_exact_worker_run"
+      ],
+      "runner": "python",
+      "sha256": "059b8363d23680383fd7af1c3ff03950a09f05b5a14ec494566771967d336fba",
+      "shared_path": "tests/tools/test_kanban_tools.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tools/test_mcp_tool.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tools/test_mcp_tool.py::TestLoadMCPConfig::test_global_parallel_default_applies_without_overriding_server_policy",
+        "tests/tools/test_mcp_tool.py::TestToolsetInjection::test_parallel_discovery_timeout_honors_slowest_server",
+        "tests/tools/test_mcp_tool.py::TestToolsetInjection::test_parallel_discovery_timeout_keeps_legacy_floor"
+      ],
+      "runner": "python",
+      "sha256": "060992f0187498e8a88b4a854d4a167ea737579605835f49899c43b579301cae",
+      "shared_path": "tests/tools/test_mcp_tool.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tools/test_skill_linter.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tools/test_skill_linter.py::test_description_too_long_is_warning"
+      ],
+      "runner": "python",
+      "sha256": "96a32600904e1f79e1106074957f92b42de78b0e17be14dc2144021e7f3f9507",
+      "shared_path": "tests/tools/test_skill_linter.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tools/test_skill_manager_tool.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_edit_description_within_prompt_budget_needs_no_preview"
+      ],
+      "runner": "python",
+      "sha256": "2094ee488765574812dac6600fb2224ea8ed8232971da242d0974898160b15a5",
+      "shared_path": "tests/tools/test_skill_manager_tool.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/tui_gateway/test_goal_command.py",
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "tests/tui_gateway/test_goal_command.py"
+      ],
+      "runner": "python",
+      "sha256": "1399de5a956a55a4c3d267478b7d7aced74705cd91ce1a1a6192ea754bcedc4a",
+      "shared_path": "tests/tui_gateway/test_goal_command.py"
+    },
+    {
+      "case_path": "fork_tests/cases/web/src/lib/pty-resume-sanitizer.test.ts",
+      "javascript_workspace": {
+        "package": "web",
+        "root": "web"
+      },
+      "kind": "owner-modified-shared-test",
+      "nodeids": [
+        "web/src/lib/pty-resume-sanitizer.test.ts"
+      ],
+      "runner": "javascript",
+      "sha256": "3b2a1a8969558edb4b554f0dca286a1fc4ef3cd89b9c00583ba20a3a75df8841",
+      "shared_path": "web/src/lib/pty-resume-sanitizer.test.ts"
+    }
+  ],
+  "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
+  "last_isolation": {
+    "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
+    "generated_at": "2026-08-27T02:16:45.088436+00:00",
+    "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
+    "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+  },
+  "version": 1
+}

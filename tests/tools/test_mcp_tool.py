@@ -130,25 +130,6 @@ class TestLoadMCPConfig:
             result = _load_mcp_config()
             assert result == {}
 
-    def test_global_parallel_default_applies_without_overriding_server_policy(self):
-        servers = {
-            "inherited": {"command": "echo"},
-            "explicit_serial": {
-                "command": "echo",
-                "supports_parallel_tool_calls": False,
-            },
-        }
-        config = {
-            "mcp": {"supports_parallel_tool_calls": True},
-            "mcp_servers": servers,
-        }
-        with patch("hermes_cli.config.load_config", return_value=config):
-            from tools.mcp_tool import _load_mcp_config
-            result = _load_mcp_config()
-
-        assert result["inherited"]["supports_parallel_tool_calls"] is True
-        assert result["explicit_serial"]["supports_parallel_tool_calls"] is False
-
     def test_portable_servers_merge_after_native_interpolation(self):
         native = {"native": {"command": "node", "args": ["${PORT}"]}}
         portable = {
@@ -946,24 +927,6 @@ class TestMCPServerTask:
 # ---------------------------------------------------------------------------
 
 class TestToolsetInjection:
-    def test_parallel_discovery_timeout_honors_slowest_server(self):
-        """The batch timeout must not cancel a valid long cold start."""
-        from tools.mcp_tool import _parallel_discovery_timeout
-
-        assert _parallel_discovery_timeout({
-            "fast": {"connect_timeout": 15},
-            "cold-comfyui": {"connect_timeout": 300},
-        }) == 330.0
-
-    def test_parallel_discovery_timeout_keeps_legacy_floor(self):
-        """Normal and malformed configs retain the bounded 120s floor."""
-        from tools.mcp_tool import _parallel_discovery_timeout
-
-        assert _parallel_discovery_timeout({
-            "default": {},
-            "malformed": {"connect_timeout": "not-a-number"},
-        }) == 120.0
-
     def test_mcp_tools_resolve_through_server_aliases(self):
         """Discovered MCP tools resolve through raw server-name aliases."""
         from tools.mcp_tool import MCPServerTask
