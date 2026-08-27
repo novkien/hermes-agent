@@ -24,12 +24,12 @@ from ownership import (
     FORK_CASE_ROOT,
     FORK_MANIFEST,
     changed_paths,
-    changed_python_nodeids,
     ensure_repository,
     git,
     git_stdout,
     is_shared_test_path,
     parse_tree,
+    python_case_nodeids,
     read_blob,
     read_json,
     runner_for_path,
@@ -92,6 +92,7 @@ def build_plan(repo: Path, owner_ref: str, upstream_ref: str) -> dict[str, Any]:
 
     base_tree = parse_tree(repo, common_base)
     owner_tree = parse_tree(repo, owner_sha)
+    upstream_tree = parse_tree(repo, upstream_sha)
     owner_delta = changed_paths(repo, common_base, owner_sha)
 
     modified_shared = sorted(
@@ -119,13 +120,21 @@ def build_plan(repo: Path, owner_ref: str, upstream_ref: str) -> dict[str, Any]:
         base_source = None
         if shared_path in base_tree and base_tree[shared_path]["type"] == "blob":
             base_source = read_blob(repo, common_base, shared_path)
+        upstream_source = None
+        if shared_path in upstream_tree:
+            upstream_source = read_blob(repo, upstream_sha, shared_path)
         runner = runner_for_path(shared_path)
         nodeids: list[str] = []
+        replaced_upstream_nodeids: list[str] = []
         workspace: dict[str, str] | None = None
         if runner == "python":
-            nodeids = changed_python_nodeids(shared_path, source, base_source)
+            nodeids, replaced_upstream_nodeids = python_case_nodeids(
+                shared_path, source, base_source, upstream_source
+            )
         elif runner == "javascript":
             nodeids = [shared_path]
+            if upstream_source is not None:
+                replaced_upstream_nodeids = [shared_path]
             resolved = _javascript_workspace(repo, owner_sha, owner_tree, shared_path)
             if resolved is None:
                 raise RuntimeError(
@@ -143,7 +152,13 @@ def build_plan(repo: Path, owner_ref: str, upstream_ref: str) -> dict[str, Any]:
             ),
             "runner": runner,
             "nodeids": nodeids,
+            "replaced_upstream_nodeids": replaced_upstream_nodeids,
             "sha256": sha256_bytes(source),
+            "lineage": {
+                "owner_sha": owner_sha,
+                "common_base_sha": common_base,
+                "upstream_target_sha": upstream_sha,
+            },
         }
         if workspace:
             row["javascript_workspace"] = workspace

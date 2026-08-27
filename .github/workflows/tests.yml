@@ -92,8 +92,9 @@ jobs:
         # with bounded parallelism. No xdist, no shared workers, no
         # module-level state leakage between files.
         #
-        # No --files: the runner discovers the suite itself. The discovered
-        # set is identical to the list the removed matrix job used to pass in.
+        # No --files: the runner discovers the suite itself. It runs every
+        # pristine upstream node except the exact manifest entries replaced by
+        # executable fork cases in the later overlay step.
         run: |
           source .venv/bin/activate
           scripts/run_tests.sh

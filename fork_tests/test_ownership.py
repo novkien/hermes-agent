@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts/fork_ci"))
 from ownership import (  # noqa: E402
     changed_python_nodeids,
     is_shared_test_path,
+    python_case_nodeids,
     runner_for_path,
 )
 
@@ -41,3 +42,16 @@ def test_module_level_change_falls_back_to_complete_file() -> None:
     assert changed_python_nodeids("tests/test_sample.py", owner, base) == [
         "tests/test_sample.py"
     ]
+
+
+def test_renamed_fork_test_replaces_the_original_upstream_node() -> None:
+    base = b"def test_old_policy():\n    assert 1 == 1\n"
+    owner = b"def test_new_policy():\n    assert 2 == 2\n"
+    upstream = b"def test_old_policy():\n    assert 3 == 3\n"
+
+    selected, replaced = python_case_nodeids(
+        "tests/test_sample.py", owner, base, upstream
+    )
+
+    assert selected == ["tests/test_sample.py::test_new_policy"]
+    assert replaced == ["tests/test_sample.py::test_old_policy"]

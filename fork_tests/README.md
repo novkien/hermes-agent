@@ -58,7 +58,8 @@ python scripts/fork_ci/verify_shared_tests.py
 The main Python lane runs, in order:
 
 1. the immutable shared-test verification;
-2. the complete normal Python suite;
+2. the complete pristine upstream Python suite, deselecting only the exact
+   upstream nodes recorded as replaced by fork cases;
 3. the fork tooling and explicit merge-semantics tests;
 4. Python fork cases in a disposable worktree overlay.
 
@@ -69,6 +70,8 @@ checkout is restored in a `finally` block.
 The manifest at `fork_tests/manifest.json` records each case's shared path,
 case path, runner, selected node IDs, checksum, and JavaScript workspace when
 applicable. `nodeids` are derived from fork changes after the common base.
+`replaced_upstream_nodeids` are the pristine upstream assertions superseded by
+those fork cases; the canonical test runner deselects only this explicit list.
 `semantic_nodeids` are an explicit review decision for behavior that upstream
 removed or rewrote but the owner deliberately preserved during the merge. This
 second list prevents an inherited assertion from silently becoming present but

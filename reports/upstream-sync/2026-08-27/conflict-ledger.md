@@ -66,6 +66,13 @@ count and fails open to all lanes on truncation or missing count. All normal
 Python tests, all normal workspace checks, and isolated fork regressions remain
 separate required executions.
 
+The pristine shared suite and fork cases can intentionally encode mutually
+exclusive policies. The manifest therefore records both sides of a replacement:
+`nodeids`/`semantic_nodeids` run in the fork overlay, while
+`replaced_upstream_nodeids` are the exact pristine assertions deselected by the
+canonical per-file runner. Unrelated upstream tests in the same file still run;
+neither the whole shared file nor the whole upstream suite is suppressed.
+
 `ci.yaml` also passed `sparse-checkout` and `sparse-checkout-cone-mode` to the
 local `detect-changes` action even though that action declares neither input.
 GitHub rejects undeclared local-action inputs before classification runs; the

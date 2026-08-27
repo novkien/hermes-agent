@@ -238,6 +238,60 @@ def changed_python_nodeids(
     return changed or [shared_path]
 
 
+def python_case_nodeids(
+    shared_path: str,
+    owner_source: bytes,
+    base_source: bytes | None,
+    upstream_source: bytes | None,
+) -> tuple[list[str], list[str]]:
+    """Select fork nodes and the upstream nodes that those cases replace.
+
+    Both sides are necessary. A fork test may rename an upstream test while
+    changing its policy; selecting only the new owner name leaves the old,
+    contradictory upstream name active in the pristine shared suite.
+    """
+    owner_selected = changed_python_nodeids(shared_path, owner_source, base_source)
+    if owner_selected == [shared_path]:
+        return owner_selected, [shared_path] if upstream_source is not None else []
+
+    owner_nodes = _python_test_nodes(owner_source)
+    base_nodes = _python_test_nodes(base_source) if base_source is not None else None
+    upstream_nodes = (
+        _python_test_nodes(upstream_source) if upstream_source is not None else None
+    )
+    if owner_nodes is None or base_nodes is None:
+        return [shared_path], [shared_path] if upstream_source is not None else []
+    if upstream_source is None:
+        return owner_selected, []
+    if upstream_nodes is None:
+        return owner_selected, [shared_path]
+
+    replacement_names = {
+        name
+        for name, digest in owner_nodes.items()
+        if base_nodes.get(name) != digest
+    }
+    replacement_names.update(
+        name
+        for name, digest in base_nodes.items()
+        if owner_nodes.get(name) != digest
+    )
+    replaced = [
+        f"{shared_path}::{name}"
+        for name in sorted(upstream_nodes)
+        if name in replacement_names
+    ]
+    return owner_selected, replaced
+
+
+def python_source_nodeids(shared_path: str, source: bytes) -> set[str]:
+    """Return concrete node IDs defined by a parseable Python test source."""
+    nodes = _python_test_nodes(source)
+    if nodes is None:
+        return set()
+    return {f"{shared_path}::{name}" for name in nodes}
+
+
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
