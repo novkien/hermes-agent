@@ -19459,7 +19459,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Topic-mode DMs: rewrite a stale/foreign thread_id to the user's
         # last-active topic so a cross-topic Reply or stripped plain reply
         # doesn't fragment the conversation across sessions.
-        recovered = await asyncio.to_thread(self._recover_telegram_topic_thread_id, source)
+        recovered = None
+        # Recovery can only apply to Telegram DMs with a stable chat/user
+        # identity. Avoid scheduling guaranteed no-op work in the shared
+        # executor for every group and non-Telegram turn; under CI/runtime
+        # load that queueing delay can outlive much shorter turn-lease clocks.
+        if (
+            source.platform == Platform.TELEGRAM
+            and source.chat_type == "dm"
+            and source.chat_id
+            and source.user_id
+        ):
+            recovered = await asyncio.to_thread(
+                self._recover_telegram_topic_thread_id,
+                source,
+            )
         if recovered is not None:
             logger.info(
                 "telegram topic recovery: chat=%s user=%s %r -> %s",

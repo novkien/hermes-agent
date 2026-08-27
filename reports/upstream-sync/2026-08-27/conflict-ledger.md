@@ -127,6 +127,11 @@ boundaries in otherwise pristine upstream tests:
 - the browser snapshot threshold combined a process-wide raw-config cache with
   a profile-agnostic lifecycle cache. It now performs one uncached explicit
   profile read per browser lifecycle and keys the local cache by Hermes home.
+- topic recovery was dispatched through the shared thread executor for every
+  platform and chat type even though only Telegram DMs can recover a topic.
+  The structural eligibility check now runs before `asyncio.to_thread`, so a
+  no-op group turn cannot exhaust a short turn-lease timeout while waiting for
+  unrelated executor capacity.
 
-The existing unmodified shared tests are the regression proof for all three
+The existing unmodified shared tests are the regression proof for all four
 fixes; no fork assertion was added to the upstream-owned paths.
