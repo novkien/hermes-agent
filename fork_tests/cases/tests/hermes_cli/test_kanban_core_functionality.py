@@ -701,7 +701,7 @@ def test_pid_alive_detects_zombie(kanban_home):
         time.sleep(0.3)
         # Verify /proc reports zombie state so the test is actually
         # exercising the zombie path and not some other liveness failure
-        with open(f"/proc/{pid}/status") as f:
+        with open(f"/proc/{pid}/status") as f:  # noqa: PLW1514
             state_line = next(
                 (l for l in f if l.startswith("State:")), ""
             )
@@ -1436,4 +1436,3 @@ def test_notify_sub_starts_caught_up_on_active_task(kanban_home):
         assert events == [], "historical events must not replay to a new sub"
     finally:
         conn.close()
-

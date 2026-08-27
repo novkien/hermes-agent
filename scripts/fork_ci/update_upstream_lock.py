@@ -20,6 +20,7 @@ from ownership import (
     python_source_nodeids,
     read_blob,
     read_json,
+    sha256_bytes,
     write_json,
 )
 
@@ -72,6 +73,7 @@ def main() -> int:
                 lineage_trees[common_base_sha] = parse_tree(repo, common_base_sha)
             base_tree = lineage_trees[common_base_sha]
             case_source = (repo / str(row["case_path"])).read_bytes()
+            row["sha256"] = sha256_bytes(case_source)
             base_source = (
                 read_blob(repo, common_base_sha, shared_path)
                 if shared_path in base_tree

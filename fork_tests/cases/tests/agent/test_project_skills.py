@@ -37,7 +37,7 @@ def project_env(tmp_path, monkeypatch):
 
 
 def _trust(config: Path, repo: Path) -> None:
-    config.write_text(
+    config.write_text(  # noqa: PLW1514 - preserved owner regression source
         f"skills:\n  external_dirs: []\n  trusted_project_dirs: ['{repo}']\n"
     )
     su._external_dirs_cache_clear()

@@ -83,7 +83,7 @@
       ],
       "replaced_upstream_nodeids": [],
       "runner": "python",
-      "sha256": "3ec33b2227152a2b16eee5bf794f5b2a4fc42d8928a96b6b4a6e1bed3ba24b21",
+      "sha256": "b7364127ed6b942d0591b0ae5114c7f78bd55ca8b85a511683c2200a62f15838",
       "shared_path": "tests/agent/test_project_skills.py"
     },
     {
@@ -594,7 +594,7 @@
       ],
       "replaced_upstream_nodeids": [],
       "runner": "python",
-      "sha256": "7a394d9512463a251f9619a9f1be4f860b3606d24a51a7c7d9d6b1a6af4630cc",
+      "sha256": "3b0ee89b811a02747f4a8e61043738df8202d931f216049eba020903b0e554c8",
       "shared_path": "tests/hermes_cli/test_kanban_core_functionality.py"
     },
     {
@@ -2154,7 +2154,7 @@
         "tests/test_tui_gateway_server.py::test_ws_orphan_reap_waits_for_active_delegation_then_reaps"
       ],
       "runner": "python",
-      "sha256": "d13719d2102550f01aa0f478e6a5c2206fcbdf237f7f423731caa6046ff40c8a",
+      "sha256": "d90c5a764037532d1ad330fba15511e7a2bcd0fed5d2b557d1a49ee9888446cd",
       "shared_path": "tests/test_tui_gateway_server.py"
     },
     {

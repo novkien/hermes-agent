@@ -82,7 +82,13 @@ def ensure_repository(repo: Path) -> Path:
     if root != resolved:
         raise RuntimeError(f"expected repository root {resolved}, got {root}")
     origin = git_stdout(resolved, "remote", "get-url", "origin")
-    if origin != "https://github.com/novkien/hermes-agent.git":
+    # actions/checkout records the canonical HTTPS URL without the optional
+    # ``.git`` suffix, while native clones commonly retain it.  They identify
+    # the same owner repository and must pass the same fail-closed boundary.
+    if origin not in {
+        "https://github.com/novkien/hermes-agent",
+        "https://github.com/novkien/hermes-agent.git",
+    }:
         raise RuntimeError(f"unexpected origin: {origin}")
     return resolved
 

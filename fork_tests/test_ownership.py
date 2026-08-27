@@ -6,12 +6,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/fork_ci"))
 
+import ownership  # noqa: E402
 from ownership import (  # noqa: E402
     changed_python_nodeids,
     is_shared_test_path,
     python_case_nodeids,
     runner_for_path,
 )
+
+
+def test_repository_validation_accepts_checkout_origin_without_git_suffix(
+    monkeypatch, tmp_path
+) -> None:
+    repo = tmp_path.resolve()
+
+    def fake_git_stdout(_repo: Path, *args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(repo)
+        if args == ("remote", "get-url", "origin"):
+            return "https://github.com/novkien/hermes-agent"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(ownership, "git_stdout", fake_git_stdout)
+
+    assert ownership.ensure_repository(repo) == repo
 
 
 def test_shared_surface_wording_matches_layout() -> None:
