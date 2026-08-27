@@ -205,8 +205,25 @@ def systemd_install(
 
     _prepare_data_root(ctx, system=system)
     unit_path = get_systemd_unit_path(system=system)
-    unit_path.parent.mkdir(parents=True, exist_ok=True)
     expected = generate_systemd_unit(system=system, run_as_user=run_as_user)
+    temp_home = gateway_cli._temp_home_in_service_definition(expected)
+    if temp_home is not None:
+        # Gateway-install tests and E2E probes commonly point HERMES_HOME at a
+        # temporary tree while leaving Path.home() unchanged.  Mission Control
+        # is installed as a gateway side effect, so writing that generated unit
+        # to the real user service path would poison the next production restart.
+        if not quiet:
+            print(
+                "✗ Refusing to write the Mission Control systemd unit: "
+                f"HERMES_HOME resolves to a temporary directory ({temp_home})."
+            )
+            print(
+                "  This usually means a test/E2E environment exported "
+                "HERMES_HOME. Unset it (or run from a clean shell) and retry."
+            )
+        return False
+
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
     current = unit_path.read_text(encoding="utf-8") if unit_path.exists() else None
     changed = force or current != expected
     if changed:
