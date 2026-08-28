@@ -1428,6 +1428,9 @@ assert.equal(chatStreamBody({
 const composerSource = readFileSync(
   new URL('../frontend/dist/tabs/chat/composer.js', import.meta.url), 'utf8',
 );
+const appSource = readFileSync(
+  new URL('../frontend/dist/app.js', import.meta.url), 'utf8',
+);
 const chatTabSource = readFileSync(
   new URL('../frontend/dist/tabs/chat.js', import.meta.url), 'utf8',
 );
@@ -1445,6 +1448,10 @@ const skillsTabSource = readFileSync(
 );
 assert.match(composerSource, /return Boolean\(localActive \|\| controller\)/,
   'the optimistic-send window must count as running before a stream controller exists');
+assert.match(appSource, /await api\.post\('\/api\/capabilities\/refresh', \{\}, \{ profile \}\)/,
+  'Refresh must re-probe source capabilities instead of replaying the startup snapshot');
+assert.match(appSource, /await loadShell\(\)[\s\S]*?instance\.refresh\(\)/,
+  'Refresh must repaint both shell health and the retained active tab');
 assert.match(composerSource,
   /`\/api\/runs\/\$\{encodeURIComponent\(id\)\}\/stop`/,
   'Stop must call the gateway run-stop mutation instead of only aborting the browser stream');
