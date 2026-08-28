@@ -2847,10 +2847,13 @@ def _env_expand_match(m: re.Match) -> str:
         val = os.environ.get(name)
         if val is not None:
             return val
-        logger.warning(
-            "Config ref %r: %s is not set (check ~/.hermes/.env); "
-            "keeping the literal placeholder", raw, name,
-        )
+        from hermes_cli import _startup_fast
+
+        if not _startup_fast._DOTENV_BOOTSTRAP_PENDING:
+            logger.warning(
+                "Config ref %r: %s is not set (check ~/.hermes/.env); "
+                "keeping the literal placeholder", raw, name,
+            )
         return raw
     if ":" in inner and re.match(r"^[a-z][a-z0-9_-]*:", inner):
         # Looks like a SecretRef with a non-env source.  Values from vault
@@ -3682,6 +3685,20 @@ def atomic_config_write(config_path: Path, data: Any, **kwargs: Any) -> None:
 
     require_readable_config_before_write(config_path)
     atomic_yaml_write(config_path, data, **kwargs)
+
+
+def _invalidate_load_config_cache(config_path: Optional[Path] = None) -> None:
+    """Drop one effective-config cache entry after bootstrap env changes.
+
+    The CLI import wall can read config before dotenv is available. Main
+    suppresses provisional unresolved-ref warnings during that window, then
+    calls this helper after dotenv/profile bridging completes so the next
+    behavioral read re-expands refs and emits a warning if one is genuinely
+    still unresolved.
+    """
+    path = Path(config_path) if config_path is not None else get_config_path()
+    with _CONFIG_LOCK:
+        _LOAD_CONFIG_CACHE.pop(str(path), None)
 
 
 def load_config() -> Dict[str, Any]:

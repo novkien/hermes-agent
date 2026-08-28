@@ -9,7 +9,7 @@ import sys
 import threading
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from utils import atomic_replace, fast_safe_load
 
 
@@ -360,6 +360,136 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool) -> None:
     _sanitize_loaded_credentials()
 
 
+def _dotenv_values_with_fallback(path: Path) -> dict[str, str]:
+    """Parse one dotenv file without exporting its full contents."""
+    try:
+        parsed = dotenv_values(dotenv_path=path, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raw = path.read_bytes()
+        if raw.startswith(codecs.BOM_UTF8):
+            raw = raw[len(codecs.BOM_UTF8) :]
+        parsed = dotenv_values(stream=io.StringIO(raw.decode("latin-1")))
+    return {
+        str(name): str(value)
+        for name, value in parsed.items()
+        if value is not None
+    }
+
+
+def _collect_env_refs(value: object) -> set[str]:
+    """Return environment names referenced by ``${...}`` config values."""
+    import re
+
+    refs: set[str] = set()
+    if isinstance(value, str):
+        for raw_ref in re.findall(r"\${([^}]+)}", value):
+            ref = raw_ref.strip()
+            if ref.startswith("env:"):
+                ref = ref[len("env:") :].strip()
+            elif ":" in ref and re.match(r"^[a-z][a-z0-9_-]*:", ref):
+                continue
+            if ref:
+                refs.add(ref)
+    elif isinstance(value, dict):
+        for child in value.values():
+            refs.update(_collect_env_refs(child))
+    elif isinstance(value, list):
+        for child in value:
+            refs.update(_collect_env_refs(child))
+    return refs
+
+
+def _collect_unshadowed_root_refs(
+    root_value: object,
+    profile_value: object,
+) -> set[str]:
+    """Collect refs from root mapping leaves not replaced by a profile."""
+    if not isinstance(root_value, dict) or not isinstance(profile_value, dict):
+        return set()
+    refs: set[str] = set()
+    for key, child in root_value.items():
+        if key not in profile_value:
+            refs.update(_collect_env_refs(child))
+        elif isinstance(child, dict) and isinstance(profile_value[key], dict):
+            refs.update(_collect_unshadowed_root_refs(child, profile_value[key]))
+    return refs
+
+
+def _profile_inherited_root_env_refs(home_path: Path) -> set[str]:
+    """Return only root-config env refs that a named profile inherits.
+
+    Named profiles inherit selected root ``config.yaml`` sections but retain
+    an isolated ``.env``.  A root config value such as ``${env:SHARED_KEY}``
+    therefore needs the matching root dotenv value, while unrelated root
+    credentials must remain invisible to the profile.
+    """
+    if home_path.parent.name != "profiles":
+        return set()
+    root_home = home_path.parent.parent
+    root_config_path = root_home / "config.yaml"
+    profile_config_path = home_path / "config.yaml"
+    if not root_config_path.exists() or not profile_config_path.exists():
+        return set()
+
+    try:
+        with open(profile_config_path, encoding="utf-8") as handle:
+            profile_config = fast_safe_load(handle) or {}
+        with open(root_config_path, encoding="utf-8") as handle:
+            root_config = fast_safe_load(handle) or {}
+        from hermes_cli.config import (
+            _PROFILE_ROOT_FIELDWISE_MERGE_KEYS,
+            _config_inherits_root,
+            _strip_inherited_root_keys,
+        )
+
+        if not isinstance(profile_config, dict) or not isinstance(root_config, dict):
+            return set()
+        if not _config_inherits_root(profile_config):
+            return set()
+        root_config = _strip_inherited_root_keys(root_config)
+    except Exception:
+        return set()
+
+    refs: set[str] = set()
+    for key, root_value in root_config.items():
+        if key not in profile_config:
+            refs.update(_collect_env_refs(root_value))
+        elif key in _PROFILE_ROOT_FIELDWISE_MERGE_KEYS:
+            refs.update(
+                _collect_unshadowed_root_refs(root_value, profile_config[key])
+            )
+    return refs
+
+
+def _load_profile_inherited_root_env(home_path: Path, user_env: Path) -> None:
+    """Export the narrow root-dotenv subset needed by inherited root config.
+
+    Profile ``.env`` assignments remain authoritative.  Root values replace
+    stale inherited shell values only for variables explicitly referenced by
+    root config fields that survive profile inheritance.  This deliberately
+    avoids loading the root dotenv wholesale, which would break profile secret
+    isolation and authorization fail-closed behavior.
+    """
+    refs = _profile_inherited_root_env_refs(home_path)
+    if not refs:
+        return
+    root_env = home_path.parent.parent / ".env"
+    if not root_env.exists():
+        return
+
+    _sanitize_env_file_if_needed(root_env)
+    root_values = _dotenv_values_with_fallback(root_env)
+    profile_keys = _env_keys_defined_in_dotenv(user_env) if user_env.exists() else set()
+    applied = False
+    for name in refs:
+        if name in profile_keys or name not in root_values:
+            continue
+        os.environ[name] = root_values[name]
+        applied = True
+    if applied:
+        _sanitize_loaded_credentials()
+
+
 def _sanitize_env_file_if_needed(path: Path) -> None:
     """Pre-sanitize a .env file before python-dotenv reads it.
 
@@ -502,6 +632,12 @@ def load_hermes_dotenv(
         # Mirror reload_env() known-key cleanup so inherited Hermes keys
         # absent from this profile's .env do not leak into the runtime.
         _clear_known_keys_missing_from_dotenv(user_env)
+
+    # A named profile inherits selected root config.yaml sections, so resolve
+    # only the root-dotenv variables referenced by those surviving fields.
+    # Keep this after the profile load so explicit profile assignments can be
+    # identified and protected, without exporting unrelated root credentials.
+    _load_profile_inherited_root_env(home_path, user_env)
 
     # Load .op.env AFTER .env so that .env values win, but the bootstrap
     # token (OP_SERVICE_ACCOUNT_TOKEN) becomes available for

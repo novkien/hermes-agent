@@ -44,6 +44,14 @@ __all__ = [
 ]
 
 
+# Set only by ``hermes_cli.main`` across its pre-dotenv import wall. Some
+# parser modules perform eager config reads before main reaches the canonical
+# dotenv loader; unresolved-ref warnings during that window are provisional
+# and would be false once the active profile/root-config bridge loads. Direct
+# config consumers never set this flag and retain the normal warning behavior.
+_DOTENV_BOOTSTRAP_PENDING = False
+
+
 def project_root_str() -> str:
     """Repo root as a str — the single source for main.py's PROJECT_ROOT."""
     return os.path.realpath(os.path.join(os.path.dirname(__file__), os.pardir))
