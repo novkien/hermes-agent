@@ -4,6 +4,9 @@ Covers the delivery lifecycle added to ``TelegramAdapter.send_video``:
 
 - a task-scoped derived MP4 (``ffmpeg -c copy -movflags +faststart``) is
   produced at send time and used for the Telegram upload;
+- the remuxed output preserves the portrait resolution/aspect and the
+  full duration of the source (probed directly from the actual path
+  handed to the Telegram upload);
 - the canonical producer file is never modified;
 - derived temp files are cleaned up on success and on failure;
 - ffmpeg absence degrades to the original send path (no crash, original
@@ -22,11 +25,11 @@ import pytest
 from plugins.platforms.telegram.adapter import TelegramAdapter
 
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
+FFMPEG = shutil.which("ffmpeg") or ""
+FFPROBE = shutil.which("ffprobe") or ""
 
 requires_ffmpeg = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None,
+    not FFMPEG or not FFPROBE,
     reason="ffmpeg/ffprobe not available in this env",
 )
 
@@ -88,6 +91,25 @@ def _probe_width_height(path: str) -> tuple:
         return (-1, -1)
 
 
+def _probe_duration_seconds(path: str) -> float:
+    """Read the container duration (seconds) from the given MP4 via ffprobe.
+
+    Returns -1.0 when the file cannot be probed (assertion will surface it).
+    """
+    proc = subprocess.run(
+        [FFPROBE, "-v", "error",
+         "-show_entries", "format=duration",
+         "-of", "csv=p=0", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode != 0:
+        return -1.0
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        return -1.0
+
+
 def _glob_telegram_tmp_files(root: str, prefix: str = "") -> list:
     """Files under root whose name looks like a telegram video delivery copy."""
     out = []
@@ -117,9 +139,10 @@ async def test_portrait_video_is_remuxed_with_faststart_before_send(tmp_path, mo
     async def fake_send_video(**kwargs):
         upload = kwargs["video"]
         observations["upload_path"] = upload.name
-        # The derived copy must exist and be readable at send time.
+        # Probe the ACTUAL derived copy handed to Telegram (not the fixture).
         observations["moov_offset"] = _moov_offset(upload.name)
         observations["width_height"] = _probe_width_height(upload.name)
+        observations["duration"] = _probe_duration_seconds(upload.name)
         return SimpleNamespace(message_id=99)
 
     adapter = _make_adapter()
@@ -139,6 +162,16 @@ async def test_portrait_video_is_remuxed_with_faststart_before_send(tmp_path, mo
     assert observations["moov_offset"] <= 64, "moov must be near the front"
     assert observations["width_height"] == (640, 832), (
         f"expected 640x832, got {observations['width_height']}"
+    )
+    # Portrait aspect preserved and the remuxed output keeps the full
+    # duration of the source (regression for Telegram's duration=0 probe).
+    assert observations["duration"] >= 0.99, (
+        f"expected remuxed duration >= 0.99s, got {observations['duration']}"
+    )
+    src_duration = _probe_duration_seconds(str(src))
+    assert abs(observations["duration"] - src_duration) <= 0.05, (
+        f"remuxed duration {observations['duration']} drifts from source "
+        f"{src_duration}"
     )
     # Canonical producer artifact untouched.
     assert src.read_bytes() == original_bytes
@@ -196,6 +229,10 @@ async def test_remux_failure_falls_back_to_original(tmp_path, monkeypatch):
 
     async def fake_send_video(**kwargs):
         sent["video"] = kwargs["video"]
+        # Probe the ACTUAL path handed to Telegram: original must keep its
+        # portrait dimensions and full duration (no drift, no truncation).
+        sent["width_height"] = _probe_width_height(kwargs["video"].name)
+        sent["duration"] = _probe_duration_seconds(kwargs["video"].name)
         return SimpleNamespace(message_id=12)
 
     adapter = _make_adapter()
@@ -209,6 +246,12 @@ async def test_remux_failure_falls_back_to_original(tmp_path, monkeypatch):
     result = await adapter.send_video(chat_id="123", video_path=str(src))
     assert result.success is True
     assert sent["video"].name == str(src), "original file must be sent when remux unavailable"
+    assert sent["width_height"] == (640, 832), (
+        f"expected 640x832, got {sent['width_height']}"
+    )
+    assert sent["duration"] >= 0.99, (
+        f"expected fallback duration >= 0.99s, got {sent['duration']}"
+    )
 
 
 @pytest.mark.asyncio
