@@ -425,6 +425,13 @@ _ensure_project_root_on_path_fast()
 if _try_ultrafast_version():
     raise SystemExit(0)
 
+# Parser/subcommand imports below may perform eager config reads. Dotenv and
+# profile-root env bridging intentionally happen later, after ``-p`` has been
+# consumed, so mark those early reads as provisional and suppress only their
+# unresolved-ref warnings. The marker is cleared immediately after the
+# canonical dotenv load below.
+_startup_fast._DOTENV_BOOTSTRAP_PENDING = True
+
 import argparse
 import hashlib
 import json
@@ -724,10 +731,20 @@ from hermes_cli.env_loader import load_hermes_dotenv
 # flags have already been stripped above, so the first remaining argument is
 # the authoritative argparse subcommand.  Dotenv/managed config still loads;
 # only external secret fetches are unnecessary for installation maintenance.
-load_hermes_dotenv(
-    project_env=PROJECT_ROOT / ".env",
-    load_external_secrets=sys.argv[1:2] != ["update"],
-)
+try:
+    load_hermes_dotenv(
+        project_env=PROJECT_ROOT / ".env",
+        load_external_secrets=sys.argv[1:2] != ["update"],
+    )
+finally:
+    _startup_fast._DOTENV_BOOTSTRAP_PENDING = False
+    # An eager import may have cached config with literal placeholders while
+    # warnings were suppressed. Force the first post-bootstrap behavioral read
+    # to re-expand against the completed env and warn only if a ref is truly
+    # still unresolved.
+    from hermes_cli.config import _invalidate_load_config_cache
+
+    _invalidate_load_config_cache()
 
 # Bridge security.redact_secrets from config.yaml → HERMES_REDACT_SECRETS env
 # var BEFORE hermes_logging imports agent.redact (which snapshots the flag at

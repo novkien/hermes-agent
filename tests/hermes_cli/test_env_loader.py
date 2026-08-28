@@ -1,7 +1,9 @@
 import codecs
 import importlib
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 from hermes_cli.env_loader import load_hermes_dotenv
 
@@ -87,6 +89,70 @@ def test_profile_root_config_opt_out_does_not_load_root_dotenv(
     load_hermes_dotenv(hermes_home=profile)
 
     assert "HERMES_CONFIG_SHARED_API_KEY" not in os.environ
+
+
+def _run_profile_config_cli(
+    root, *, env_key: str, config_key: str = "model.default"
+):
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(root)
+    env.pop(env_key, None)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "hermes_cli.main",
+            "-p",
+            "worker",
+            "config",
+            "get",
+            config_key,
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_named_profile_cli_does_not_warn_before_inherited_env_bridge(
+    tmp_path, monkeypatch
+):
+    """Eager parser imports must not warn about a ref dotenv later resolves."""
+    root, _ = _seed_inheriting_profile(tmp_path, monkeypatch)
+
+    result = _run_profile_config_cli(
+        root,
+        env_key="HERMES_CONFIG_SHARED_API_KEY",
+        config_key="providers.shared.api_key",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "root-shared-key"
+    assert "Config ref '${env:HERMES_CONFIG_SHARED_API_KEY}'" not in result.stderr
+
+
+def test_provisional_warning_suppression_ends_after_dotenv_bootstrap(
+    monkeypatch, caplog
+):
+    """The startup marker suppresses only provisional, never real, misses."""
+    from hermes_cli import _startup_fast
+    from hermes_cli.config import _expand_env_vars
+
+    monkeypatch.delenv("HERMES_CONFIG_MISSING_API_KEY", raising=False)
+    caplog.set_level("WARNING", logger="hermes_cli.config")
+    try:
+        _startup_fast._DOTENV_BOOTSTRAP_PENDING = True
+        _expand_env_vars("${env:HERMES_CONFIG_MISSING_API_KEY}")
+        assert "HERMES_CONFIG_MISSING_API_KEY is not set" not in caplog.text
+
+        _startup_fast._DOTENV_BOOTSTRAP_PENDING = False
+        _expand_env_vars("${env:HERMES_CONFIG_MISSING_API_KEY}")
+        assert "HERMES_CONFIG_MISSING_API_KEY is not set" in caplog.text
+    finally:
+        _startup_fast._DOTENV_BOOTSTRAP_PENDING = False
 
 
 def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypatch):
