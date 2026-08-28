@@ -381,7 +381,17 @@ export async function boot({ root } = {}) {
   const topbarSlot = el('div', { class: 'topbar-slot' });
 
   async function refreshCurrent() {
-    return liveStore.forceResync(currentRouteKey || 'overview', profile);
+    // A source can come up after Mission Control's startup probe (the Gateway
+    // is the common case). Re-run the guarded capability probe before reading
+    // the shell and tab snapshots, otherwise Refresh only replays the stale
+    // registry value and a healthy Chat composer stays read-only indefinitely.
+    await api.post('/api/capabilities/refresh', {}, { profile });
+    await loadShell();
+    const instance = currentInstanceKey ? tabInstances.get(currentInstanceKey) : null;
+    await Promise.all([
+      liveStore.forceResync(currentRouteKey || 'overview', profile),
+      typeof instance?.refresh === 'function' ? instance.refresh() : Promise.resolve(),
+    ]);
   }
 
   function renderBreadcrumb(route) {
