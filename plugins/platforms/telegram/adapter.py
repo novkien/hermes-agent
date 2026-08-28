@@ -15,11 +15,14 @@ import logging
 import os
 import html as _html
 import re
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +322,60 @@ def _probe_voice_duration_seconds(path: str) -> Optional[int]:
         pass
 
     return None
+
+
+def _build_delivery_video_path(video_path: str) -> Tuple[Optional[str], Optional[str]]:
+    """Derive a task-scoped faststart MP4 copy for Telegram video delivery.
+
+    Telegram misprobes portrait MP4s whose ``moov`` box sits at the end of the
+    file (a common HEVC/ComfyUI export layout): it reports ``width=320,
+    height=320, duration=0`` even though the bytes are fine. Remuxing with
+    ``-c copy -movflags +faststart`` moves ``moov`` to the front with zero
+    re-encode — a cheap, lossless fix. The canonical producer file is never
+    touched.
+
+    Returns ``(path, error)``. ``path`` is the derived copy (caller owns
+    cleanup) or ``None`` when ffmpeg is unavailable / remux failed and the
+    caller must fall back to sending ``video_path`` unchanged. Blocking
+    subprocess work, so call via ``asyncio.to_thread`` for large files.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None, "ffmpeg not found"
+    fd, tmp_path = tempfile.mkstemp(prefix="telegram_video_", suffix=".mp4")
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", video_path,
+             "-c", "copy", "-movflags", "+faststart", tmp_path],
+            capture_output=True, timeout=120,
+        )
+        if proc.returncode != 0:
+            stderr_text = proc.stderr.decode("utf-8", "replace")[:300]
+            logger.warning(
+                "[telegram] video faststart remux failed (ffmpeg exit %d): %s",
+                proc.returncode, stderr_text,
+            )
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return None, f"ffmpeg remux failed (exit {proc.returncode})"
+        return tmp_path, None
+    except subprocess.TimeoutExpired:
+        logger.warning("[telegram] video faststart remux timed out (>120s)")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return None, "ffmpeg remux timed out"
+    except Exception:
+        logger.exception("[telegram] video faststart remux error")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return None, "ffmpeg remux error"
 
 
 def telegram_deps_present() -> bool:
@@ -8172,9 +8229,22 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._bot:
             return SendResult(success=False, error="Not connected")
 
+        delivery_path = video_path
+        tmp_delivery = None
         try:
             if not os.path.exists(video_path):
                 return SendResult(success=False, error=self._missing_media_path_error("Video", video_path))
+
+            # Telegram misprobes portrait MP4s with moov at the end (common
+            # HEVC/ComfyUI export layout): width=320/height=320/duration=0.
+            # Derive a lossless faststart copy at send time; fall back to the
+            # original path when ffmpeg is unavailable or the remux fails.
+            # The canonical producer artifact is never modified.
+            tmp_delivery, _ = await asyncio.to_thread(
+                _build_delivery_video_path, video_path
+            )
+            if tmp_delivery is not None:
+                delivery_path = tmp_delivery
 
             _thread = self._metadata_thread_id(metadata)
             reply_to_id = self._reply_to_message_id_for_send(reply_to, metadata, reply_to_mode=self._reply_to_mode)
@@ -8185,7 +8255,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 reply_to_message_id=reply_to_id,
                 reply_to_mode=self._reply_to_mode
             )
-            with open(video_path, "rb") as f:
+            with open(delivery_path, "rb") as f:
                 msg = await self._send_with_dm_topic_reply_anchor_retry(
                     self._bot.send_video,
                     {
@@ -8209,6 +8279,12 @@ class TelegramAdapter(BasePlatformAdapter):
                 self.name, _redact_telegram_error_text(e),
             )
             return await super().send_video(chat_id, video_path, caption, reply_to, metadata=metadata)
+        finally:
+            if tmp_delivery is not None:
+                try:
+                    os.unlink(tmp_delivery)
+                except OSError:
+                    pass
 
     async def send_image(
         self,
