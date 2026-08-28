@@ -644,7 +644,7 @@
       ],
       "replaced_upstream_nodeids": [],
       "runner": "python",
-      "sha256": "286bbce085b4f99d49878994232235bf86ab30e78410d7488eda033757218ab2",
+      "sha256": "58054b5b877fc95ca481a9f40e7f1a1430f551a277299d34bf96bc27b4f5ba3d",
       "shared_path": "tests/hermes_cli/test_profile_config_inheritance.py"
     },
     {
