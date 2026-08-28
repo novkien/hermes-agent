@@ -6,6 +6,89 @@ import sys
 from hermes_cli.env_loader import load_hermes_dotenv
 
 
+def _seed_inheriting_profile(tmp_path, monkeypatch, *, profile_env: str = ""):
+    root = tmp_path / "hermes"
+    profile = root / "profiles" / "worker"
+    profile.mkdir(parents=True)
+    (root / "config.yaml").write_text(
+        "providers:\n"
+        "  shared:\n"
+        "    base_url: https://provider.example/v1\n"
+        "    api_key: ${env:HERMES_CONFIG_SHARED_API_KEY}\n"
+        "platforms:\n"
+        "  discord:\n"
+        "    token: ${env:ROOT_DISCORD_TOKEN}\n",
+        encoding="utf-8",
+    )
+    (root / ".env").write_text(
+        "HERMES_CONFIG_SHARED_API_KEY=root-shared-key\n"
+        "ROOT_DISCORD_TOKEN=root-discord-token\n"
+        "UNRELATED_ROOT_API_KEY=must-not-load\n",
+        encoding="utf-8",
+    )
+    (profile / "config.yaml").write_text(
+        "model:\n  default: worker-model\n", encoding="utf-8"
+    )
+    (profile / ".env").write_text(profile_env, encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    for name in (
+        "HERMES_CONFIG_SHARED_API_KEY",
+        "ROOT_DISCORD_TOKEN",
+        "UNRELATED_ROOT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return root, profile
+
+
+def test_named_profile_loads_only_env_refs_needed_by_inherited_root_config(
+    tmp_path, monkeypatch
+):
+    """Inherited root config carries its referenced dotenv values with it."""
+    _, profile = _seed_inheriting_profile(tmp_path, monkeypatch)
+
+    load_hermes_dotenv(hermes_home=profile)
+
+    assert os.environ["HERMES_CONFIG_SHARED_API_KEY"] == "root-shared-key"
+    # Root platform wiring is excluded from profile config inheritance.
+    assert "ROOT_DISCORD_TOKEN" not in os.environ
+    # Never union the complete root credential store into a profile process.
+    assert "UNRELATED_ROOT_API_KEY" not in os.environ
+
+    from hermes_cli.config import load_config
+
+    assert load_config()["providers"]["shared"]["api_key"] == "root-shared-key"
+
+
+def test_named_profile_env_overrides_inherited_root_config_env_ref(
+    tmp_path, monkeypatch
+):
+    """A profile can diverge from the shared root-config credential alias."""
+    _, profile = _seed_inheriting_profile(
+        tmp_path,
+        monkeypatch,
+        profile_env="HERMES_CONFIG_SHARED_API_KEY=profile-key\n",
+    )
+
+    load_hermes_dotenv(hermes_home=profile)
+
+    assert os.environ["HERMES_CONFIG_SHARED_API_KEY"] == "profile-key"
+
+
+def test_profile_root_config_opt_out_does_not_load_root_dotenv(
+    tmp_path, monkeypatch
+):
+    """``inherit_root_config: false`` remains a complete isolation boundary."""
+    _, profile = _seed_inheriting_profile(tmp_path, monkeypatch)
+    (profile / "config.yaml").write_text(
+        "inherit_root_config: false\nmodel:\n  default: worker-model\n",
+        encoding="utf-8",
+    )
+
+    load_hermes_dotenv(hermes_home=profile)
+
+    assert "HERMES_CONFIG_SHARED_API_KEY" not in os.environ
+
+
 def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypatch):
     """The post-recovery updater must not remap native vault dependencies."""
     import hermes_cli.env_loader as env_loader
