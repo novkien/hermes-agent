@@ -9,7 +9,7 @@ import sys
 import threading
 from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 from utils import atomic_replace, fast_safe_load
 
 
@@ -362,6 +362,11 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool) -> None:
 
 def _dotenv_values_with_fallback(path: Path) -> dict[str, str]:
     """Parse one dotenv file without exporting its full contents."""
+    # Keep the parser import local: several lightweight gateway/CLI tests
+    # intentionally install a minimal ``dotenv`` shim that only provides the
+    # startup-time ``load_dotenv`` API.
+    from dotenv import dotenv_values
+
     try:
         parsed = dotenv_values(dotenv_path=path, encoding="utf-8-sig")
     except UnicodeDecodeError:
