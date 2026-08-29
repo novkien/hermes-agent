@@ -8261,6 +8261,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     {
                         "chat_id": normalize_telegram_chat_id(chat_id),
                         "video": f,
+                        "filename": os.path.basename(video_path),
                         "caption": caption[:1024] if caption else None,
                         "reply_to_message_id": reply_to_id,
                         "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
