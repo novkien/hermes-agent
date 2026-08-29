@@ -514,6 +514,22 @@
       "shared_path": "tests/gateway/test_telegram_rich_messages.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_video_delivery_copy.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+        "owner_sha": "7f5aa0ded575ecb64372ed4db0e62ecd92281335",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_video_delivery_copy.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "5387e8710e729d0754f0ba37ff29f202808a5c394e630d43f83ef447a82a2157",
+      "shared_path": "tests/gateway/test_telegram_video_delivery_copy.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/gateway/test_topic_policy_local.py",
       "kind": "owner-only-shared-test",
       "lineage": {
@@ -2303,9 +2319,9 @@
   ],
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
-    "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
-    "generated_at": "2026-08-27T02:16:45.088436+00:00",
-    "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
+    "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+    "generated_at": "2026-08-29T18:28:15.121135+00:00",
+    "owner_sha": "7f5aa0ded575ecb64372ed4db0e62ecd92281335",
     "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
   },
   "version": 1
