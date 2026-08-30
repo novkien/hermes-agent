@@ -514,6 +514,38 @@
       "shared_path": "tests/gateway/test_telegram_rich_messages.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_video_delivery_copy.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+        "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_video_delivery_copy.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "b5598d00e3b852757fc33db3140ac0b977516df2fd5c7237ae912d0602fdf85f",
+      "shared_path": "tests/gateway/test_telegram_video_delivery_copy.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_video_delivery_hardening.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+        "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_video_delivery_hardening.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "846d085b9071e56a0e73505fdca1e22a87f2e15004412cf26d89a3b3c3820763",
+      "shared_path": "tests/gateway/test_telegram_video_delivery_hardening.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/gateway/test_topic_policy_local.py",
       "kind": "owner-only-shared-test",
       "lineage": {
@@ -564,6 +596,24 @@
       "runner": "python",
       "sha256": "ca715714f1800f3fc52bd94d306fb51f0954131eb64da580a832ccfb42386ca6",
       "shared_path": "tests/hermes_cli/test_gateway_linger.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_gateway_runtime_health.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
+        "owner_sha": "7be2acb9c1117356729ed740a0fb3803f1a2da20",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/hermes_cli/test_gateway_runtime_health.py::test_runtime_status_running_pid_validates_live_gateway_record"
+      ],
+      "replaced_upstream_nodeids": [
+        "tests/hermes_cli/test_gateway_runtime_health.py::test_runtime_status_running_pid_validates_live_gateway_record"
+      ],
+      "runner": "python",
+      "sha256": "f71b64c58948551fe039438e3a3e6e15eda1802b32cc991ed9ac4d13f356f93b",
+      "shared_path": "tests/hermes_cli/test_gateway_runtime_health.py"
     },
     {
       "case_path": "fork_tests/cases/tests/hermes_cli/test_kanban_block_worker_lifecycle.py",
@@ -2303,9 +2353,9 @@
   ],
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
-    "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
-    "generated_at": "2026-08-27T02:16:45.088436+00:00",
-    "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
+    "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+    "generated_at": "2026-08-29T18:28:15.121135+00:00",
+    "owner_sha": "7f5aa0ded575ecb64372ed4db0e62ecd92281335",
     "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
   },
   "version": 1
