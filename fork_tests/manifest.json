@@ -518,7 +518,7 @@
       "kind": "owner-only-shared-test",
       "lineage": {
         "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
-        "owner_sha": "7f5aa0ded575ecb64372ed4db0e62ecd92281335",
+        "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
         "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
       },
       "nodeids": [
@@ -526,8 +526,24 @@
       ],
       "replaced_upstream_nodeids": [],
       "runner": "python",
-      "sha256": "5387e8710e729d0754f0ba37ff29f202808a5c394e630d43f83ef447a82a2157",
+      "sha256": "b5598d00e3b852757fc33db3140ac0b977516df2fd5c7237ae912d0602fdf85f",
       "shared_path": "tests/gateway/test_telegram_video_delivery_copy.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_video_delivery_hardening.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+        "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_video_delivery_hardening.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "846d085b9071e56a0e73505fdca1e22a87f2e15004412cf26d89a3b3c3820763",
+      "shared_path": "tests/gateway/test_telegram_video_delivery_hardening.py"
     },
     {
       "case_path": "fork_tests/cases/tests/gateway/test_topic_policy_local.py",
