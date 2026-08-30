@@ -20,6 +20,10 @@ export function isWorkerRunning(link) {
   return link?.kind === 'kanban_worker' && link.resolution === 'verified' && link.status === 'running';
 }
 
+export function showWorkerStatusOnSessionCard(link, sessionRunning = false) {
+  return !(sessionRunning && isWorkerRunning(link));
+}
+
 export function mergeTaskChanged(link, event) {
   if (!link || link.resolution !== 'verified') return link;
   const payload = event?.payload || event || {};
