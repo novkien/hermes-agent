@@ -1534,9 +1534,20 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 continue
 
             ext = os.path.splitext(media_path)[1].lower()
+            delivery_path = media_path
+            tmp_delivery = None
             try:
-                with open(media_path, "rb") as f:
+                if ext in _VIDEO_EXTS:
+                    from plugins.platforms.telegram.adapter import (
+                        _prepare_telegram_delivery_video_path,
+                    )
+                    delivery_path, tmp_delivery = await (
+                        _prepare_telegram_delivery_video_path(media_path)
+                    )
+                with open(delivery_path, "rb") as f:
                     media_kwargs = dict(thread_kwargs)
+                    if ext in _VIDEO_EXTS:
+                        media_kwargs["filename"] = os.path.basename(media_path)
                     # Attach the MEDIA:<path> caption to the bubble itself for
                     # captionable kinds (photo/video/document). _tg_caption is
                     # only set for a single captionable file, so this never
@@ -1641,6 +1652,12 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 warning = _sanitize_error_text(f"Failed to send media {media_path}: {e}")
                 logger.error(warning)
                 warnings.append(warning)
+            finally:
+                if tmp_delivery is not None:
+                    from plugins.platforms.telegram.adapter import (
+                        _remove_delivery_video_path,
+                    )
+                    _remove_delivery_video_path(tmp_delivery)
 
         if last_msg is None:
             error = "No deliverable text or media remained after processing MEDIA tags"

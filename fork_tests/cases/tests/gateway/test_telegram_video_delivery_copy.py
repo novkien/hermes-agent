@@ -43,11 +43,11 @@ def _make_adapter() -> TelegramAdapter:
 
 
 def _make_portrait_mp4(path: str) -> None:
-    """Generate a HEVC portrait MP4 (640x832, 1s, moov at end) via ffmpeg."""
+    """Generate a portable portrait MP4 (640x832, 1s, moov at end)."""
     proc = subprocess.run(
         [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
          "-i", "testsrc=size=640x832:rate=30:duration=1",
-         "-c:v", "libx265", "-tag:v", "hvc1", "-pix_fmt", "yuv420p",
+         "-c:v", "mpeg4", "-q:v", "5", "-pix_fmt", "yuv420p",
          "-an", path],
         capture_output=True, timeout=60,
     )
