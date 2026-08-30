@@ -25,10 +25,11 @@ def test_runtime_health_lines_flags_stale_running_with_dead_pid(monkeypatch):
             "gateway_state": "running",
             "pid": 4242,
             "start_time": 111,
-            "updated_at": _iso_age(600),
+            "updated_at": _iso_age(600),  # well past the 120s TTL -> stale
             "active_agents": 0,
         },
     )
+    # Recorded PID is gone (ungraceful kill); no real process is touched.
     monkeypatch.setattr(status_mod, "_pid_exists", lambda pid: False)
     monkeypatch.setattr(status_mod, "_get_process_start_time", lambda pid: None)
 
@@ -38,6 +39,7 @@ def test_runtime_health_lines_flags_stale_running_with_dead_pid(monkeypatch):
     assert len(stale) == 1, lines
     assert "recorded state 'running'" in stale[0]
     assert "recorded process is gone" in stale[0]
+    # The misleading live-state summary must be suppressed.
     assert not any("draining" in ln.lower() for ln in lines), lines
 
 
@@ -79,4 +81,3 @@ def test_runtime_status_running_pid_validates_live_gateway_record(monkeypatch):
     monkeypatch.setattr(status_mod, "_read_process_cmdline", lambda pid: None)
 
     assert status_mod.get_runtime_status_running_pid(runtime) == 12345
-

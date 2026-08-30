@@ -598,6 +598,24 @@
       "shared_path": "tests/hermes_cli/test_gateway_linger.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_gateway_runtime_health.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
+        "owner_sha": "7be2acb9c1117356729ed740a0fb3803f1a2da20",
+        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+      },
+      "nodeids": [
+        "tests/hermes_cli/test_gateway_runtime_health.py::test_runtime_status_running_pid_validates_live_gateway_record"
+      ],
+      "replaced_upstream_nodeids": [
+        "tests/hermes_cli/test_gateway_runtime_health.py::test_runtime_status_running_pid_validates_live_gateway_record"
+      ],
+      "runner": "python",
+      "sha256": "f71b64c58948551fe039438e3a3e6e15eda1802b32cc991ed9ac4d13f356f93b",
+      "shared_path": "tests/hermes_cli/test_gateway_runtime_health.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/hermes_cli/test_kanban_block_worker_lifecycle.py",
       "kind": "owner-only-shared-test",
       "lineage": {
