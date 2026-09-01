@@ -28,6 +28,16 @@ FORK_MANIFEST = Path("fork_tests/manifest.json")
 UPSTREAM_LOCK = Path("fork/upstream-lock.json")
 UPSTREAM_TEST_MANIFEST = Path("fork/manifests/upstream-tests.json")
 
+# Owner-retired upstream surfaces are intentionally absent from this fork and
+# must stay out of regenerated shared-test manifests. ComfyUI is maintained in
+# the private hermes-skills registry, not as a bundled hermes-agent skill.
+_OWNER_RETIRED_SHARED_TEST_PREFIXES = (
+    "skills/creative/comfyui/",
+)
+_OWNER_RETIRED_SHARED_TEST_PATHS = frozenset({
+    "tests/skills/test_comfyui_skill.py",
+})
+
 _FORK_ONLY_PREFIXES = (
     "apps/mission-control/tests/",
     "fork_tests/",
@@ -127,6 +137,14 @@ def is_shared_test_path(value: str) -> bool:
                 or "/tests/" in wrapped
             ),
         )
+    )
+
+
+def is_owner_retired_shared_test_path(value: str) -> bool:
+    """Return whether the owner intentionally retired an upstream test path."""
+    path = safe_relative_path(value)
+    return path in _OWNER_RETIRED_SHARED_TEST_PATHS or path.startswith(
+        _OWNER_RETIRED_SHARED_TEST_PREFIXES
     )
 
 

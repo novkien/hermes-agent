@@ -1,5 +1,5 @@
 {
-  "description": "Exact Git blobs and modes for the shared upstream test surface. Fork-specific behavior lives under fork_tests/cases.",
+  "description": "Exact Git blobs and modes for the retained shared upstream test surface. Owner-retired bundled skill tests are omitted; fork-specific behavior lives under fork_tests/cases.",
   "files": {
     "apps/desktop/e2e/at-rest-connection-token.spec.ts": {
       "mode": "100644",
@@ -5255,54 +5255,6 @@
       "mode": "100644",
       "sha": "dc3820d0e6b1155084a304530db5573fce8fa84e",
       "size": 4274,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/README.md": {
-      "mode": "100644",
-      "sha": "d27fa97e32aa60f1f6c8ad9039c9ca8ce66e0128",
-      "size": 2244,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/conftest.py": {
-      "mode": "100644",
-      "sha": "7014edd7d554c81890c5de1d2ca9f09327059c78",
-      "size": 1528,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/pytest.ini": {
-      "mode": "100644",
-      "sha": "2111fe2122746e946b88c057f4ba086c9527c19d",
-      "size": 132,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/test_check_deps.py": {
-      "mode": "100644",
-      "sha": "30116a7fe7a2d9cbe36310de7dd50895592e16d5",
-      "size": 2362,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/test_cloud_integration.py": {
-      "mode": "100644",
-      "sha": "0ce88efe3c2dc4beb0f65d9cee0641feb054c9a5",
-      "size": 4324,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/test_common.py": {
-      "mode": "100644",
-      "sha": "2c6afdbfc96f4001f4c70ec9475bb441349a3546",
-      "size": 16353,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/test_extract_schema.py": {
-      "mode": "100644",
-      "sha": "c4557ba8caf83358aa9a615e475006bf7eb23d30",
-      "size": 7972,
-      "type": "blob"
-    },
-    "skills/creative/comfyui/tests/test_run_workflow.py": {
-      "mode": "100644",
-      "sha": "ec4091015c2541fdbd9ea2b01798ea0fd9b568d3",
-      "size": 8762,
       "type": "blob"
     },
     "skills/productivity/docx/tests/test_docx_skill.py": {
@@ -20747,12 +20699,6 @@
       "mode": "100644",
       "sha": "ae0590ce78befc3769b7d209cedb2d28bc6ee2b5",
       "size": 4596,
-      "type": "blob"
-    },
-    "tests/skills/test_comfyui_skill.py": {
-      "mode": "100644",
-      "sha": "b1b3e74b55404164742cd3e60eb6729d95cc43a1",
-      "size": 4868,
       "type": "blob"
     },
     "tests/skills/test_competitor_news_monitor_skill.py": {
