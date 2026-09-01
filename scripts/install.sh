@@ -2096,29 +2096,9 @@ SOUL_EOF
 
     log_success "Configuration directory ready: ~/.hermes/"
 
-    # Seed bundled skills into ~/.hermes/skills/ (manifest-based, one-time per skill)
-    if [ "$NO_SKILLS" = true ]; then
-        # Blank-slate install: write the opt-out marker and skip seeding.
-        # skills_sync.py and `hermes update` both honor this marker, so the
-        # default profile stays empty across future updates too.
-        printf '%s\n' \
-            "This profile opted out of bundled-skill seeding (installed with --no-skills)." \
-            "Delete this file to re-enable sync on the next 'hermes update'." \
-            > "$HERMES_HOME/.no-bundled-skills" 2>/dev/null || true
-        log_info "Skipping bundled skills (--no-skills). Wrote $HERMES_HOME/.no-bundled-skills"
-        log_info "  Future 'hermes update' runs will not inject bundled skills. Delete the marker to opt back in."
-    else
-        log_info "Syncing bundled skills to ~/.hermes/skills/ ..."
-        if "$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/tools/skills_sync.py" 2>/dev/null; then
-            log_success "Skills synced to ~/.hermes/skills/"
-        else
-            # Fallback: simple directory copy if Python sync fails
-            if [ -d "$INSTALL_DIR/skills" ] && [ ! "$(ls -A "$HERMES_HOME/skills/" 2>/dev/null | grep -v '.bundled_manifest')" ]; then
-                cp -r "$INSTALL_DIR/skills/"* "$HERMES_HOME/skills/" 2>/dev/null || true
-                log_success "Skills copied to ~/.hermes/skills/"
-            fi
-        fi
-    fi
+    # This owner fork intentionally ships no bundled skills. Profiles discover
+    # owner-managed skills only through their skills.external_dirs policy.
+    log_info "Bundled skill seeding is retired; using configured external skill directories."
 }
 
 find_system_browser() {

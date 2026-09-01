@@ -20,7 +20,7 @@ description: "公开记录 OSINT 调查框架 — SEC EDGAR 文件、USAspending
 | 作者 | Hermes Agent（改编自 ShinMegamiBoson/OpenPlanter，MIT 许可）|
 | 平台 | linux, macos, windows |
 | 标签 | `osint`, `investigation`, `public-records`, `sec`, `sanctions`, `corporate-registry`, `property`, `courts`, `due-diligence`, `journalism` |
-| 相关 skill | [`domain-intel`](/user-guide/skills/optional/research/research-domain-intel), [`arxiv`](/user-guide/skills/bundled/research/research-arxiv) |
+| 相关 skill | [`domain-intel`](/user-guide/skills/optional/research/research-domain-intel), `arxiv` |
 
 ## 参考：完整 SKILL.md
 

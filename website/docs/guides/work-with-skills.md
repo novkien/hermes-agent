@@ -14,7 +14,7 @@ For the full technical reference, see [Skills System](/user-guide/features/skill
 
 ## Finding Skills
 
-Every Hermes installation ships with bundled skills. See what's available:
+See the skills made available by the active profile's local and external directories:
 
 ```bash
 # In any chat session:

@@ -8,18 +8,18 @@ description: "On-demand knowledge documents — progressive disclosure, agent-ma
 
 Skills are on-demand knowledge documents the agent can load when needed. They follow a **progressive disclosure** pattern to minimize token usage and are compatible with the [agentskills.io](https://agentskills.io/specification) open standard.
 
-All skills live in **`~/.hermes/skills/`** — the primary directory and source of truth. On fresh install, bundled skills are copied from the repo. Hub-installed and agent-created skills also go here. The agent can modify or delete any skill.
+Profile-local, Hub-installed, and agent-created skills live in **`~/.hermes/skills/`**. This owner fork ships no bundled skill tree. Owner-managed shared skills are supplied through each profile's **`skills.external_dirs`** configuration, which keeps profile policy separate from Hermes Agent source.
 
 You can also point Hermes at **external skill directories** — additional folders scanned alongside the local one. See [External Skill Directories](#external-skill-directories) below.
 
 See also:
 
-- [Bundled Skills Catalog](/reference/skills-catalog)
+- [Bundled Skills Retirement](/reference/skills-catalog)
 - [Official Optional Skills Catalog](/reference/optional-skills-catalog)
 
-## Starting with a blank slate
+## Bundled-skill compatibility controls
 
-By default every profile is seeded with the bundled skill catalog, and each `hermes update` adds any newly bundled skills. If you want a profile with **no bundled skills** — and that stays empty across updates — you have two paths:
+This owner fork no longer seeds bundled skills. The following controls remain for compatibility with older installations and upstream profile automation, but they cannot restore a bundled skill because this repository contains no bundled source tree:
 
 **At install time** (applies to the default `~/.hermes` profile):
 
@@ -41,10 +41,10 @@ hermes skills opt-out --remove   # also delete UNMODIFIED bundled skills (confir
 hermes skills opt-in --sync      # undo: remove the marker and re-seed now
 ```
 
-All three paths write a `.no-bundled-skills` marker into the profile directory. While the marker is present, the installer, `hermes update`, and any skill sync all skip bundled-skill seeding for that profile. Delete the marker (or run `hermes skills opt-in`) to re-enable.
+These paths write a `.no-bundled-skills` marker into the profile directory. The marker can still protect old deployments, but external skill discovery is controlled independently by `skills.external_dirs`.
 
 :::note Safe by default
-`hermes skills opt-out` only stops *future* seeding — it never deletes anything already on disk. The optional `--remove` flag deletes bundled skills **only** when they are unmodified (byte-identical to the version Hermes installed). Skills you have edited, skills installed from the hub, and skills you wrote yourself are always kept.
+`hermes skills opt-out --remove` can remove pristine copies tracked by a legacy `.bundled_manifest`. Skills you edited, installed from the Hub, or wrote yourself are kept.
 :::
 
 ## Using Skills
@@ -962,41 +962,23 @@ Inside a running session:
 
 Taps are stored in `~/.hermes/skills/.hub/taps.json` (created on demand).
 
-## Bundled skill updates (`hermes skills reset`)
+## Legacy bundled manifests (`hermes skills reset`)
 
-Hermes ships with a set of bundled skills in `skills/` inside the repo. On install and on every `hermes update`, a sync pass copies those into `~/.hermes/skills/` and records a manifest at `~/.hermes/skills/.bundled_manifest` mapping each skill name to the content hash at the time it was synced (the **origin hash**).
-
-On each sync, Hermes recomputes the hash of your local copy and compares it to the origin hash:
-
-- **Unchanged** → safe to pull upstream changes, copy the new bundled version in, record the new origin hash.
-- **Changed** → treated as **user-modified** and skipped forever, so your edits never get stomped.
-
-The protection is good, but it has one sharp edge. If you edit a bundled skill and then later want to abandon your changes and go back to the bundled version by just copy-pasting from `~/.hermes/hermes-agent/skills/`, the manifest still holds the *old* origin hash from whenever the last successful sync ran. Your fresh copy-paste contents (current bundled hash) won't match that stale origin hash, so sync keeps flagging it as user-modified.
-
-`hermes skills reset` is the escape hatch:
+Older installs may still have a `~/.hermes/skills/.bundled_manifest` that records historical profile-local copies. `hermes skills reset` can clear that legacy tracking metadata:
 
 ```bash
-# Safe: clears the manifest entry for this skill. Your current copy is preserved,
-# but the next sync re-baselines against it so future updates work normally.
+# Clears the legacy manifest entry. Your current copy is preserved.
 hermes skills reset google-workspace
-
-# Full restore: also deletes your local copy and re-copies the current bundled
-# version. Use this when you want the pristine upstream skill back.
-hermes skills reset google-workspace --restore
-
-# Non-interactive (e.g. in scripts or TUI mode) — skip the --restore confirmation.
-hermes skills reset google-workspace --restore --yes
 ```
 
 The same command works in chat as a slash command:
 
 ```text
 /skills reset google-workspace
-/skills reset google-workspace --restore
 ```
 
 :::note Profiles
-Each profile has its own `.bundled_manifest` under its own `HERMES_HOME`, so `hermes -p coder skills reset <name>` only affects that profile.
+Each profile has its own legacy `.bundled_manifest` under its own `HERMES_HOME`, so `hermes -p coder skills reset <name>` only affects that profile. `--restore` has no stock source to copy in this owner fork.
 :::
 
 ### Slash commands (inside chat)

@@ -1184,9 +1184,9 @@ Subcommands:
 | `update` | Reinstall hub skills with upstream changes when available. |
 | `audit` | Re-scan installed hub skills. |
 | `uninstall` | Remove a hub-installed skill. |
-| `reset` | Un-stick a bundled skill flagged as `user_modified` by clearing its manifest entry. With `--restore`, also replaces the user copy with the bundled version. |
-| `opt-out` | Stop bundled skills from being seeded into the active profile. Writes a `.no-bundled-skills` marker so the installer, `hermes update`, and any sync skip bundled-skill seeding. Safe by default — nothing on disk is touched. With `--remove`, also deletes already-present bundled skills that are **unmodified** (user-edited, hub-installed, and hand-written skills are never removed; previews and confirms first, `--yes` to skip). |
-| `opt-in` | Undo `opt-out` by removing the `.no-bundled-skills` marker so bundled skills are seeded again on the next `hermes update`. With `--sync`, re-seed immediately. |
+| `reset` | Clear legacy bundled-manifest tracking for a skill. This owner fork has no stock bundled source, so `--restore` cannot restore content. |
+| `opt-out` | Write the legacy `.no-bundled-skills` marker. With `--remove`, it can remove pristine historical copies tracked by the legacy manifest. |
+| `opt-in` | Remove the legacy marker. It does not seed skills in this owner fork; configure `skills.external_dirs` instead. |
 | `publish` | Publish a skill to a registry. |
 | `snapshot` | Export/import skill configurations. |
 | `tap` | Manage custom skill sources. |
@@ -1209,10 +1209,7 @@ hermes skills check
 hermes skills update
 hermes skills config
 hermes skills reset google-workspace
-hermes skills reset google-workspace --restore --yes
-hermes skills opt-out                  # stop future bundled-skill seeding (nothing deleted)
-hermes skills opt-out --remove --yes   # also delete UNMODIFIED bundled skills
-hermes skills opt-in --sync            # undo: remove marker and re-seed now
+hermes skills opt-out --remove --yes   # remove pristine legacy bundled copies
 ```
 
 Notes:

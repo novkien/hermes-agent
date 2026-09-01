@@ -5257,30 +5257,6 @@
       "size": 4274,
       "type": "blob"
     },
-    "skills/productivity/docx/tests/test_docx_skill.py": {
-      "mode": "100644",
-      "sha": "cb5c6aea82ad163de860d908b7ef46ce339e25f2",
-      "size": 21267,
-      "type": "blob"
-    },
-    "skills/productivity/pdf/tests/test_pdf_skill.py": {
-      "mode": "100644",
-      "sha": "2b3da9ea5fda61dd8dc665508f9196851f4b8868",
-      "size": 17433,
-      "type": "blob"
-    },
-    "skills/productivity/powerpoint/tests/test_powerpoint_skill.py": {
-      "mode": "100644",
-      "sha": "a5ccdfa63824f9e49884e73d769f6f3d36cc8c9a",
-      "size": 19524,
-      "type": "blob"
-    },
-    "skills/productivity/xlsx/tests/test_xlsx_skill.py": {
-      "mode": "100644",
-      "sha": "dd56f2fa172fb1970511414907366e1d008747ac",
-      "size": 21956,
-      "type": "blob"
-    },
     "tests-js/allow-scripts-sync.test.ts": {
       "mode": "100644",
       "sha": "0aa8ea6bbb5afa17140a8358f51547039645d8d4",
@@ -20683,28 +20659,10 @@
       "size": 2088,
       "type": "blob"
     },
-    "tests/skills/test_authoring_standards.py": {
-      "mode": "100644",
-      "sha": "d92652d7c857d5daf2f638c3a1ed73c3757ea957",
-      "size": 5119,
-      "type": "blob"
-    },
-    "tests/skills/test_box_skill.py": {
-      "mode": "100644",
-      "sha": "8239a72704e5fd36d69fa1cc0832e960d28e8b1f",
-      "size": 2717,
-      "type": "blob"
-    },
     "tests/skills/test_cloudflare_temporary_deploy_skill.py": {
       "mode": "100644",
       "sha": "ae0590ce78befc3769b7d209cedb2d28bc6ee2b5",
       "size": 4596,
-      "type": "blob"
-    },
-    "tests/skills/test_competitor_news_monitor_skill.py": {
-      "mode": "100644",
-      "sha": "101851e2e6c8343990cd54f48ea9a8a1186b7e0d",
-      "size": 3914,
       "type": "blob"
     },
     "tests/skills/test_darwinian_evolver_skill.py": {
@@ -20713,82 +20671,10 @@
       "size": 2373,
       "type": "blob"
     },
-    "tests/skills/test_document_to_action_items_skill.py": {
-      "mode": "100644",
-      "sha": "376b732e872e4a8c62d4306d7314b366cd0119b0",
-      "size": 2693,
-      "type": "blob"
-    },
-    "tests/skills/test_email_inbox_triage_skill.py": {
-      "mode": "100644",
-      "sha": "7298b0aeccd6b425a526ec6a50800b78535077cc",
-      "size": 2918,
-      "type": "blob"
-    },
-    "tests/skills/test_fetch_transcript.py": {
-      "mode": "100644",
-      "sha": "b114a4e5de2502a0071e8a3624579167e24a16bd",
-      "size": 1906,
-      "type": "blob"
-    },
-    "tests/skills/test_github_credential_token.py": {
-      "mode": "100644",
-      "sha": "433111fcf70990e9636778f7bccf7c4be8a589ed",
-      "size": 3412,
-      "type": "blob"
-    },
-    "tests/skills/test_github_issue_to_pr_skill.py": {
-      "mode": "100644",
-      "sha": "cdbfa95df51522fbd3818b427443eb26b2587015",
-      "size": 3739,
-      "type": "blob"
-    },
-    "tests/skills/test_google_workspace_api.py": {
-      "mode": "100644",
-      "sha": "3f1f9838f238b72dc648e537550314ede4a2a5b8",
-      "size": 6342,
-      "type": "blob"
-    },
-    "tests/skills/test_google_workspace_credential_files.py": {
-      "mode": "100644",
-      "sha": "9138c08fa458fb39ae12fda6cede57e373bfe928",
-      "size": 2618,
-      "type": "blob"
-    },
-    "tests/skills/test_google_workspace_daily_brief_reference.py": {
-      "mode": "100644",
-      "sha": "f7302f3dd06a449cce635269b429bd54a113badf",
-      "size": 1933,
-      "type": "blob"
-    },
-    "tests/skills/test_google_workspace_setup.py": {
-      "mode": "100644",
-      "sha": "385a68fb6c61f894c5fb2d816c31c04ffc0f21fd",
-      "size": 2241,
-      "type": "blob"
-    },
-    "tests/skills/test_google_workspace_setup_deps.py": {
-      "mode": "100644",
-      "sha": "bf776f28f7c811be81b016f6fe43b262494b472a",
-      "size": 7908,
-      "type": "blob"
-    },
-    "tests/skills/test_grounded_citations_skill.py": {
-      "mode": "100644",
-      "sha": "1dd1dd01a637ed4f57d041691485444b011310fd",
-      "size": 25508,
-      "type": "blob"
-    },
     "tests/skills/test_har_derived_api_client_skill.py": {
       "mode": "100644",
       "sha": "f2f1fb18172ac1fe991f74f335c5b9a7404879a8",
       "size": 6411,
-      "type": "blob"
-    },
-    "tests/skills/test_hermes_agent_skill.py": {
-      "mode": "100644",
-      "sha": "a98910a9968be5d06f3c1505cb31a43578e8b351",
-      "size": 2831,
       "type": "blob"
     },
     "tests/skills/test_hyperliquid_skill.py": {
@@ -20803,28 +20689,10 @@
       "size": 5064,
       "type": "blob"
     },
-    "tests/skills/test_meeting_action_items_skill.py": {
-      "mode": "100644",
-      "sha": "54514ccac56cb854714146459360c36c36e26305",
-      "size": 3280,
-      "type": "blob"
-    },
     "tests/skills/test_memento_cards.py": {
       "mode": "100644",
       "sha": "9aeb053b743e60f020929078ac81e7b910edfcd7",
       "size": 10003,
-      "type": "blob"
-    },
-    "tests/skills/test_merge_reconciler_skill.py": {
-      "mode": "100644",
-      "sha": "adb6db068b765cfeac5a42d2814828928cd68561",
-      "size": 3034,
-      "type": "blob"
-    },
-    "tests/skills/test_office_document_skills.py": {
-      "mode": "100644",
-      "sha": "8b145ac151950be0aeb7cd822b4e4e5cd3cd1bc6",
-      "size": 6212,
       "type": "blob"
     },
     "tests/skills/test_openclaw_migration.py": {
@@ -20845,24 +20713,6 @@
       "size": 2170,
       "type": "blob"
     },
-    "tests/skills/test_product_price_monitor_skill.py": {
-      "mode": "100644",
-      "sha": "4151c242fb5813ffc383e093172523dfec286825",
-      "size": 4099,
-      "type": "blob"
-    },
-    "tests/skills/test_sdlc_review_skill.py": {
-      "mode": "100644",
-      "sha": "901e6b3ba482b06728f813dde6323b1ef97bcec1",
-      "size": 3007,
-      "type": "blob"
-    },
-    "tests/skills/test_social_media_content_calendar_skill.py": {
-      "mode": "100644",
-      "sha": "01c45aaafe9af3e4e9a0b3035ae227f4e6481131",
-      "size": 2968,
-      "type": "blob"
-    },
     "tests/skills/test_telephony_skill.py": {
       "mode": "100644",
       "sha": "e34157f39adbbc44fbe48f161a02c12cb0dcba4a",
@@ -20879,24 +20729,6 @@
       "mode": "100644",
       "sha": "dfa60681f40bf66ec578b293694d4c2772e443e7",
       "size": 27084,
-      "type": "blob"
-    },
-    "tests/skills/test_weekly_review_planning_skill.py": {
-      "mode": "100644",
-      "sha": "4fc5fd98b5bad3adf5edb3ecaf8bf86b42edf977",
-      "size": 3997,
-      "type": "blob"
-    },
-    "tests/skills/test_xurl_article_ingestion_docs.py": {
-      "mode": "100644",
-      "sha": "6364b9289776ec3775abefd603f5660377fe0d0d",
-      "size": 882,
-      "type": "blob"
-    },
-    "tests/skills/test_xurl_x_search_routing.py": {
-      "mode": "100644",
-      "sha": "0699b841f91bed6200bffb441b06fd309677c66e",
-      "size": 3026,
       "type": "blob"
     },
     "tests/skills/test_youtube_quiz.py": {
@@ -24349,12 +24181,6 @@
       "size": 2947,
       "type": "blob"
     },
-    "tests/tools/test_skills_sync.py": {
-      "mode": "100644",
-      "sha": "bb55469c4fce0b8fc38e40a9c5a4641d9bd84a93",
-      "size": 45968,
-      "type": "blob"
-    },
     "tests/tools/test_skills_sync_client.py": {
       "mode": "100644",
       "sha": "c967eef187a8399cb1c244399d2b502029865dbf",
@@ -25789,12 +25615,6 @@
       "size": 5685,
       "type": "blob"
     },
-    "tests/website/test_generate_skill_docs.py": {
-      "mode": "100644",
-      "sha": "fca565191902eef3cdff6d2a81d38088e493f873",
-      "size": 4607,
-      "type": "blob"
-    },
     "ui-tui/packages/hermes-ink/src/ink/absolute-in-zero-height-box.test.tsx": {
       "mode": "100644",
       "sha": "b8960e69a1d34b7a2a0fba086290ab9b57842c53",
@@ -26966,7 +26786,7 @@
       "type": "blob"
     }
   },
-  "generated_at": "2026-08-27T03:49:38.963343+00:00",
+  "generated_at": "2026-09-01T18:54:24.055634+00:00",
   "upstream_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
   "version": 1
 }

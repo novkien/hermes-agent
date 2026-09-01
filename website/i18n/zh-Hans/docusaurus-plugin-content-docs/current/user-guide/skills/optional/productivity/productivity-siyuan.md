@@ -21,7 +21,7 @@ description: "通过 curl 调用 SiYuan Note API，在自托管知识库中搜�
 | 许可证 | MIT |
 | 平台 | linux, macos, windows |
 | 标签 | `SiYuan`, `Notes`, `Knowledge Base`, `PKM`, `API` |
-| 相关 skill | [`obsidian`](/user-guide/skills/bundled/note-taking/note-taking-obsidian), [`notion`](/user-guide/skills/bundled/productivity/productivity-notion) |
+| 相关 skill | `obsidian`, `notion` |
 
 ## 参考：完整 SKILL.md
 

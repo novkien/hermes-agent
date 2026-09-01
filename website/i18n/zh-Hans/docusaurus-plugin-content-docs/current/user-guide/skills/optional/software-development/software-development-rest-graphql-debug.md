@@ -20,7 +20,7 @@ description: "调试 REST/GraphQL API：状态码、认证、Schema、复现"
 | 作者 | eren-karakus0 |
 | 许可证 | MIT |
 | 标签 | `api`, `rest`, `graphql`, `http`, `debugging`, `testing`, `curl`, `integration` |
-| 相关 skill | [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging)、[`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development) |
+| 相关 skill | `systematic-debugging`、`test-driven-development` |
 
 ## 参考：完整 SKILL.md
 

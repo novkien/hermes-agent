@@ -3247,39 +3247,9 @@ You are Hermes Agent, an intelligent AI assistant created by Nous Research. You 
     
     Write-Success "Configuration directory ready: $HermesHome"
     
-    # Seed bundled skills into $HermesHome\skills (manifest-based, one-time per skill)
-    Write-Info "Syncing bundled skills to $HermesHome\skills ..."
-    $pythonExe = "$InstallDir\venv\Scripts\python.exe"
-    if (Test-Path $pythonExe) {
-        try {
-            # Force the child python.exe to emit UTF-8 on its stdout/stderr.
-            # On non-UTF-8 Windows locales (CP936/GBK zh-CN) Python defaults
-            # its stream encoding to the active codepage and crashes on glyphs
-            # like the checkmark (U+2713) that the codepage can't encode; the
-            # resulting non-UTF-8 bytes break this script's JSON result frame on
-            # stdout and abort the config-templates stage. Scope to this call
-            # only. (Comment kept ASCII per this file's PS 5.1 contract above.)
-            $prevPythonioencoding = $env:PYTHONIOENCODING
-            $prevPythonutf8 = $env:PYTHONUTF8
-            $env:PYTHONIOENCODING = "utf-8"
-            $env:PYTHONUTF8 = "1"
-            try {
-                & $pythonExe "$InstallDir\tools\skills_sync.py" 2>$null
-            } finally {
-                $env:PYTHONIOENCODING = $prevPythonioencoding
-                $env:PYTHONUTF8 = $prevPythonutf8
-            }
-            Write-Success "Skills synced to $HermesHome\skills"
-        } catch {
-            # Fallback: simple directory copy
-            $bundledSkills = "$InstallDir\skills"
-            $userSkills = "$HermesHome\skills"
-            if ((Test-Path $bundledSkills) -and -not (Get-ChildItem $userSkills -Exclude '.bundled_manifest' -ErrorAction SilentlyContinue)) {
-                Copy-Item -Path "$bundledSkills\*" -Destination $userSkills -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Success "Skills copied to $HermesHome\skills"
-            }
-        }
-    }
+    # This owner fork intentionally ships no bundled skills. Profiles discover
+    # owner-managed skills only through their skills.external_dirs policy.
+    Write-Info "Bundled skill seeding is retired; using configured external skill directories."
 }
 
 function Install-NodeDeps {

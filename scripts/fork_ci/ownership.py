@@ -29,13 +29,40 @@ UPSTREAM_LOCK = Path("fork/upstream-lock.json")
 UPSTREAM_TEST_MANIFEST = Path("fork/manifests/upstream-tests.json")
 
 # Owner-retired upstream surfaces are intentionally absent from this fork and
-# must stay out of regenerated shared-test manifests. ComfyUI is maintained in
-# the private hermes-skills registry, not as a bundled hermes-agent skill.
+# must stay out of regenerated shared-test manifests. Owner-managed skills live
+# in novkien/hermes-skills and are loaded through profile external_dirs; this
+# fork intentionally ships no bundled skill source tree.
 _OWNER_RETIRED_SHARED_TEST_PREFIXES = (
-    "skills/creative/comfyui/",
+    "skills/",
 )
 _OWNER_RETIRED_SHARED_TEST_PATHS = frozenset({
     "tests/skills/test_comfyui_skill.py",
+    "tests/skills/test_authoring_standards.py",
+    "tests/skills/test_box_skill.py",
+    "tests/skills/test_competitor_news_monitor_skill.py",
+    "tests/skills/test_document_to_action_items_skill.py",
+    "tests/skills/test_email_inbox_triage_skill.py",
+    "tests/skills/test_fetch_transcript.py",
+    "tests/skills/test_github_credential_token.py",
+    "tests/skills/test_github_issue_to_pr_skill.py",
+    "tests/skills/test_google_workspace_api.py",
+    "tests/skills/test_google_workspace_credential_files.py",
+    "tests/skills/test_google_workspace_daily_brief_reference.py",
+    "tests/skills/test_google_workspace_setup.py",
+    "tests/skills/test_google_workspace_setup_deps.py",
+    "tests/skills/test_grounded_citations_skill.py",
+    "tests/skills/test_hermes_agent_skill.py",
+    "tests/skills/test_meeting_action_items_skill.py",
+    "tests/skills/test_merge_reconciler_skill.py",
+    "tests/skills/test_office_document_skills.py",
+    "tests/skills/test_product_price_monitor_skill.py",
+    "tests/skills/test_sdlc_review_skill.py",
+    "tests/skills/test_social_media_content_calendar_skill.py",
+    "tests/skills/test_weekly_review_planning_skill.py",
+    "tests/skills/test_xurl_article_ingestion_docs.py",
+    "tests/skills/test_xurl_x_search_routing.py",
+    "tests/tools/test_skills_sync.py",
+    "tests/website/test_generate_skill_docs.py",
 })
 
 _FORK_ONLY_PREFIXES = (
