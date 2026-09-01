@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-09-01T18:54:24.055634+00:00",
+  "generated_at": "2026-09-01T20:30:41.807758+00:00",
   "ref": "main",
   "repository": "NousResearch/hermes-agent",
-  "sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
+  "sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
   "shared_test_manifest": "fork/manifests/upstream-tests.json",
   "version": 1
 }

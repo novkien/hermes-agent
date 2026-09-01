@@ -7,7 +7,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_artifact_filesystem_contract.py"
@@ -23,7 +23,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_context_breakdown.py::test_context_details_measures_live_volatile_skills_index",
@@ -40,7 +40,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_org_skill_namespace.py::TestListingCollisionsAndLabels::test_org_skill_listed_with_provenance_tag"
@@ -58,7 +58,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_plugin_prompt_sections.py"
@@ -76,7 +76,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_project_skills.py::test_project_skill_index_respects_enabled_allowlist"
@@ -92,7 +92,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_prompt_builder.py::TestBuildSkillsSystemPrompt::test_invalid_visibility_mode_is_rejected",
@@ -121,7 +121,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_session_event_relay.py"
@@ -137,7 +137,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_skill_artifact_contracts.py"
@@ -153,7 +153,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_skill_context.py"
@@ -169,7 +169,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/agent/test_system_prompt.py::TestCodingContextBlock::test_absent_when_off",
@@ -259,7 +259,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_73771_media_resend_dedup.py::test_media_tag_plus_bare_path_is_not_duplicated"
@@ -275,7 +275,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_active_session_text_merge.py::test_a2a_handoff_acknowledges_queue_and_skips_busy_interceptors",
@@ -308,7 +308,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_agent_cache.py::TestAgentConfigSignature::test_skills_mode_change_busts_cache",
@@ -325,7 +325,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_kanban_notifier.py::test_default_transport_fallback_requires_provenance_marker"
@@ -341,7 +341,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_pii_redaction.py::TestBuildSessionContextPromptRedaction::test_home_channel_routing_ids_preserved_with_redaction"
@@ -357,7 +357,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_prompt_tail_freeze.py::TestEphemeralChangeKeyParity::test_redact_pii_flip_changes_key"
@@ -375,7 +375,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_runtime_footer.py::test_telegram_footer_divider_for_joined_and_trailing_paths",
@@ -392,7 +392,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_session_api.py::test_capabilities_advertises_session_control_surface",
@@ -455,7 +455,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_session_env.py::test_transport_profile_clear_masks_stale_environment"
@@ -471,7 +471,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_session_events.py"
@@ -487,7 +487,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_session_info.py::TestFormatSessionInfo::test_optional_new_session_id_is_first_line"
@@ -503,7 +503,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_telegram_rich_messages.py::test_horizontal_rule_footer_uses_rich_send"
@@ -519,7 +519,7 @@
       "lineage": {
         "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
         "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_telegram_video_delivery_copy.py"
@@ -535,7 +535,7 @@
       "lineage": {
         "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
         "owner_sha": "5a516e92189f1bb12784334f25e7b43618026394",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_telegram_video_delivery_hardening.py"
@@ -551,7 +551,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/gateway/test_topic_policy_local.py"
@@ -567,7 +567,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_gateway.py::test_systemd_install_checks_linger_status"
@@ -585,7 +585,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_gateway_linger.py::test_systemd_install_calls_linger_helper"
@@ -603,7 +603,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "7be2acb9c1117356729ed740a0fb3803f1a2da20",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_gateway_runtime_health.py::test_runtime_status_running_pid_validates_live_gateway_record"
@@ -621,7 +621,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_kanban_block_worker_lifecycle.py"
@@ -637,7 +637,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_kanban_core_functionality.py::test_child_inherits_notification_transport_provenance"
@@ -653,7 +653,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_kanban_worker_session_source.py::test_worker_spawn_tags_session_source_kanban"
@@ -671,7 +671,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_mission_control.py"
@@ -687,7 +687,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_profile_config_inheritance.py"
@@ -703,7 +703,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/hermes_cli/test_prompt_size.py::test_skills_breakdown_attributes_per_skill_invisible_lines"
@@ -721,7 +721,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_compression_persistence.py::TestStoredPromptCwdDrift::test_built_prompt_contains_current_date_line"
@@ -739,7 +739,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_custom_provider_preserve_thinking.py"
@@ -755,7 +755,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_kanban_terminal_handoff_exit.py"
@@ -771,7 +771,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_run_agent.py::test_direct_session_db_flushes_share_marker_claim"
@@ -792,7 +792,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_steer.py::TestActiveTurnRedirect::test_cancels_only_an_active_model_request",
@@ -879,7 +879,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_tool_batch_segmentation.py::TestPathCanonicalization::test_case_insensitive_paths_overlap_windows",
@@ -955,7 +955,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/run_agent/test_tool_call_incremental_persistence.py::test_terminal_kanban_run_skips_remaining_sequential_tools"
@@ -971,7 +971,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/scripts/test_audit_pr_attribution.py"
@@ -987,7 +987,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/test_hermes_state.py::TestFTS5Search::test_search_projection_skips_context_enrichment_queries"
@@ -1005,7 +1005,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/test_tui_gateway_server.py::TestResolveRuntimeWithFallback::test_auth_error_all_fallbacks_fail_raises",
@@ -1666,7 +1666,6 @@
         "tests/test_tui_gateway_server.py::test_clear_pending_without_sid_clears_all",
         "tests/test_tui_gateway_server.py::test_close_session_by_id_is_idempotent_and_full",
         "tests/test_tui_gateway_server.py::test_close_sessions_for_transport_closes_flagged_repoints_rest",
-        "tests/test_tui_gateway_server.py::test_close_sessions_for_transport_skips_rebound_session",
         "tests/test_tui_gateway_server.py::test_close_transport_detaches_when_no_viewers_remain",
         "tests/test_tui_gateway_server.py::test_close_transport_rebinds_session_to_remaining_viewer",
         "tests/test_tui_gateway_server.py::test_close_transport_skips_dead_remaining_viewers",
@@ -2213,7 +2212,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tools/test_execution_flag_detection.py::test_real_binaries_execute_leading_dash_program_payload"
@@ -2231,7 +2230,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tools/test_kanban_tools.py::test_kanban_tools_follow_explicit_session_toolset_grant",
@@ -2248,7 +2247,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tools/test_mcp_tool.py::TestLoadMCPConfig::test_global_parallel_default_applies_without_overriding_server_policy",
@@ -2266,7 +2265,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tools/test_skill_linter.py::test_description_too_long_is_warning"
@@ -2284,7 +2283,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_edit_description_within_prompt_budget_needs_no_preview"
@@ -2302,7 +2301,7 @@
       "lineage": {
         "common_base_sha": "1bbb6e5bce56e721ab685af4cd87df21bbff4d35",
         "owner_sha": "6f04871ef0b1328bb5a40dcd2407cb3a4107b88d",
-        "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
       },
       "nodeids": [
         "tests/tui_gateway/test_goal_command.py::test_active_goal_retries_once_without_judging_failed_turn",
