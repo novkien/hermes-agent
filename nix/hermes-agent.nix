@@ -60,11 +60,6 @@ let
     inherit hermesNpmLib;
   };
 
-  bundledSkills = lib.cleanSourceWith {
-    src = ../skills;
-    filter = path: _type: !(lib.hasInfix "/index-cache/" path) && !(lib.hasInfix "/__pycache__/" path);
-  };
-
   # Optional skills are NOT in the wheel (pythonSrc excludes them, see
   # lib.nix) — the wrapper exposes them via HERMES_OPTIONAL_SKILLS, the
   # same mechanism Homebrew packaging uses.
@@ -173,7 +168,6 @@ stdenv.mkDerivation (finalAttrs: {
     # wrapper env vars just hold paths.  Symlinking keeps this derivation
     # near-instant when only the venv changed, with an identical closure.
     mkdir -p $out/share/hermes-agent $out/bin
-    ln -s ${bundledSkills} $out/share/hermes-agent/skills
     ln -s ${bundledOptionalSkills} $out/share/hermes-agent/optional-skills
     ln -s ${bundledPlugins} $out/share/hermes-agent/plugins
     ln -s ${bundledLocales} $out/share/hermes-agent/locales
@@ -185,7 +179,6 @@ stdenv.mkDerivation (finalAttrs: {
       (name: ''
         makeWrapper ${hermesVenv}/bin/${name} $out/bin/${name} \
           --suffix PATH : "${runtimePath}" \
-          --set HERMES_BUNDLED_SKILLS $out/share/hermes-agent/skills \
           --set HERMES_OPTIONAL_SKILLS $out/share/hermes-agent/optional-skills \
           --set HERMES_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
           --set HERMES_BUNDLED_LOCALES $out/share/hermes-agent/locales \

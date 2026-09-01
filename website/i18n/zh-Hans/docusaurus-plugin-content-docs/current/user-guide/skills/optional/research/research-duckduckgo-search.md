@@ -21,7 +21,7 @@ description: "通过 DuckDuckGo 免费搜索网络 — 文本、新闻、图片�
 | 许可证 | MIT |
 | 平台 | linux, macos, windows |
 | 标签 | `search`, `duckduckgo`, `web-search`, `free`, `fallback` |
-| 相关 skill | [`arxiv`](/user-guide/skills/bundled/research/research-arxiv) |
+| 相关 skill | `arxiv` |
 
 ## 参考：完整 SKILL.md
 

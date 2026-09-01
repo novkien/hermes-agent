@@ -172,7 +172,7 @@ DOC_EXTS = (".md", ".mdx")
 # Per-skill pages are generated from the skill tree and summarized by the two
 # catalog reference pages. Listing ~195 of them would bury the product docs in
 # the index and add ~1.4 MB of duplicative material to llms-full.txt.
-SKILL_CATALOG = ("user-guide/skills/bundled", "user-guide/skills/optional")
+SKILL_CATALOG = ("user-guide/skills/optional",)
 
 # Where a page nobody curated goes. First match wins, so a narrower prefix must
 # precede the tree containing it. Anything matching nothing lands in

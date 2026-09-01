@@ -513,15 +513,15 @@ grep -H 'TELEGRAM_BOT_TOKEN\|DISCORD_BOT_TOKEN' \
 
 ## Updating the code
 
-`hermes update` pulls the latest code once and syncs new bundled skills into
-every profile:
+`hermes update` pulls the latest code once. This owner fork does not seed
+skills into profiles; external skill policy remains unchanged:
 
 ```bash
 hermes update
 hermes-gateways restart
 ```
 
-User-modified skills are never overwritten.
+Profile-local and external skills are never overwritten by the code update.
 
 ## Troubleshooting
 
