@@ -21,7 +21,7 @@ Plan and run multi-agent video production pipelines.
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `video`, `kanban`, `multi-agent`, `orchestration`, `production-pipeline` |
-| Related skills | `ascii-video`, `manim-video`, `p5js`, `touchdesigner-mcp`, [`pixel-art`](/docs/user-guide/skills/optional/creative/creative-pixel-art), `ascii-art`, `songwriting-and-ai-music`, [`heartmula`](/docs/user-guide/skills/optional/creative/creative-heartmula), `songsee`, `youtube-content`, `claude-design`, `excalidraw`, `architecture-diagram`, [`concept-diagrams`](/docs/user-guide/skills/optional/creative/creative-concept-diagrams), [`baoyu-comic`](/docs/user-guide/skills/optional/creative/creative-baoyu-comic), `baoyu-infographic`, `humanizer`, `gif-search`, [`meme-generation`](/docs/user-guide/skills/optional/creative/creative-meme-generation) |
+| Related skills | `ascii-video`, `manim-video`, `p5js`, [`touchdesigner-mcp`](/docs/user-guide/skills/optional/creative/creative-touchdesigner-mcp), [`pixel-art`](/docs/user-guide/skills/optional/creative/creative-pixel-art), [`ascii-art`](/docs/user-guide/skills/optional/creative/creative-ascii-art), `songwriting-and-ai-music`, [`heartmula`](/docs/user-guide/skills/optional/creative/creative-heartmula), `songsee`, `youtube-content`, `claude-design`, [`excalidraw`](/docs/user-guide/skills/optional/creative/creative-excalidraw), `architecture-diagram`, [`concept-diagrams`](/docs/user-guide/skills/optional/creative/creative-concept-diagrams), [`baoyu-comic`](/docs/user-guide/skills/optional/creative/creative-baoyu-comic), `baoyu-infographic`, `humanizer`, `gif-search`, [`meme-generation`](/docs/user-guide/skills/optional/creative/creative-meme-generation) |
 
 ## Reference: full SKILL.md
 

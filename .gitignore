@@ -101,11 +101,12 @@ apps/desktop/src/**/*.d.ts
 !apps/desktop/src/global.d.ts
 !apps/desktop/src/vite-env.d.ts
 
-# Repo-root build/debug artifacts that must never be committed
+# Build/debug artifacts that must never be committed
 /log.txt
 /sqlite_leak_fix.png
 /*.png.bak
-/default.tar.gz
+*.tar.gz
+*.tgz
 apps/shared/src/**/*.js
 apps/shared/src/**/*.js.map
 apps/shared/src/**/*.d.ts
@@ -221,3 +222,7 @@ native/fts5_cjk/*.so
 # Local ComfyUI request/response scratch captures. These may contain generated
 # graphs or media-job payloads and are runtime evidence, never repository source.
 /.scratch-comfyui-*/
+.skills_prompt_snapshot.json
+
+# Disposable profile created by scripts/probe_active_session_exclusivity.py
+.probe-home/
