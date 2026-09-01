@@ -1,6 +1,6 @@
 """CI enforcement of the skill authoring standards (AGENTS.md hardline).
 
-Every bundled (skills/) and optional (optional-skills/) SKILL.md must satisfy
+Every optional (optional-skills/) SKILL.md must satisfy
 the programmatically-checkable subset of the authoring standards. Judgment
 calls (tier placement, router-skill smell, prose quality) stay with review;
 everything here is mechanical.
@@ -31,10 +31,7 @@ GRANDFATHER: dict[str, set[str]] = {
 
 
 def _skill_paths():
-    return sorted(
-        list(REPO.glob("skills/**/SKILL.md"))
-        + list(REPO.glob("optional-skills/**/SKILL.md"))
-    )
+    return sorted(REPO.glob("optional-skills/**/SKILL.md"))
 
 
 def _rel(p: Path) -> str:
@@ -59,24 +56,11 @@ def _frontmatter(p: Path):
     return fm, content
 
 
-ALL_SKILL_NAMES = None
-
-
-def _all_names():
-    global ALL_SKILL_NAMES
-    if ALL_SKILL_NAMES is None:
-        names = set()
-        for p in _skill_paths():
-            names.add(p.parent.name)
-        ALL_SKILL_NAMES = names
-    return ALL_SKILL_NAMES
-
-
 def test_at_least_the_expected_population():
     # sanity: the globs actually find the trees (not a count snapshot)
     paths = _skill_paths()
     assert any("optional-skills" in str(p) for p in paths)
-    assert any(str(p.parent).startswith(str(REPO / "skills")) for p in paths)
+    assert not (REPO / "skills").exists()
 
 
 @pytest.mark.parametrize("p", _params())
@@ -116,14 +100,14 @@ def test_description_hardline(p):
 
 
 @pytest.mark.parametrize("p", _params())
-def test_related_skills_resolve(p):
+def test_related_skills_are_well_formed(p):
     fm, _ = _frontmatter(p)
     hermes = (fm.get("metadata") or {}).get("hermes") or {}
-    dangling = [
-        rs for rs in (hermes.get("related_skills") or []) if rs not in _all_names()
-    ]
-    if dangling and not _grandfathered(p, "related"):
-        pytest.fail(f"{_rel(p)}: dangling related_skills: {dangling}")
+    related = hermes.get("related_skills") or []
+    assert isinstance(related, list), f"{_rel(p)}: related_skills must be a list"
+    invalid = [rs for rs in related if not isinstance(rs, str) or not rs.strip()]
+    if invalid and not _grandfathered(p, "related"):
+        pytest.fail(f"{_rel(p)}: invalid related_skills entries: {invalid}")
 
 
 @pytest.mark.parametrize("p", _params())

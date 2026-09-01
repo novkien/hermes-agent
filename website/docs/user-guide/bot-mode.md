@@ -33,7 +33,7 @@ Hit **New Agent** in the roster. The quick path is three fields — **Name**, **
 An **Advanced** disclosure opens the full capabilities surface:
 
 - **Clone from an existing profile** — start from another Bot's config, skills, SOUL, and memory, or pick **Fresh profile** for a clean start.
-- **Create empty** — skip the bundled skills entirely for a minimal profile.
+- **Create empty** — retain the legacy no-bundled-skills marker for compatibility; this owner fork seeds no bundled skills either way.
 - **Model & provider pin** — give the Bot its own model. Any provider/model pair Hermes knows about works, and different Bots can run on different models side by side. Leave it unset to inherit from the launch profile.
 - **Custom SOUL.md** — the Bot's persona and standing instructions.
 - **Per-skill, per-toolset, and per-MCP-server enablement** — tick exactly the capabilities this specialist needs.

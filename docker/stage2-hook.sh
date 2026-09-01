@@ -635,16 +635,8 @@ if [ ! -f "$HERMES_HOME/gateway_state.json" ] && \
     fi
 fi
 
-# --- Sync bundled skills ---
-# Invoke the venv's python by absolute path so we don't need a `sh -c`
-# wrapper to source the activate script. This is safe because
-# skills_sync.py doesn't depend on any environment exports beyond what
-# the python binary's own bin-stub already sets up (sys.path is rooted
-# at the venv's site-packages by virtue of running .venv/bin/python).
-if [ -d "$INSTALL_DIR/skills" ]; then
-    as_hermes "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/tools/skills_sync.py" \
-        || echo "[stage2] Warning: skills_sync.py failed; continuing"
-fi
+# The owner fork ships no bundled skills. Container profiles use configured
+# external skill directories, matching host installs.
 
 # --- Discover agent-browser's Chromium binary ---
 # The image's Dockerfile runs `npx playwright install chromium`, which

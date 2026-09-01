@@ -294,7 +294,7 @@ Then in the CLI: `/voice on`. Press `Ctrl+B` to record. See [Voice Mode](../user
 
 Skills are on-demand instruction documents that teach Hermes how to do a specific task — deploy to Kubernetes, open a GitHub PR, fine-tune a model, search for GIFs. Each is a `SKILL.md` file with a name, a description, and a step-by-step procedure. The agent reads the short descriptions for free and only loads a skill's full content when a task actually calls for it, so adding skills doesn't bloat every request.
 
-Hermes ships with a catalog of bundled skills already installed in `~/.hermes/skills/`. You can add more from the Skills Hub, or write your own.
+This owner fork ships no bundled skills. Profiles load owner-managed shared skills from their configured `skills.external_dirs`; you can also install skills from the Skills Hub or write your own.
 
 **Browse and install from the hub:**
 
@@ -313,7 +313,7 @@ The install argument is a `source/path` slug from the hub — `openai/skills/k8s
 /k8s                                       # load it and let Hermes ask what you need
 ```
 
-This works in the CLI and in any connected messaging platform. You don't have to install everything up front — the agent picks the right bundled skill on its own during normal conversation when a task matches one.
+This works in the CLI and in any connected messaging platform. The agent picks the right available local or external skill during normal conversation when a task matches one.
 
 See [Skills System](../user-guide/features/skills.md) for writing your own, external skill directories, and the full hub source list.
 

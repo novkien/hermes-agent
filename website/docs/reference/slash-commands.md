@@ -11,7 +11,7 @@ Hermes has two slash-command surfaces, both driven by a central `COMMAND_REGISTR
 - **Interactive CLI slash commands** — dispatched by `cli.py`, with autocomplete from the registry
 - **Messaging slash commands** — dispatched by `gateway/run.py`, with help text and platform menus generated from the registry
 
-Installed skills are also exposed as dynamic slash commands on both surfaces. That includes bundled skills like `/plan`, which opens plan mode and saves markdown plans under `.hermes/plans/` relative to the active workspace/backend working directory.
+Available local and external skills are also exposed as dynamic slash commands on both surfaces. For example, a profile that enables the external `plan` skill gets `/plan`, which opens plan mode and saves markdown plans under `.hermes/plans/` relative to the active workspace/backend working directory.
 
 ## Permissions and admin/user split
 

@@ -523,16 +523,11 @@ class TestSyncSkills:
 
 
 class TestGetBundledDir:
-    def test_env_var_override_with_default_fallback(self, tmp_path, monkeypatch):
+    def test_owner_fork_ignores_legacy_env_override(self, tmp_path, monkeypatch):
         custom_dir = tmp_path / "custom_skills"
         custom_dir.mkdir()
         monkeypatch.setenv("HERMES_BUNDLED_SKILLS", str(custom_dir))
-        assert _get_bundled_dir() == custom_dir
-
-        # Empty or unset falls back to the relative path from __file__.
-        monkeypatch.setenv("HERMES_BUNDLED_SKILLS", "")
-        assert _get_bundled_dir().name == "skills"
-        monkeypatch.delenv("HERMES_BUNDLED_SKILLS", raising=False)
+        assert _get_bundled_dir() != custom_dir
         assert _get_bundled_dir().name == "skills"
 
 

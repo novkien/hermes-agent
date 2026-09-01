@@ -29,10 +29,11 @@ UPSTREAM_LOCK = Path("fork/upstream-lock.json")
 UPSTREAM_TEST_MANIFEST = Path("fork/manifests/upstream-tests.json")
 
 # Owner-retired upstream surfaces are intentionally absent from this fork and
-# must stay out of regenerated shared-test manifests. ComfyUI is maintained in
-# the private hermes-skills registry, not as a bundled hermes-agent skill.
+# must stay out of regenerated shared-test manifests. Owner-managed skills live
+# in novkien/hermes-skills and are loaded through profile external_dirs; this
+# fork intentionally ships no bundled skill source tree.
 _OWNER_RETIRED_SHARED_TEST_PREFIXES = (
-    "skills/creative/comfyui/",
+    "skills/",
 )
 _OWNER_RETIRED_SHARED_TEST_PATHS = frozenset({
     "tests/skills/test_comfyui_skill.py",

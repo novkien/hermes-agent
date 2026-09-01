@@ -5,7 +5,7 @@ description: "Set up a dedicated mailbox your agent can read and send from using
 
 # Give Your Agent Its Own Email Address
 
-A dedicated email address turns your agent into something you (and services) can email: newsletters it summarises, receipts it files, booking confirmations it tracks, and outbound mail it sends on your behalf. This guide sets that up with the bundled [Himalaya email skill](../user-guide/skills/bundled/email/email-himalaya.md), which drives the `himalaya` CLI over IMAP/SMTP from the agent's terminal tools.
+A dedicated email address turns your agent into something you (and services) can email: newsletters it summarises, receipts it files, booking confirmations it tracks, and outbound mail it sends on your behalf. This guide sets that up with an externally managed `himalaya` skill, which drives the `himalaya` CLI over IMAP/SMTP from the agent's terminal tools.
 
 :::info Two different email features
 This is **not** the same as the [Email gateway adapter](../user-guide/messaging/email.md), which lets people chat with Hermes *by* emailing it (send a mail, get a reply in-thread). This guide is about the agent *operating a mailbox* — reading, searching, composing, and organising mail as part of its tasks. You can run both, ideally on separate accounts.
@@ -60,7 +60,7 @@ Store the app password in a file readable only by your user (`chmod 600`), or us
 himalaya envelope list
 ```
 
-Once `himalaya` works from your own shell, the agent can use it too — the bundled skill teaches it the commands, so "check the agent inbox and summarise anything new" works in any chat.
+Once `himalaya` works from your own shell, an enabled external `himalaya` skill teaches the agent the commands, so "check the agent inbox and summarise anything new" works in that profile.
 
 ## 3. Poll the inbox on a schedule
 
@@ -87,7 +87,7 @@ Email is an unauthenticated inbound channel — anyone can write to the agent's 
 
 ## See also
 
-- [Himalaya skill reference](../user-guide/skills/bundled/email/email-himalaya.md) — full command set the agent uses
+- Your configured external skill registry — source of the `himalaya` skill definition the agent uses
 - [Email gateway adapter](../user-guide/messaging/email.md) — chat with Hermes over email instead
 - [Automate with Cron](automate-with-cron.md) — scheduling patterns
 - [Security](../user-guide/security.md) — the wider prompt-injection and credential-handling picture

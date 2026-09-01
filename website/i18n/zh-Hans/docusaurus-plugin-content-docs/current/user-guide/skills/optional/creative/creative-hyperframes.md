@@ -21,7 +21,7 @@ description: "使用 HyperFrames 创建基于 HTML 的视频合成、动画标�
 | 许可证 | Apache-2.0 |
 | 平台 | linux, macos, windows |
 | 标签 | `creative`, `video`, `animation`, `html`, `gsap`, `motion-graphics` |
-| 相关技能 | [`manim-video`](/user-guide/skills/bundled/creative/creative-manim-video), [`meme-generation`](/user-guide/skills/optional/creative/creative-meme-generation) |
+| 相关技能 | `manim-video`, [`meme-generation`](/user-guide/skills/optional/creative/creative-meme-generation) |
 
 ## 参考：完整 SKILL.md
 

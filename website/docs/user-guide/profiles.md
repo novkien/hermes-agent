@@ -38,7 +38,7 @@ Quickest setup: run `hermes setup --portal` inside the new profile to wire up mo
 hermes profile create mybot
 ```
 
-Creates a fresh profile with bundled skills seeded. Run `mybot setup` to configure API keys, model, and gateway tokens.
+Creates a fresh profile without seeded skills. Configure `skills.external_dirs` for its intended role, then run `mybot setup` to configure API keys, model, and gateway tokens.
 
 If you plan to use this profile as a kanban worker (or want the kanban orchestrator to route work to it), pass `--description "<role>"` at create time so the orchestrator knows what it's good at:
 
@@ -225,15 +225,15 @@ to edit a profile from the dashboard, use the switcher instead.
 
 ## Updating
 
-`hermes update` pulls code once (shared) and syncs new bundled skills to **all** profiles automatically:
+`hermes update` pulls shared code once. It does not seed skills into profiles in this owner fork; each profile continues to resolve its configured external directories:
 
 ```bash
 hermes update
 # → Code updated (12 commits)
-# → Skills synced: default (up to date), coder (+2 new), assistant (+2 new)
+# → Code and gateways updated; profile skill policy unchanged
 ```
 
-User-modified skills are never overwritten.
+Profile-local and externally managed skills are never overwritten by the code update.
 
 ## Managing profiles
 

@@ -47,16 +47,11 @@ def test_author_credits_human_first():
     assert "benbarclay" in fm["author"]
 
 
-def test_related_skills_resolve_in_repo():
+def test_related_skills_are_well_formed_for_external_registry():
     fm, _ = _frontmatter_and_body()
-    repo_root = SKILL_PATH.parents[3]
-    for name in fm["metadata"]["hermes"]["related_skills"]:
-        hits = (
-            list(repo_root.glob(f"skills/*/{name}/SKILL.md"))
-            + list(repo_root.glob(f"optional-skills/*/{name}/SKILL.md"))
-            + list(repo_root.glob(f"skills/*/*/{name}/SKILL.md"))
-        )
-        assert hits, f"related_skills entry does not resolve in-repo: {name}"
+    related = fm["metadata"]["hermes"]["related_skills"]
+    assert isinstance(related, list)
+    assert all(isinstance(name, str) and name.strip() for name in related)
 
 
 def test_no_phantom_skill_references():

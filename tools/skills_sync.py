@@ -45,7 +45,7 @@ for _stream in (sys.stdout, sys.stderr):
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except (ValueError, TypeError):
             pass
-from hermes_constants import get_bundled_skills_dir, get_hermes_home, get_optional_skills_dir
+from hermes_constants import get_hermes_home, get_optional_skills_dir
 from agent.skill_utils import is_excluded_skill_path
 from typing import Dict, List, Optional, Set, Tuple
 from utils import atomic_replace, atomic_write_text
@@ -115,12 +115,15 @@ def _essential_names() -> frozenset:
 
 
 def _get_bundled_dir() -> Path:
-    """Locate the bundled skills/ directory.
+    """Return the retired in-repository bundled source path.
 
-    Checks HERMES_BUNDLED_SKILLS env var first (set by Nix wrapper),
-    then falls back to the relative path from this source file.
+    The owner fork intentionally ignores ``HERMES_BUNDLED_SKILLS`` so an old
+    wrapper or ambient environment cannot re-enable stale skill seeding. The
+    repository contains no ``skills/`` tree, therefore production sync is a
+    clean no-op. Tests patch this locator to exercise the legacy migration
+    engine against temporary fixtures.
     """
-    return get_bundled_skills_dir(Path(__file__).parent.parent / "skills")
+    return Path(__file__).parent.parent / "skills"
 
 
 def _get_optional_dir() -> Path:

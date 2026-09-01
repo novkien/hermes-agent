@@ -5257,30 +5257,6 @@
       "size": 4274,
       "type": "blob"
     },
-    "skills/productivity/docx/tests/test_docx_skill.py": {
-      "mode": "100644",
-      "sha": "cb5c6aea82ad163de860d908b7ef46ce339e25f2",
-      "size": 21267,
-      "type": "blob"
-    },
-    "skills/productivity/pdf/tests/test_pdf_skill.py": {
-      "mode": "100644",
-      "sha": "2b3da9ea5fda61dd8dc665508f9196851f4b8868",
-      "size": 17433,
-      "type": "blob"
-    },
-    "skills/productivity/powerpoint/tests/test_powerpoint_skill.py": {
-      "mode": "100644",
-      "sha": "a5ccdfa63824f9e49884e73d769f6f3d36cc8c9a",
-      "size": 19524,
-      "type": "blob"
-    },
-    "skills/productivity/xlsx/tests/test_xlsx_skill.py": {
-      "mode": "100644",
-      "sha": "dd56f2fa172fb1970511414907366e1d008747ac",
-      "size": 21956,
-      "type": "blob"
-    },
     "tests-js/allow-scripts-sync.test.ts": {
       "mode": "100644",
       "sha": "0aa8ea6bbb5afa17140a8358f51547039645d8d4",

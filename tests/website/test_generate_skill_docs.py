@@ -108,9 +108,9 @@ def test_box_drawing_detection_covers_common_chars(gen_module):
         assert ch in gen_module._BOX_DRAWING_CHARS, f"missing: {ch!r}"
 
 
-def test_bundled_catalog_explains_missing_local_skills(gen_module):
-    """The bundled catalog should explain how to restore a listed skill that
-    was removed from the local profile's skills tree."""
+def test_bundled_catalog_explains_owner_fork_retirement(gen_module):
+    """The owner fork catalog must not advertise bundled seeding/restoration."""
     result = gen_module.build_catalog_md_bundled([])
-    assert "respects local deletions and user edits" in result
-    assert "hermes skills reset <name> --restore" in result
+    assert "intentionally ships no bundled skills" in result
+    assert "skills.external_dirs" in result
+    assert "cannot restore or seed a bundled skill" in result

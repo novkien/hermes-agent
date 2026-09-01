@@ -395,24 +395,10 @@ else
     fi
 fi
 
-# ============================================================================
-# Seed bundled skills into ~/.hermes/skills/
-# ============================================================================
-
-HERMES_SKILLS_DIR="${HERMES_HOME:-$HOME/.hermes}/skills"
-mkdir -p "$HERMES_SKILLS_DIR"
-
+# This owner fork intentionally ships no bundled skills. Profiles discover
+# owner-managed skills only through their skills.external_dirs policy.
 echo ""
-echo "Syncing bundled skills to ~/.hermes/skills/ ..."
-if "$SCRIPT_DIR/venv/bin/python" "$SCRIPT_DIR/tools/skills_sync.py" 2>/dev/null; then
-    echo -e "${GREEN}✓${NC} Skills synced"
-else
-    # Fallback: copy if sync script fails (missing deps, etc.)
-    if [ -d "$SCRIPT_DIR/skills" ]; then
-        cp -rn "$SCRIPT_DIR/skills/"* "$HERMES_SKILLS_DIR/" 2>/dev/null || true
-        echo -e "${GREEN}✓${NC} Skills copied"
-    fi
-fi
+echo -e "${GREEN}✓${NC} Bundled skill seeding is retired"
 
 # ============================================================================
 # Done

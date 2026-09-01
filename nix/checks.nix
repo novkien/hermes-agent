@@ -989,21 +989,15 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           echo "ok" > $out/result
         '';
 
-        # Verify bundled skills are present in the package
-        bundled-skills = pkgs.runCommand "hermes-bundled-skills" { } ''
+        # The owner fork ships no bundled skills; optional skills remain
+        # available as an explicit catalog.
+        optional-skills = pkgs.runCommand "hermes-optional-skills" { } ''
           set -e
-          echo "=== Checking bundled skills ==="
-          test -d ${hermes-agent}/share/hermes-agent/skills || (echo "FAIL: skills directory missing"; exit 1)
-          echo "PASS: skills directory exists"
-
-          # -L: skills/ is a symlink to the filtered source store path
-          SKILL_COUNT=$(find -L ${hermes-agent}/share/hermes-agent/skills -name "SKILL.md" | wc -l)
-          test "$SKILL_COUNT" -gt 0 || (echo "FAIL: no SKILL.md files found in skills directory"; exit 1)
-          echo "PASS: $SKILL_COUNT bundled skills found"
-
-          grep -q "HERMES_BUNDLED_SKILLS" ${hermes-agent}/bin/hermes || \
-            (echo "FAIL: HERMES_BUNDLED_SKILLS not in wrapper"; exit 1)
-          echo "PASS: HERMES_BUNDLED_SKILLS set in wrapper"
+          echo "=== Checking owner skill packaging policy ==="
+          test ! -e ${hermes-agent}/share/hermes-agent/skills || \
+            (echo "FAIL: owner fork must not package bundled skills"; exit 1)
+          ! grep -q "HERMES_BUNDLED_SKILLS" ${hermes-agent}/bin/hermes || \
+            (echo "FAIL: owner fork wrapper must not expose bundled skills"; exit 1)
 
           # Optional skills ship via the wrapper too (pythonSrc excludes
           # them from the wheel, so the env var is the only path in nix).
@@ -1015,7 +1009,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
             (echo "FAIL: HERMES_OPTIONAL_SKILLS not in wrapper"; exit 1)
           echo "PASS: $OPT_COUNT optional skills found, HERMES_OPTIONAL_SKILLS set in wrapper"
 
-          echo "=== All bundled skills checks passed ==="
+          echo "=== Owner skill packaging checks passed ==="
           mkdir -p $out
           echo "ok" > $out/result
         '';
