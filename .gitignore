@@ -217,3 +217,7 @@ native/fts5_cjk/*.so
 
 # Local Godot MCP QA fixture generated in the production checkout.
 /.codex-godot-fixture/
+
+# Local ComfyUI request/response scratch captures. These may contain generated
+# graphs or media-job payloads and are runtime evidence, never repository source.
+/.scratch-comfyui-*/

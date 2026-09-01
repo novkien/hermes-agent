@@ -14,6 +14,7 @@ from ownership import (
     UPSTREAM_TEST_MANIFEST,
     ensure_repository,
     git_stdout,
+    is_owner_retired_shared_test_path,
     is_shared_test_path,
     parse_tree,
     python_case_nodeids,
@@ -37,7 +38,7 @@ def main() -> int:
     files = {
         path: row
         for path, row in sorted(tree.items())
-        if is_shared_test_path(path)
+        if is_shared_test_path(path) and not is_owner_retired_shared_test_path(path)
     }
     now = datetime.now(timezone.utc).isoformat()
     lock = {
@@ -53,8 +54,9 @@ def main() -> int:
         "upstream_sha": upstream_sha,
         "generated_at": now,
         "description": (
-            "Exact Git blobs and modes for the shared upstream test surface. "
-            "Fork-specific behavior lives under fork_tests/cases."
+            "Exact Git blobs and modes for the retained shared upstream test "
+            "surface. Owner-retired bundled skill tests are omitted; "
+            "fork-specific behavior lives under fork_tests/cases."
         ),
         "files": files,
     }
