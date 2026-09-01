@@ -191,7 +191,10 @@ def apply_plan(repo: Path, plan: dict[str, Any]) -> None:
         case_path.parent.mkdir(parents=True, exist_ok=True)
         case_path.write_bytes(read_blob(repo, owner_sha, row["shared_path"]))
 
+    deleted_shared_paths = set(plan["owner_deleted_shared_paths"])
     for shared_path in plan["modified_shared_paths"]:
+        if shared_path in deleted_shared_paths:
+            continue
         target = repo / shared_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(read_blob(repo, common_base, shared_path))

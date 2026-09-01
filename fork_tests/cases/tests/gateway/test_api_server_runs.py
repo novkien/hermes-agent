@@ -780,6 +780,29 @@ class TestStopRun:
                 assert run_id not in adapter._active_run_agents
                 assert run_id not in adapter._active_run_tasks
 
+    @pytest.mark.asyncio
+    async def test_stop_cancels_registered_task_before_agent_is_built(self, adapter):
+        """An early stop must not be lost while provider setup is in flight."""
+        request = MagicMock()
+        request.match_info = {"run_id": "run_early"}
+        task = MagicMock()
+        task.done.return_value = False
+        adapter._active_run_tasks["run_early"] = task
+
+        with (
+            patch.object(adapter, "_check_run_auth", return_value=None),
+            patch.object(adapter, "_request_owns_run", return_value=True),
+            patch.object(
+                adapter,
+                "_durable_run_status",
+                return_value={"run_id": "run_early", "status": "running"},
+            ),
+        ):
+            response = await adapter._handle_stop_run(request)
+
+        assert response.status == 200
+        task.cancel.assert_called_once_with()
+
 
     @pytest.mark.asyncio
     async def test_stop_sends_sentinel_to_events_stream(self, adapter):

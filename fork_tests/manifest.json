@@ -320,6 +320,22 @@
       "shared_path": "tests/gateway/test_agent_cache.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/gateway/test_api_server_runs.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "f0413853f1c04eff674b49e4d2c130e3d850e268",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/gateway/test_api_server_runs.py::TestStopRun::test_stop_cancels_registered_task_before_agent_is_built"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "28732ad8f6bbdd305424b92fab355564d4513e6a128581987ca2888b78f26d6f",
+      "shared_path": "tests/gateway/test_api_server_runs.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/gateway/test_kanban_notifier.py",
       "kind": "owner-modified-shared-test",
       "lineage": {
@@ -2352,10 +2368,10 @@
   ],
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
-    "common_base_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694",
-    "generated_at": "2026-08-29T18:28:15.121135+00:00",
-    "owner_sha": "7f5aa0ded575ecb64372ed4db0e62ecd92281335",
-    "upstream_target_sha": "7a1aafb4e1dac5d2840cd3ab524f6d6bd0658694"
+    "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+    "generated_at": "2026-09-01T20:31:39.838657+00:00",
+    "owner_sha": "f0413853f1c04eff674b49e4d2c130e3d850e268",
+    "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
   },
   "version": 1
 }
