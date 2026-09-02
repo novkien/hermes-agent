@@ -19,16 +19,16 @@ Use the trusted host alias `jarvis` for current production access. Do not encode
 
 ## Mandatory repository transaction
 
-Repository mutation includes Git completion even when the owner does not separately ask for commit/push.
+Every source mutation requires the full Git publication transaction even when the owner does not separately ask for Git operations. The task is not complete at commit or branch push.
 
 1. Before editing, run `pwd -P`, `git rev-parse --show-toplevel`, `git remote get-url origin`, `git branch --show-current`, and `git status --short --untracked-files=all`.
 2. Confirm the physical root is this repository and `origin` is the intended `novkien/hermes-agent` remote before staging or pushing.
-3. Never edit or commit on detached HEAD. Create or reuse a task branch from the intended current base first.
+3. Never edit or commit on detached HEAD. Before the first source edit, create or reuse a dedicated task branch from the intended current base; do not use an unrelated branch.
 4. Every intended source-changing task must end with a coherent commit in this repository. Do not leave non-ignored staged, modified, deleted, renamed, conflicted, or untracked source state when changing repository, invoking sync, or reporting completion.
 5. Classify every untracked path: canonical source/docs/tests/config must be tracked and committed; generated/runtime/credential/session/log/database/machine-local state must be narrowly ignored. Commit a required `.gitignore` correction. Never broad-ignore canonical source.
 6. Preserve pre-existing changes. Never discard, reset, clean, stash, overwrite, or silently mix unrelated changes into the task commit. Resolve safe pre-existing source work in a separate truthful commit; stop with exact path/status evidence when safe classification is impossible.
-7. Push every agent-created commit non-force to the exact canonical `origin` and exact intended branch. Verify branch/upstream and ahead/behind state; never guess a destination or rewrite a remote URL.
-8. Normal publication is task branch -> commit -> push -> PR -> review -> merge. After merge, the exact merged child SHA must be prepared in the aggregate `novkien/hermes` gitlink PR, then parent merge, then `Sync Hermes`.
+7. Push every agent-created commit non-force to the exact canonical `origin` and exact intended task branch. Verify branch/upstream and ahead/behind state; never guess a destination or rewrite a remote URL.
+8. Immediately after push, create a pull request against the intended base branch, inspect the PR diff and checks, address actionable review or CI failures, and merge the PR in the same task whenever repository permissions, branch policy, and required checks allow it. A pushed branch without a PR is incomplete. An unmerged PR is incomplete when the agent has the authority and technical ability to merge it. If PR creation or merge is prevented by an external blocker such as missing authorization, required independent review, unresolved conflict, or failing required checks, do not report completion: report `BLOCKED` with the exact branch, PR URL when one exists, and blocker evidence. After merge, prepare the exact merged child SHA in an aggregate `novkien/hermes` gitlink PR, create and merge that parent PR whenever permitted, then run `Sync Hermes`.
 9. Never use `git add .`, `git add -A`, `git add --all`, force push, history rewrite, `git clean`, destructive reset, or automatic stash to manufacture a clean state.
 10. Read-only/no-op work reports `NO_SOURCE_MUTATION`; do not create an empty commit.
 
