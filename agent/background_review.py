@@ -22,6 +22,8 @@ import copy
 import json
 import logging
 import os
+import re
+import subprocess
 from pathlib import Path
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +34,286 @@ logger = logging.getLogger(__name__)
 
 
 _BACKGROUND_REVIEW_CANCEL_TIMEOUT_SECONDS = 2.0
+_SKILL_PATCH_MESSAGE_RE = re.compile(
+    r"^Patched\s+(.+?)\s+in\s+skill\s+'([^']+)'\s*(?:\((\d+)\s+replacements?\))?\.",
+    re.IGNORECASE,
+)
+_AUTO_REVIEW_SKILL_PATCH_CONFIG_KEY = "auto_skill_patch"
+
+
+def _run_git(cmd: list[str], repo_root: Path, timeout_seconds: int = 30) -> subprocess.CompletedProcess:
+    """Run a git command inside *repo_root* and return the completed process."""
+    process = subprocess.run(
+        ["git", *cmd],
+        cwd=str(repo_root),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=timeout_seconds,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(cmd)} failed ({process.returncode}): "
+            f"{process.stderr.strip()}"
+        )
+    return process
+
+
+def _git_repo_for_path(path: Path) -> Optional[Path]:
+    """Resolve the git work-tree that owns *path*."""
+    try:
+        result = _run_git(["rev-parse", "--show-toplevel"], path)
+        return Path(result.stdout.strip())
+    except Exception:
+        return None
+
+
+def _is_skill_md_target(file_path: str) -> bool:
+    """Return True when a patch target is SKILL.md.
+
+    ``skill_manage`` may pass file paths with nested components or Windows-style
+    separators; only the final segment decides the target in that case.
+    """
+    if not file_path:
+        return True
+    normalized = str(file_path).replace("\\", "/").split("/")[-1]
+    return normalized.lower() == "skill.md"
+
+
+def _collect_background_skill_patch_events(
+    review_messages: List[Dict],
+    prior_snapshot: List[Dict],
+) -> List[Dict[str, str]]:
+    """Extract structured skill patch events from review tool output."""
+    existing_tool_call_ids = set()
+    existing_tool_contents = set()
+    for prior in prior_snapshot or []:
+        if not isinstance(prior, dict) or prior.get("role") != "tool":
+            continue
+        tcid = prior.get("tool_call_id")
+        if tcid:
+            existing_tool_call_ids.add(tcid)
+        else:
+            content = prior.get("content")
+            if isinstance(content, str):
+                existing_tool_contents.add(content)
+
+    # Map assistant tool call ids to arguments, so we can infer target filenames
+    # from explicit args even when summaries are legacy/truncated.
+    call_details: dict = {}
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls", []) or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function", {}) or {}
+            fn_name = fn.get("name", "")
+            tcid = tc.get("id")
+            if fn_name != "skill_manage":
+                continue
+            try:
+                args = json.loads(fn.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            if tcid:
+                call_details[tcid] = {
+                    "tool": fn_name,
+                    "action": args.get("action", ""),
+                    "name": args.get("name", ""),
+                    "file_path": args.get("file_path", ""),
+                }
+
+    events: List[Dict[str, str]] = []
+    seen: set = set()
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        tcid = msg.get("tool_call_id")
+        if tcid and tcid in existing_tool_call_ids:
+            continue
+        content_raw = msg.get("content")
+        if not isinstance(content_raw, str):
+            continue
+        if tcid is None and content_raw in existing_tool_contents:
+            continue
+        try:
+            data = json.loads(content_raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict) or not data.get("success"):
+            continue
+        detail = call_details.get(tcid, {})
+        action = str(detail.get("action", "")).lower()
+        message = str(data.get("message", ""))
+
+        # If metadata is present, enforce a strict patch action.
+        if detail and action != "patch":
+            continue
+
+        # If metadata is missing, keep only explicit patch-style messages.
+        if not detail and "patched" not in message.lower():
+            continue
+
+        if detail:
+            skill_name = str(detail.get("name") or "").strip()
+            file_path = str(detail.get("file_path") or "").strip()
+        else:
+            skill_name = ""
+            file_path = ""
+
+        if not skill_name and message:
+            m = _SKILL_PATCH_MESSAGE_RE.search(message.strip())
+            if m:
+                skill_name = m.group(2).strip()
+                if not file_path:
+                    file_path = m.group(1).strip()
+
+        if not skill_name or not _is_skill_md_target(file_path):
+            continue
+        key = (skill_name, file_path, tcid or message)
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(
+            {
+                "name": skill_name,
+                "file_path": file_path or "SKILL.md",
+                "tool_call_id": tcid or "",
+                "message": message,
+            }
+        )
+    return events
+
+
+def _auto_patch_skills_from_background_review(
+    patch_events: List[Dict[str, str]],
+    task_cfg: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Commit and push patch events into the configured owner skills repo.
+
+    This path is best-effort by design: any failure is surfaced through logging
+    but does not fail the review turn.
+    """
+    if not patch_events:
+        return
+    cfg = _background_review_task_config(task_cfg).get(
+        _AUTO_REVIEW_SKILL_PATCH_CONFIG_KEY, {}
+    )
+    if not isinstance(cfg, dict):
+        return
+    try:
+        from utils import is_truthy_value
+
+        if not is_truthy_value(cfg.get("enabled"), default=False):
+            return
+    except Exception:
+        return
+
+    commit_message = str(
+        cfg.get("commit_message") or "auto patch skill"
+    ).strip() or "auto patch skill"
+    remote = str(cfg.get("remote") or "origin").strip() or "origin"
+    branch = str(cfg.get("branch") or "master").strip() or "master"
+    raw_repo = str(cfg.get("repo_path") or "").strip()
+    configured_repo_path = Path(raw_repo).expanduser().resolve() if raw_repo else None
+
+    # Resolve the patched files and de-duplicate by repo root.
+    event_by_repo: dict = {}
+    try:
+        from tools.skill_manager_tool import _find_skill
+
+        for event in patch_events:
+            name = str(event.get("name", "")).strip()
+            if not name:
+                continue
+            found = _find_skill(name)
+            if not found:
+                continue
+            skill_dir = Path(found["path"]).resolve()
+            file_path = str(event.get("file_path") or "SKILL.md").strip() or "SKILL.md"
+            target_file = (skill_dir / file_path).resolve()
+            if not target_file.exists():
+                continue
+
+            repo_root = _git_repo_for_path(target_file)
+            if repo_root is None:
+                continue
+            if configured_repo_path is not None:
+                try:
+                    target_file_relative = target_file.resolve().relative_to(
+                        configured_repo_path
+                    )
+                except Exception:
+                    continue
+                # repository must actually include the touched file
+                del target_file_relative
+
+            event_repo = event_by_repo.setdefault(str(repo_root), [])
+            event_repo.append(target_file)
+    except Exception:
+        return
+
+    if not event_by_repo:
+        return
+
+    for repo_root_s, files in event_by_repo.items():
+        repo_root = Path(repo_root_s)
+        if configured_repo_path and (
+            repo_root != configured_repo_path
+            and configured_repo_path not in repo_root.parents
+        ):
+            continue
+
+        # Ensure unique, repo-local paths only.
+        repo_files = []
+        for f in files:
+            try:
+                rel = str(f.resolve().relative_to(repo_root))
+            except Exception:
+                continue
+            if rel not in repo_files:
+                repo_files.append(rel)
+
+        if not repo_files:
+            continue
+
+        try:
+            _run_git(["add", "--"] + repo_files, repo_root)
+            staged = _run_git(["diff", "--cached", "--name-only"], repo_root)
+            if not staged.stdout.strip():
+                continue
+            _run_git(
+                [
+                    "-c",
+                    "user.name=Hermes Background Review",
+                    "-c",
+                    "user.email=hermes-background-review@localhost",
+                    "commit",
+                    "-m",
+                    commit_message,
+                    "--no-gpg-sign",
+                ],
+                repo_root,
+                timeout_seconds=60,
+            )
+            _run_git(
+                ["push", "--ff-only", remote, f"HEAD:{branch}"],
+                repo_root,
+                timeout_seconds=120,
+            )
+            logger.info(
+                "Auto-patched SKILL.md changes pushed to %s:%s from background review (%s)",
+                remote,
+                branch,
+                repo_root,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to auto-push SKILL patch from background review for repo %s",
+                repo_root,
+                exc_info=True,
+            )
 
 
 class _BackgroundReviewRun:
@@ -1701,6 +1983,20 @@ def _run_review_in_thread(
                 e,
             )
             actions = []
+        try:
+            patch_events = _collect_background_skill_patch_events(
+                review_messages,
+                messages_snapshot,
+            )
+            _auto_patch_skills_from_background_review(
+                patch_events,
+                task_cfg=task_cfg,
+            )
+        except Exception:
+            logger.warning(
+                "background-review auto patch step failed; review turn continues",
+                exc_info=True,
+            )
 
         _log_review_completion(
             review_usage, _classify_review_result(actions)
