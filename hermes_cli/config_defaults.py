@@ -1394,6 +1394,17 @@ DEFAULT_CONFIG = {
             # the provider call that would cross the budget. 0 or a negative
             # value = unlimited.
             "max_input_tokens": 600000,
+            # Optional auto-sync path: when background review performs a
+            # successful `skill_manage` patch to SKILL.md, stage + commit and
+            # push the resulting SKILL.md changes to the owner skills repo.
+            # Disabled by default to avoid surprise repo writes.
+            "auto_skill_patch": {
+                "enabled": False,
+                "repo_path": "",
+                "remote": "origin",
+                "branch": "master",
+                "commit_message": "auto patch skill",
+            },
         },
         "moa_reference": {
             "provider": "auto",

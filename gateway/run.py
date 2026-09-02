@@ -6999,6 +6999,7 @@ class TurnRunner:
                     ctx.inbound_message_id
                 )
 
+            from agent.a2a_context import bind_a2a_root_task_id
             from agent.skill_policy_context import bind_enabled_skills
 
             # Mirror this turn to anyone watching the same session elsewhere.
@@ -7011,10 +7012,11 @@ class TurnRunner:
             result = None
             _event_relay = _start_turn_relay(agent, ctx.session_id, _api_run_message)
             try:
-                with bind_enabled_skills(ctx.enabled_skills):
-                    result = agent.run_conversation(
-                        _api_run_message, **_conversation_kwargs
-                    )
+                with bind_a2a_root_task_id(ctx.a2a_root_task_id):
+                    with bind_enabled_skills(ctx.enabled_skills):
+                        result = agent.run_conversation(
+                            _api_run_message, **_conversation_kwargs
+                        )
             finally:
                 _finish_turn_relay(_event_relay, result)
         finally:
@@ -22362,6 +22364,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 auto_skill_names=(
                     [_auto] if isinstance(_auto, str) else list(_auto or [])
                 ),
+                a2a_root_task_id=(
+                    str((event.metadata or {}).get("_hermes_a2a_root_task_id") or "").strip()
+                    if event.internal
+                    else None
+                ),
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
@@ -30252,6 +30259,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         message_type: Optional[str] = None,
         auto_loaded_skill_prompt: str = "",
         auto_skill_names: Optional[List[str]] = None,
+        a2a_root_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -30275,6 +30283,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 message_type=message_type,
                 auto_loaded_skill_prompt=auto_loaded_skill_prompt,
                 auto_skill_names=auto_skill_names,
+                a2a_root_task_id=a2a_root_task_id,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -30291,6 +30300,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 message_type=message_type,
                 auto_loaded_skill_prompt=auto_loaded_skill_prompt,
                 auto_skill_names=auto_skill_names,
+                a2a_root_task_id=a2a_root_task_id,
             )
 
     def _frozen_topic_policy(
@@ -30531,6 +30541,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         message_type: Optional[str] = None,
         auto_loaded_skill_prompt: str = "",
         auto_skill_names: Optional[List[str]] = None,
+        a2a_root_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -30889,6 +30900,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             channel_prompt=channel_prompt,
             session_id=session_id,
             session_key=session_key,
+            a2a_root_task_id=a2a_root_task_id,
             run_generation=run_generation,
             _interrupt_depth=_interrupt_depth,
             event_message_id=event_message_id,
@@ -32149,6 +32161,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
                     message_type=next_message_type,
+                    a2a_root_task_id=(
+                        str(
+                            (getattr(pending_event, "metadata", None) or {}).get(
+                                "_hermes_a2a_root_task_id"
+                            )
+                            or ""
+                        ).strip()
+                        if getattr(pending_event, "internal", False)
+                        else None
+                    ),
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:
