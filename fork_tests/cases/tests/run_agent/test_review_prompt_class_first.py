@@ -1,11 +1,8 @@
 """Behavior tests for the skill review / combined review prompts.
 
-The review prompts steer the background review agent toward actively updating
-the skill library after most sessions, with a strong bias toward:
-  1. Patching currently-loaded skills first,
-  2. Patching existing umbrellas next,
-  3. Adding references/ files under an existing umbrella,
-  4. Creating a new class-level umbrella only when nothing else fits.
+The review prompts steer the background review agent toward conservative,
+targeted patches of existing skills. Autonomous reviews cannot create, rewrite,
+delete, or add/remove support files, and must exclude ``agent2agent-*`` skills.
 
 User-preference corrections (style, format, verbosity, legibility) are
 first-class skill signals, not just memory signals.
@@ -21,16 +18,30 @@ from run_agent import AIAgent
 # _SKILL_REVIEW_PROMPT
 # ---------------------------------------------------------------------------
 
-def test_skill_review_prompt_biases_toward_active_updates():
-    """Prompt must frame updating as the default stance, not something rare."""
+def test_skill_review_prompt_biases_toward_conservative_patches():
+    """Prompt must prefer evidence-backed patches over write volume."""
     prompt = AIAgent._SKILL_REVIEW_PROMPT
-    assert "ACTIVE" in prompt or "active" in prompt.lower(), (
-        "must tell the reviewer to be active"
+    lower = prompt.lower()
+    assert "patch conservatively" in lower
+    assert "high write count is not the objective" in lower
+    assert "most sessions produce" not in lower
+    assert "missed learning opportunity" not in lower
+
+
+def _assert_patch_only_policy(prompt: str, label: str) -> None:
+    lower = prompt.lower()
+    assert "strict mutation policy" in lower, f"{label}: policy must be explicit"
+    assert "action=patch" in lower, f"{label}: must name the sole allowed action"
+    assert "old_string/new_string" in lower, f"{label}: must require targeted patches"
+    assert "never create a skill" in lower, f"{label}: autonomous create must be forbidden"
+    assert "agent2agent-*" in lower, f"{label}: excluded family must be named"
+    assert "regardless of whether they are local, external, bundled" in lower, (
+        f"{label}: all other existing skill ownership classes must be patchable"
     )
-    # "missed learning opportunity" or equivalent framing for not acting
-    assert "missed" in prompt.lower() or "opportunity" in prompt.lower(), (
-        "must frame inaction as a miss, not a neutral outcome"
-    )
+
+
+def test_skill_review_prompt_is_patch_only():
+    _assert_patch_only_policy(AIAgent._SKILL_REVIEW_PROMPT, "_SKILL_REVIEW_PROMPT")
 
 
 def test_skill_review_prompt_treats_user_corrections_as_skill_signal():
@@ -74,6 +85,10 @@ def test_combined_review_prompt_has_memory_section():
     prompt = AIAgent._COMBINED_REVIEW_PROMPT
     assert "**Memory**" in prompt
     assert "memory tool" in prompt
+
+
+def test_combined_review_prompt_is_patch_only():
+    _assert_patch_only_policy(AIAgent._COMBINED_REVIEW_PROMPT, "_COMBINED_REVIEW_PROMPT")
 
 
 
@@ -147,10 +162,9 @@ def test_combined_review_prompt_rejects_unresolved_failures():
 def _assert_read_before_write_guidance(prompt: str, label: str) -> None:
     """Both review prompts must teach the enforced read-before-write handshake.
 
-    The skill_manage guard refuses patch/edit of an existing SKILL.md (and
-    overwrite/remove of an existing support file) unless the exact target was
-    loaded via skill_view during the review. Without prompt guidance the model
-    walks into the refusal and burns iterations retrying (#62397).
+    The skill_manage guard refuses a patch unless the exact target was loaded
+    via skill_view during the review. Without prompt guidance the model walks
+    into the refusal and burns iterations retrying (#62397).
     """
     lower = prompt.lower()
     assert "read-before-write" in lower, f"{label}: must name the read-before-write rule"
@@ -160,10 +174,7 @@ def _assert_read_before_write_guidance(prompt: str, label: str) -> None:
     assert "file_path=..." in prompt, (
         f"{label}: must give the support-file pre-read form"
     )
-    # Scope: only EXISTING targets need a pre-read; new creations are exempt.
-    assert "new" in lower and "no prior read" in lower, (
-        f"{label}: must exempt new skills / new support files from the pre-read"
-    )
+    assert "existing skill" in lower, f"{label}: patches must target existing skills"
     # Transcript quotes must not be treated as satisfying the guard.
     assert "does not count" in lower or "does NOT count" in prompt or "not satisfy" in lower, (
         f"{label}: must say transcript-quoted content doesn't satisfy the guard"

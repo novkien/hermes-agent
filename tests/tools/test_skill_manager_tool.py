@@ -518,22 +518,22 @@ class TestSkillManageDispatcher:
             set_current_write_origin,
         )
 
-        with _skill_dir(tmp_path), \
-             patch("tools.skill_usage.is_protected_builtin", return_value=False), \
-             patch("tools.skill_usage.is_hub_installed", return_value=False), \
-             patch("tools.skill_usage.is_bundled",
-                   side_effect=lambda skill_name: skill_name == "bundled"):
-            skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
-            skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
-            token = set_current_write_origin(BACKGROUND_REVIEW)
-            try:
+        token = set_current_write_origin(BACKGROUND_REVIEW)
+        try:
+            with _skill_dir(tmp_path), \
+                 patch("tools.skill_usage.is_protected_builtin", return_value=False), \
+                 patch("tools.skill_usage.is_hub_installed", return_value=False), \
+                 patch("tools.skill_usage.is_bundled",
+                       side_effect=lambda skill_name: skill_name == "bundled"):
+                skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
+                skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
                 raw = skill_manage(
                     action="delete",
                     name="bundled",
                     absorbed_into="umbrella",
                 )
-            finally:
-                reset_current_write_origin(token)
+        finally:
+            reset_current_write_origin(token)
 
         result = json.loads(raw)
         assert result["success"] is False
@@ -758,41 +758,12 @@ class TestExternalSkillMutations:
         # No duplicate in local
         assert not (local / "ext-skill").exists()
 
-    def test_background_review_can_patch_external_skill_in_place(self, tmp_path):
-        from tools.skill_manager_tool import mark_background_review_skill_read
-        from tools.skill_provenance import (
-            BACKGROUND_REVIEW,
-            reset_current_write_origin,
-            set_current_write_origin,
-        )
 
-        local = tmp_path / "local"
-        external = tmp_path / "vault"
-        local.mkdir(); external.mkdir()
-        skill_dir = _write_external_skill(external)
-
-        token = set_current_write_origin(BACKGROUND_REVIEW)
-        try:
-            with _two_roots(local, external):
-                mark_background_review_skill_read(skill_dir / "SKILL.md")
-                raw = skill_manage(
-                    action="patch",
-                    name="ext-skill",
-                    old_string="OLD_MARKER",
-                    new_string="NEW_MARKER",
-                )
-        finally:
-            reset_current_write_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is True, result
-        assert "NEW_MARKER" in (skill_dir / "SKILL.md").read_text()
-        assert not (local / "ext-skill").exists()
-
-
-    def test_background_review_can_patch_pinned_skill(self, tmp_path):
-        """Owner policy permits targeted background patches regardless of pin."""
-        from tools.skill_manager_tool import mark_background_review_skill_read
+    def test_background_review_refuses_to_patch_pinned_skill(self, tmp_path):
+        """#25839: the autonomous review fork respects pin like the curator
+        does — a pinned skill is off-limits to background maintenance, even
+        for patch/edit (which a foreground user-directed call is allowed to
+        perform). Without a user in the loop there is no one to consent."""
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
@@ -806,7 +777,6 @@ class TestExternalSkillMutations:
             _create_skill("my-skill", VALID_SKILL_CONTENT)
             token = set_current_write_origin(BACKGROUND_REVIEW)
             try:
-                mark_background_review_skill_read(tmp_path / "my-skill" / "SKILL.md")
                 with patch("tools.skill_usage.get_record", side_effect=_fake_get_record):
                     raw = skill_manage(
                         action="patch",
@@ -818,14 +788,11 @@ class TestExternalSkillMutations:
                 reset_current_write_origin(token)
 
         result = json.loads(raw)
-        assert result["success"] is True, result
-        assert "Do the new thing." in (
-            tmp_path / "my-skill" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        assert result["success"] is False
+        assert "pinned" in result["error"].lower()
 
 
-    def test_background_review_patch_ignores_ownership_lookup_errors(self, tmp_path):
-        from tools.skill_manager_tool import mark_background_review_skill_read
+    def test_background_review_fails_closed_when_ownership_lookup_errors(self, tmp_path):
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
@@ -836,7 +803,6 @@ class TestExternalSkillMutations:
             _create_skill("manual-skill", VALID_SKILL_CONTENT)
             token = set_current_write_origin(BACKGROUND_REVIEW)
             try:
-                mark_background_review_skill_read(tmp_path / "manual-skill" / "SKILL.md")
                 with patch(
                     "tools.skill_usage.load_usage",
                     side_effect=ValueError("corrupt usage data"),
@@ -851,13 +817,21 @@ class TestExternalSkillMutations:
                 reset_current_write_origin(token)
 
         result = json.loads(raw)
-        assert result["success"] is True, result
-        assert "Changed." in (
+        assert result["success"] is False
+        assert "ownership" in result["error"].lower()
+        assert "Do the thing." in (
             tmp_path / "manual-skill" / "SKILL.md"
         ).read_text(encoding="utf-8")
 
 class TestBackgroundOwnershipPolicyConsistency:
-    """Background patchability is independent of ownership metadata."""
+    """The autonomous write policy must not depend on its own side effects.
+
+    Issue #67140: the ownership guard keyed on ``isinstance(usage_rec, dict)``,
+    so a local skill with NO usage record passed. The successful write then
+    called ``bump_patch()``, creating a ``created_by: null`` record — and the
+    identical write was refused from then on. "Allowed exactly once" is a race
+    with our own bookkeeping, not a policy.
+    """
 
     @staticmethod
     def _bg_patch(tmp_path, name, old, new):
@@ -877,15 +851,25 @@ class TestBackgroundOwnershipPolicyConsistency:
         finally:
             reset_current_write_origin(token)
 
-    def test_unmanaged_skill_is_writable_by_autonomous_review(self, tmp_path, monkeypatch):
+    def test_repeated_identical_write_gets_the_same_answer(self, tmp_path, monkeypatch):
+        """The real #67140 shape: no stubbing of load_usage, so the first write's
+        telemetry side effect is live. Both attempts must agree."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         (tmp_path / ".hermes" / "skills").mkdir(parents=True, exist_ok=True)
         with _skill_dir(tmp_path):
             _create_skill("flip-skill", VALID_SKILL_CONTENT)
-            result = self._bg_patch(
+            first = self._bg_patch(
                 tmp_path, "flip-skill", "Do the thing.", "Do the new thing.",
             )
-        assert result["success"] is True, result
+            second = self._bg_patch(
+                tmp_path, "flip-skill", "Do the thing.", "Do the new thing.",
+            )
+
+        assert first["success"] == second["success"], (
+            "autonomous write policy flipped between two identical attempts: "
+            f"first={first.get('success')} second={second.get('success')}"
+        )
+        assert first["success"] is False
 
     def test_foreground_write_to_unmanaged_skill_still_allowed(self, tmp_path, monkeypatch):
         """Fail-closed applies to AUTONOMOUS writes only. A user-directed
@@ -900,180 +884,28 @@ class TestBackgroundOwnershipPolicyConsistency:
                 ))
         assert res["success"] is True
 
-    def test_adoption_is_not_required_for_background_patch(self, tmp_path, monkeypatch):
+    def test_adopted_skill_becomes_writable_by_autonomous_curation(self, tmp_path, monkeypatch):
+        """Adoption is the documented path from refused to allowed."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         with _skill_dir(tmp_path):
             _create_skill("adopt-me", VALID_SKILL_CONTENT)
             with patch("tools.skill_usage.load_usage", return_value={}):
-                result = self._bg_patch(
+                before = self._bg_patch(
                     tmp_path, "adopt-me", "Do the thing.", "Do the new thing.",
                 )
-        assert result["success"] is True, result
-
-
-class TestBackgroundPatchOnlyPolicy:
-    @staticmethod
-    def _with_background_origin():
-        from tools.skill_provenance import (
-            BACKGROUND_REVIEW,
-            set_current_write_origin,
-        )
-
-        return set_current_write_origin(BACKGROUND_REVIEW)
-
-    @staticmethod
-    def _reset_background_origin(token):
-        from tools.skill_provenance import reset_current_write_origin
-
-        reset_current_write_origin(token)
-
-    def test_background_review_cannot_create_skill(self, tmp_path):
-        token = self._with_background_origin()
-        try:
-            with _skill_dir(tmp_path):
-                raw = skill_manage(
-                    action="create",
-                    name="background-created",
-                    content=VALID_SKILL_CONTENT,
+            with patch(
+                "tools.skill_usage.load_usage",
+                return_value={"adopt-me": {"created_by": "agent"}},
+            ), patch(
+                "tools.skill_usage.get_record",
+                side_effect=lambda n: {"created_by": "agent", "pinned": False},
+            ):
+                after = self._bg_patch(
+                    tmp_path, "adopt-me", "Do the thing.", "Do the new thing.",
                 )
-        finally:
-            self._reset_background_origin(token)
 
-        result = json.loads(raw)
-        assert result["success"] is False
-        assert "patch-only" in result["error"]
-        assert not (tmp_path / "background-created").exists()
-
-    def test_background_review_batch_cannot_bypass_create_block(self, tmp_path):
-        token = self._with_background_origin()
-        try:
-            with _skill_dir(tmp_path):
-                raw = skill_manage(
-                    action="batch",
-                    name="",
-                    operations=[{
-                        "action": "create",
-                        "name": "batch-created",
-                        "content": VALID_SKILL_CONTENT,
-                    }],
-                )
-        finally:
-            self._reset_background_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is False
-        assert "patch-only" in result["error"]
-        assert not (tmp_path / "batch-created").exists()
-
-    def test_background_review_cannot_full_rewrite_via_patch_action(self, tmp_path):
-        with _skill_dir(tmp_path):
-            _create_skill("existing", VALID_SKILL_CONTENT)
-            token = self._with_background_origin()
-            try:
-                raw = skill_manage(
-                    action="patch",
-                    name="existing",
-                    content=VALID_SKILL_CONTENT_2,
-                )
-            finally:
-                self._reset_background_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is False
-        assert "patch-only" in result["error"]
-
-    def test_background_review_can_target_patch_existing_support_file(self, tmp_path):
-        from tools.skill_manager_tool import mark_background_review_skill_read
-
-        with _skill_dir(tmp_path):
-            _create_skill("existing", VALID_SKILL_CONTENT)
-            references = tmp_path / "existing" / "references"
-            references.mkdir()
-            target = references / "workflow.md"
-            target.write_text("Use OLD workflow.\n", encoding="utf-8")
-
-            token = self._with_background_origin()
-            try:
-                mark_background_review_skill_read(target)
-                raw = skill_manage(
-                    action="patch",
-                    name="existing",
-                    file_path="references/workflow.md",
-                    old_string="OLD",
-                    new_string="NEW",
-                )
-            finally:
-                self._reset_background_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is True, result
-        assert target.read_text(encoding="utf-8") == "Use NEW workflow.\n"
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "agent2agent-operation",
-            "AGENT2AGENT-manager-operation",
-            "autonomous-ai-agents/agent2agent-ceo-operation",
-            r"autonomous-ai-agents\agent2agent-operation",
-        ],
-    )
-    def test_background_review_refuses_agent2agent_family(self, tmp_path, name):
-        token = self._with_background_origin()
-        try:
-            with _skill_dir(tmp_path):
-                raw = skill_manage(
-                    action="patch",
-                    name=name,
-                    old_string="old",
-                    new_string="new",
-                )
-        finally:
-            self._reset_background_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is False
-        assert "agent2agent-*" in result["error"]
-
-    def test_foreground_agent2agent_patch_remains_allowed(self, tmp_path):
-        with _skill_dir(tmp_path):
-            _create_skill("agent2agent-operation", VALID_SKILL_CONTENT)
-            raw = skill_manage(
-                action="patch",
-                name="agent2agent-operation",
-                old_string="Do the thing.",
-                new_string="Do the new thing.",
-            )
-
-        result = json.loads(raw)
-        assert result["success"] is True, result
-
-    def test_background_patch_ignores_all_legacy_protection_classes(self, tmp_path):
-        from tools.skill_manager_tool import mark_background_review_skill_read
-
-        with _skill_dir(tmp_path):
-            _create_skill("protected", VALID_SKILL_CONTENT)
-            token = self._with_background_origin()
-            try:
-                mark_background_review_skill_read(tmp_path / "protected" / "SKILL.md")
-                with (
-                    patch("tools.skill_usage.get_record", return_value={"pinned": True}),
-                    patch("tools.skill_usage.is_protected_builtin", return_value=True),
-                    patch("tools.skill_usage.is_hub_installed", return_value=True),
-                    patch("tools.skill_usage.is_bundled", return_value=True),
-                    patch("tools.skill_usage.load_usage", side_effect=ValueError("broken")),
-                ):
-                    raw = skill_manage(
-                        action="patch",
-                        name="protected",
-                        old_string="Do the thing.",
-                        new_string="Do the new thing.",
-                    )
-            finally:
-                self._reset_background_origin(token)
-
-        result = json.loads(raw)
-        assert result["success"] is True, result
+        assert before["success"] is False
+        assert after["success"] is True, after
 
 
 # ---------------------------------------------------------------------------
@@ -1204,8 +1036,14 @@ def _curator_pass(tmp_path, *, monkeypatch):
     searches, and flips ``is_background_review()`` → True so the consolidation
     guard fires.
 
-    The owner-fork policy allows targeted patches independently of ownership,
-    while refusing every other autonomous skill mutation.
+    Also stubs the ownership check to report every skill as curator-managed.
+    The ownership guard runs BEFORE the consolidation / read-before-write
+    guards these tests target, and since #67140 a skill with no usage record
+    fails closed — so without this, every test in this class would be refused
+    by ownership and never reach the guard under test. The real curator only
+    ever operates on managed sediment, so "managed" is the correct premise
+    here; tests that specifically exercise the ownership guard set their own
+    records instead.
     """
     hermes_home = tmp_path / ".hermes"
     skills_root = hermes_home / "skills"
@@ -1214,6 +1052,7 @@ def _curator_pass(tmp_path, *, monkeypatch):
     with patch("tools.skill_manager_tool.SKILLS_DIR", skills_root), \
          patch("tools.skills_tool.SKILLS_DIR", skills_root), \
          patch("agent.skill_utils.get_all_skills_dirs", return_value=[skills_root]), \
+         patch("tools.skill_usage._is_curator_managed_record", return_value=True), \
          patch("tools.skill_provenance.is_background_review", return_value=True):
         yield skills_root
 
@@ -1235,7 +1074,7 @@ def _skill_content(name: str) -> str:
     )
 
 def _create_curator_skill(name: str, content: str):
-    """Create a fixture skill carrying legacy curator ownership metadata."""
+    """Create a skill and record the agent ownership a real curator create has."""
     from tools.skill_usage import mark_agent_created
 
     result = _create_skill(name, content)
@@ -1245,11 +1084,14 @@ def _create_curator_skill(name: str, content: str):
 
 
 class TestCuratorConsolidationDeleteGuard:
-    """Background review may only make targeted patches.
+    """The curator's LLM consolidation pass must fail CLOSED on unverified
+    deletes — it may only archive a skill it absorbed into an umbrella.
 
-    Legacy consolidation guards remain defense in depth, but an autonomous
-    review now rejects every delete and support-file write before reaching
-    those mutation paths.
+    Reproduces #29912: the pass archived clusters of active skills with zero
+    verified consolidations (``consolidated_this_run == 0``) because a bare
+    prune from the LLM pass was accepted. With the guard, a delete without a
+    valid ``absorbed_into`` is refused and the skill stays active; a verified
+    consolidation is archived RECOVERABLY (not rmtree'd).
     """
 
     def test_bare_prune_during_curator_pass_refused(self, tmp_path, monkeypatch):
@@ -1257,8 +1099,8 @@ class TestCuratorConsolidationDeleteGuard:
             _create_curator_skill("active-skill", VALID_SKILL_CONTENT)
             result = _delete_skill("active-skill", absorbed_into="")
         assert result["success"] is False
-        assert "patch-only" in result["error"]
-        # Skill must remain active on disk.
+        assert result.get("_fail_closed") is True
+        # Skill must remain active on disk — fail closed, no archive.
         assert (skills_root / "active-skill").exists()
 
     def test_background_review_read_survives_copied_tool_contexts(
@@ -1317,9 +1159,7 @@ class TestCuratorConsolidationDeleteGuard:
 
         _reset_background_review_read_marks()
 
-    def test_background_review_cannot_overwrite_support_file_even_after_read(
-        self, tmp_path, monkeypatch
-    ):
+    def test_background_review_support_file_overwrite_requires_that_file_read(self, tmp_path, monkeypatch):
         from tools.skills_tool import skill_view
         from tools.skill_manager_tool import _reset_background_review_read_marks
 
@@ -1330,8 +1170,8 @@ class TestCuratorConsolidationDeleteGuard:
             ref.mkdir()
             (ref / "workflow.md").write_text("old workflow\n", encoding="utf-8")
 
+            # Reading SKILL.md does not authorize overwriting a linked file.
             assert json.loads(skill_view("reviewed"))["success"] is True
-            assert json.loads(skill_view("reviewed", "references/workflow.md"))["success"] is True
             blocked = json.loads(skill_manage(
                 action="write_file",
                 name="reviewed",
@@ -1339,7 +1179,15 @@ class TestCuratorConsolidationDeleteGuard:
                 file_content="new workflow\n",
             ))
             assert blocked["success"] is False
-            assert "patch-only" in blocked["error"]
-            assert (ref / "workflow.md").read_text(encoding="utf-8") == "old workflow\n"
+            assert blocked.get("_read_before_write_required") is True
+
+            assert json.loads(skill_view("reviewed", "references/workflow.md"))["success"] is True
+            allowed = json.loads(skill_manage(
+                action="write_file",
+                name="reviewed",
+                file_path="references/workflow.md",
+                file_content="new workflow\n",
+            ))
+            assert allowed["success"] is True, allowed
 
         _reset_background_review_read_marks()
