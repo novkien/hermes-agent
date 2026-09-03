@@ -857,6 +857,9 @@ prompt_caching:
 #
 #   # Post-turn memory/skill self-improvement review fork. Runs after a turn
 #   # when the nudge intervals fire; writes skills/memories in a daemon thread.
+#   # Skill maintenance is targeted-patch-only: it may patch any existing
+#   # skill except agent2agent-*, but cannot create/rewrite/delete skills or
+#   # add/remove support files. Those operations require a foreground request.
 #   # Usage is recorded under session_model_usage task='background_review'.
 #   background_review:
 #     enabled: true            # false = skip automatic forks (/refine still works)
