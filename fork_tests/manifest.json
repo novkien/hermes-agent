@@ -2347,7 +2347,7 @@
         "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_create_duplicate_blocked",
         "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_create_rejects_category_traversal",
         "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_create_skill",
-        "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_edit_long_desc_still_allowed_with_preview",
+        "tests/tools/test_skill_manager_tool.py::TestCreateSkill::test_edit_description_within_prompt_budget_needs_no_preview",
         "tests/tools/test_skill_manager_tool.py::TestCuratorConsolidationDeleteGuard::test_background_review_cannot_overwrite_support_file_even_after_read",
         "tests/tools/test_skill_manager_tool.py::TestCuratorConsolidationDeleteGuard::test_background_review_read_marks_stay_isolated_between_reviews",
         "tests/tools/test_skill_manager_tool.py::TestCuratorConsolidationDeleteGuard::test_background_review_read_survives_copied_tool_contexts",
@@ -2466,7 +2466,7 @@
         "tests/tools/test_skill_manager_tool.py::TestWriteFile::test_write_symlink_escape_blocked"
       ],
       "runner": "python",
-      "sha256": "f18e9c0ad0fc51f09fa8d794f70d90f534bd9c57567377fb404bf8e4eb926fec",
+      "sha256": "66750e6d5a7f2901f2fd28b559ac4db0bec1afba4fdd46a200177210368ebb3a",
       "shared_path": "tests/tools/test_skill_manager_tool.py"
     },
     {
