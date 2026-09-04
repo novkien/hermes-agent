@@ -348,15 +348,17 @@ def _pinned_guard(name: str) -> Optional[str]:
 
 def _background_review_write_guard(
     name: str,
-    skill_dir: Path,
+    _skill_dir: Path,
     action: str,
 ) -> Optional[Dict[str, Any]]:
-    """Refuse autonomous curator writes to externally owned skills.
+    """Enforce the owner fork's patch-only background-review policy.
 
-    Foreground agents may still perform user-directed edits to external,
-    bundled, or hub-installed skills. The background review fork is different:
-    it is autonomous lifecycle maintenance, so its write surface is restricted
-    to local curator-owned sediment.
+    Foreground writes keep the ordinary skill policy.  The autonomous review
+    fork may make targeted patches to any existing skill, regardless of its
+    provenance, location, install source, or pin state, except for the
+    ``agent2agent-*`` family.  It may not create, rewrite, add/remove support
+    files, or delete skills; those actions require an explicit foreground user
+    request.
     """
     try:
         from tools.skill_provenance import is_background_review
@@ -365,105 +367,25 @@ def _background_review_write_guard(
     except Exception:
         return None
 
-    # Pin must be respected by autonomous maintenance. The curator already
-    # skips pinned skills from every auto-transition; the background review
-    # fork is the same kind of autonomous, no-user-present actor, so it must
-    # not write to a pinned skill either (issue #25839). This is stricter than
-    # the foreground ``_pinned_guard`` (which only blocks deletion) precisely
-    # because there is no user in the loop to consent to an edit here.
-    try:
-        from tools import skill_usage
-        if skill_usage.get_record(name).get("pinned"):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for pinned skill "
-                    f"'{name}': pinned skills are off-limits to autonomous "
-                    "maintenance. Ask the user to run "
-                    f"`hermes curator unpin {name}` if they want it changed."
-                ),
-            }
-    except Exception:
-        logger.debug("pinned skill guard lookup failed for %s", name, exc_info=True)
-
-    try:
-        from agent.skill_utils import is_external_skill_path
-        if is_external_skill_path(skill_dir):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for skill '{name}': "
-                    "the skill lives in skills.external_dirs, which are "
-                    "externally owned and read-only to autonomous curation."
-                ),
-            }
-    except Exception:
-        logger.debug("external skill guard lookup failed for %s", name, exc_info=True)
-
-    try:
-        from tools import skill_usage
-        if skill_usage.is_protected_builtin(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for protected "
-                    f"built-in skill '{name}'."
-                ),
-            }
-        if skill_usage.is_hub_installed(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for hub-installed "
-                    f"skill '{name}'."
-                ),
-            }
-        if skill_usage.is_bundled(name):
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for bundled "
-                    f"skill '{name}'."
-                ),
-            }
-        # Skills that are not curator-managed are off-limits to autonomous
-        # curation. This prevents the LLM consolidation pass from mutating
-        # skills the user owns (manually authored, URL-installed, or created by
-        # a foreground `skill_manage(create)` at the user's request), which lack
-        # the `created_by: "agent"` marker.
-        #
-        # A MISSING record and an explicit `created_by: null` must resolve
-        # IDENTICALLY (issue #67140). Keying on `isinstance(usage_rec, dict)`
-        # made the policy depend on the guard's own side effect: a local skill
-        # with no telemetry record passed, the successful write called
-        # bump_patch() which created a `created_by: null` record, and the very
-        # same write was refused from then on. "Allowed exactly once" is not a
-        # policy — it is a race with our own bookkeeping. Fail closed for both
-        # shapes; `hermes curator adopt <name>` is the supported way in.
-        usage_data = skill_usage.load_usage()
-        usage_rec = usage_data.get(name)
-        if not skill_usage._is_curator_managed_record(usage_rec):
-            if isinstance(usage_rec, dict):
-                _detail = f"created_by={usage_rec.get('created_by')!r}"
-            else:
-                _detail = "no usage record"
-            return {
-                "success": False,
-                "error": (
-                    f"Refusing background curator {action} for skill "
-                    f"'{name}': the skill is not curator-managed ({_detail}). "
-                    "User-owned skills are off-limits to autonomous curation. "
-                    f"Run `hermes curator adopt {name}` to opt it in."
-                ),
-            }
-    except Exception:
-        logger.warning("owned skill guard lookup failed for %s", name, exc_info=True)
+    if action != "patch":
         return {
             "success": False,
             "error": (
-                f"Refusing background curator {action} for skill '{name}': "
-                "agent ownership could not be verified because the provenance "
-                "record is unavailable or unreadable."
+                f"Refusing background review action '{action}' for skill "
+                f"'{name}': autonomous skill maintenance is patch-only. "
+                "Create, rewrite, support-file add/remove, and delete "
+                "operations require an explicit foreground user request."
+            ),
+        }
+
+    leaf_name = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if leaf_name.lower().startswith("agent2agent-"):
+        return {
+            "success": False,
+            "error": (
+                f"Refusing background review patch for excluded skill '{name}': "
+                "the agent2agent-* skill family may only be changed from a "
+                "foreground user-directed turn."
             ),
         }
     return None
@@ -500,8 +422,11 @@ def _background_review_read_before_write_guard(
 
 
 def _background_review_preflight(action: str, name: str) -> Optional[Dict[str, Any]]:
-    if action not in {"edit", "patch", "delete", "write_file", "remove_file"}:
+    if action not in {"create", "edit", "patch", "delete", "write_file", "remove_file"}:
         return None
+    policy = _background_review_write_guard(name, Path(), action)
+    if policy is not None:
+        return policy
     existing = _find_skill(name)
     if not existing:
         return None
