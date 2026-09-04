@@ -2308,6 +2308,24 @@
       "shared_path": "tests/tools/test_mcp_tool.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/tools/test_skill_ledger.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "6e592018d7358aadf92ed4b562750a39233beb77",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/tools/test_skill_ledger.py::test_background_review_patch_ledgers_and_rolls_back"
+      ],
+      "replaced_upstream_nodeids": [
+        "tests/tools/test_skill_ledger.py::test_background_review_patch_ledgers_and_rolls_back"
+      ],
+      "runner": "python",
+      "sha256": "64cb004d6eb6427b76a63fd0d9791f3c0289acd952ab389d296ae91b49b325ca",
+      "shared_path": "tests/tools/test_skill_ledger.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/tools/test_skill_linter.py",
       "kind": "owner-modified-shared-test",
       "lineage": {
@@ -2527,8 +2545,8 @@
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
     "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
-    "generated_at": "2026-09-03T14:17:24.484047+00:00",
-    "owner_sha": "488f027793a78beeb11d999ecf07151626bbf5a0",
+    "generated_at": "2026-09-04T10:33:32.313221+00:00",
+    "owner_sha": "6e592018d7358aadf92ed4b562750a39233beb77",
     "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
   },
   "version": 1
