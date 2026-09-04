@@ -898,6 +898,20 @@ def skills_list(category: str = None, task_id: str = None) -> str:
 # ── Plugin skill serving ──────────────────────────────────────────────────
 
 
+def _read_skill_support_text(path: Path) -> Optional[str]:
+    """Read a textual skill support file without leaking binary bytes.
+
+    ``errors="replace"`` makes ``UnicodeDecodeError`` unreachable and previously
+    caused compressed templates to be expanded into replacement-character noise in
+    model context.  Support files use strict UTF-8; binary assets are represented by
+    metadata only and remain available to package-owned scripts through the filesystem.
+    """
+    try:
+        return path.read_bytes().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+
+
 def _serve_plugin_skill(
     skill_md: Path,
     namespace: str,
@@ -985,8 +999,13 @@ def _serve_plugin_skill(
                 ensure_ascii=False,
             )
         try:
-            content = target.read_text(encoding="utf-8-sig", errors="replace")
-        except UnicodeDecodeError:
+            support_content = _read_skill_support_text(target)
+        except Exception as exc:
+            return json.dumps(
+                {"success": False, "error": f"Failed to read '{file_path}': {exc}"},
+                ensure_ascii=False,
+            )
+        if support_content is None:
             return json.dumps(
                 {
                     "success": True,
@@ -997,11 +1016,7 @@ def _serve_plugin_skill(
                 },
                 ensure_ascii=False,
             )
-        except Exception as exc:
-            return json.dumps(
-                {"success": False, "error": f"Failed to read '{file_path}': {exc}"},
-                ensure_ascii=False,
-            )
+        content = support_content
         return json.dumps(
             {
                 "success": True,
@@ -1615,8 +1630,13 @@ def skill_view(
 
             # Read the file content
             try:
-                content = target_file.read_text(encoding="utf-8-sig", errors="replace")
-            except UnicodeDecodeError:
+                support_content = _read_skill_support_text(target_file)
+            except Exception as exc:
+                return json.dumps(
+                    {"success": False, "error": f"Failed to read '{file_path}': {exc}"},
+                    ensure_ascii=False,
+                )
+            if support_content is None:
                 # Binary file - return info about it instead
                 return json.dumps(
                     {
@@ -1628,6 +1648,7 @@ def skill_view(
                     },
                     ensure_ascii=False,
                 )
+            content = support_content
 
             try:
                 from tools.skill_manager_tool import mark_background_review_skill_read
