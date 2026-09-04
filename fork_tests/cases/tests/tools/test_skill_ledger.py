@@ -65,13 +65,14 @@ def test_background_review_patch_ledgers_and_rolls_back(ledger_env, monkeypatch)
     )
     from tools.skill_manager_tool import mark_background_review_skill_read
 
+    # Skill creation is an explicit foreground action.  The curator may only
+    # patch an existing skill after reading it.
+    assert _create()["success"] is True
+    skill_md = ledger_env["skills"] / "my-skill" / "SKILL.md"
+    original = skill_md.read_text(encoding="utf-8")
+
     token = set_current_write_origin(BACKGROUND_REVIEW)
     try:
-        # Created under the review fork → marked created_by: agent, so the
-        # curator pass is allowed to patch it (curator invariant unchanged).
-        assert _create()["success"] is True
-        skill_md = ledger_env["skills"] / "my-skill" / "SKILL.md"
-        original = skill_md.read_text(encoding="utf-8")
         mark_background_review_skill_read(skill_md)
         patched = json.loads(
             skill_manage(
