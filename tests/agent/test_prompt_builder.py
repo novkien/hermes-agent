@@ -17,6 +17,7 @@ from agent.prompt_builder import (
     _find_git_root,
     _strip_yaml_frontmatter,
     build_skills_system_prompt,
+    build_nous_subscription_prompt,
     build_context_files_prompt,
     CONTEXT_FILE_MAX_CHARS,
     _dynamic_context_file_max_chars,
@@ -34,6 +35,7 @@ from agent.prompt_builder import (
     PLATFORM_HINTS,
     WSL_ENVIRONMENT_HINT,
 )
+from hermes_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
 
 
 @pytest.fixture(autouse=True)
@@ -59,20 +61,12 @@ def _drain_truncation_warnings():
 
 
 class TestGuidanceConstants:
-    def test_memory_guidance_keeps_form_rule_and_routing(self):
-        """Dieted (#95681): WHAT belongs in memory is the memory tool
-        schema's job (taught on every call). This block keeps only the
-        declarative-form rule and the staleness/skills routing."""
-        from agent.prompt_builder import MEMORY_GUIDANCE
-
-        assert "declarative facts" in MEMORY_GUIDANCE
-        assert "imperative phrasing" in MEMORY_GUIDANCE
-        assert "stale within a week" in MEMORY_GUIDANCE
-        assert "Save proactively" in MEMORY_GUIDANCE  # positive posture leads
-        assert "workflows belong" in MEMORY_GUIDANCE
-        # The category/SKIP curricula must NOT be re-taught here.
-        assert "PR numbers" not in MEMORY_GUIDANCE
-        assert "tool quirks" not in MEMORY_GUIDANCE
+    def test_memory_guidance_discourages_task_logs(self):
+        assert "durable facts" in MEMORY_GUIDANCE
+        assert "Do NOT save task progress" in MEMORY_GUIDANCE
+        assert "session_search" in MEMORY_GUIDANCE
+        assert "like a diary" not in MEMORY_GUIDANCE
+        assert ">80%" not in MEMORY_GUIDANCE
 
     def test_session_search_guidance_is_simple_cross_session_recall(self):
         assert "relevant cross-session context exists" in SESSION_SEARCH_GUIDANCE
@@ -244,10 +238,10 @@ class TestParseSkillFile:
 
     def test_long_description_truncated(self, tmp_path):
         skill_file = tmp_path / "SKILL.md"
-        long_desc = "A" * 100
+        long_desc = "A" * 1_100
         skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
         _, _, desc = _parse_skill_file(skill_file)
-        assert len(desc) <= 60
+        assert len(desc) <= 1_024
         assert desc.endswith("...")
 
 
@@ -333,7 +327,7 @@ class TestBuildSkillsSystemPrompt:
         assert result.count("- search") == 1
 
 
-    def test_compact_categories_demote_nested_and_miss_cache_separately(
+    def test_visible_mode_overrides_coding_focus_category_demotion(
         self, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -342,16 +336,130 @@ class TestBuildSkillsSystemPrompt:
         (d / "SKILL.md").write_text(
             "---\nname: thread-writer\ndescription: Write threads\n---\n"
         )
-        # Nested category ("social-media/twitter") demoted via its parent:
-        # name visible, description gone.
-        compact = build_skills_system_prompt(
+        visible = build_skills_system_prompt(
             compact_categories=frozenset({"social-media"})
         )
-        assert "thread-writer" in compact
-        assert "Write threads" not in compact
-        # Unfiltered call must not be served from the compacted cache entry.
-        full = build_skills_system_prompt()
-        assert "Write threads" in full
+        assert "thread-writer" in visible
+        assert "Write threads" in visible
+
+    def test_per_skill_visibility_lists_are_exact_and_cache_isolated(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        category = tmp_path / "skills" / "writing"
+        category.mkdir(parents=True)
+        (category / "DESCRIPTION.md").write_text(
+            "---\ndescription: Category detail must only be visible in full mode.\n---\n",
+            encoding="utf-8",
+        )
+        long_desc = "技" * 59 + "界TAIL-MUST-NOT-LEAK"
+        long_skill = category / "long-skill"
+        long_skill.mkdir()
+        (long_skill / "SKILL.md").write_text(
+            f"---\nname: long-skill\ndescription: {long_desc}\n---\n",
+            encoding="utf-8",
+        )
+        short_skill = category / "short-skill"
+        short_skill.mkdir()
+        (short_skill / "SKILL.md").write_text(
+            "---\nname: short-skill\ndescription: Short detail.\n---\n",
+            encoding="utf-8",
+        )
+        visible_skill = category / "visible-skill"
+        visible_skill.mkdir()
+        (visible_skill / "SKILL.md").write_text(
+            "---\nname: visible-skill\ndescription: Full visible detail.\n---\n",
+            encoding="utf-8",
+        )
+
+        visible = build_skills_system_prompt(mode={})
+        mixed = build_skills_system_prompt(mode={
+            "prune": ["long-skill"],
+            "invisible": ["short-skill"],
+        })
+        other_policy = build_skills_system_prompt(mode={
+            "prune": ["short-skill"],
+            "invisible": ["long-skill"],
+        })
+        visible_again = build_skills_system_prompt(mode={})
+
+        def index(prompt):
+            return prompt.split("<available_skills>\n", 1)[1].split(
+                "\n</available_skills>", 1
+            )[0]
+
+        visible_index = index(visible)
+        mixed_index = index(mixed)
+        other_index = index(other_policy)
+
+        assert long_desc in visible_index
+        assert "Category detail must only be visible in full mode." in visible_index
+        assert "技" * 59 + "…" in mixed_index
+        assert "TAIL-MUST-NOT-LEAK" not in mixed_index
+        assert "    - short-skill\n" in mixed_index
+        assert "Short detail." not in mixed_index
+        assert "Full visible detail." in mixed_index
+        assert "Category detail must only be visible in full mode." in mixed_index
+        assert "    - long-skill\n" in other_index
+        assert long_desc not in other_index
+        assert "Short detail." in other_index
+        assert visible_again == visible
+        assert visible != mixed != other_policy
+
+    def test_invalid_visibility_mode_is_rejected(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skill = tmp_path / "skills" / "tools" / "sample"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: sample\ndescription: Sample detail.\n---\n"
+        )
+
+        with pytest.raises(ValueError, match="skills.mode must be a mapping"):
+            build_skills_system_prompt(mode="compact")
+
+    def test_invisible_preserves_enabled_external_names_and_disabled_policy(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        local_root = tmp_path / "home" / "skills"
+        external_root = tmp_path / "external"
+        for root, name, description in [
+            (local_root, "local-skill", "Local description must be hidden."),
+            (local_root, "disabled-skill", "Disabled description."),
+            (external_root, "external-skill", "External description must be hidden."),
+        ]:
+            skill = root / "tools" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {description}\n---\n"
+            )
+
+        # An earlier import-safety test deliberately reloads prompt_builder;
+        # patch the globals owned by this imported function object so this
+        # policy test remains independent of module-object identity.
+        globals_ = build_skills_system_prompt.__globals__
+        monkeypatch.setitem(globals_, "get_skills_dir", lambda: local_root)
+        monkeypatch.setitem(
+            globals_, "get_all_skills_dirs", lambda: [local_root, external_root]
+        )
+        monkeypatch.setitem(
+            globals_, "get_disabled_skill_names", lambda *_a, **_k: {"disabled-skill"}
+        )
+        monkeypatch.setitem(globals_, "_load_skills_snapshot", lambda *_a: None)
+        monkeypatch.setitem(globals_, "_write_skills_snapshot", lambda *_a: None)
+        result = build_skills_system_prompt(
+            mode={"invisible": ["local-skill", "external-skill"]},
+            enabled_skills=["local-skill", "disabled-skill", "external-skill"],
+        )
+        index = result.split("<available_skills>", 1)[1].split(
+            "</available_skills>", 1
+        )[0]
+
+        assert "local-skill" in index
+        assert "external-skill" in index
+        assert "disabled-skill" not in index
+        assert "Local description" not in index
+        assert "External description" not in index
 
 
 
@@ -403,9 +511,89 @@ class TestBuildSkillsSystemPrompt:
         assert "cached-skill" not in second
 
 
+
+
+
+class TestBuildNousSubscriptionPrompt:
+    def test_includes_active_subscription_features(self, monkeypatch):
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: True)
+        monkeypatch.setattr(
+            "hermes_cli.nous_subscription.get_nous_subscription_features",
+            lambda config=None: NousSubscriptionFeatures(
+                subscribed=True,
+                nous_auth_present=True,
+                provider_is_nous=True,
+                features={
+                    "web": NousFeatureState("web", "Web tools", True, True, True, True, False, True, "firecrawl"),
+                    "image_gen": NousFeatureState("image_gen", "Image generation", True, True, True, True, False, True, "Nous Subscription"),
+                    "video_gen": NousFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
+                    "tts": NousFeatureState("tts", "OpenAI TTS", True, True, True, True, False, True, "OpenAI TTS"),
+                    "stt": NousFeatureState("stt", "Speech-to-text", True, True, True, True, False, True, "OpenAI Whisper"),
+                    "browser": NousFeatureState("browser", "Browser automation", True, True, True, True, False, True, "Browser Use"),
+                    "modal": NousFeatureState("modal", "Modal execution", False, True, False, False, False, True, "local"),
+                },
+            ),
+        )
+
+        prompt = build_nous_subscription_prompt({"web_search", "browser_navigate"})
+
+        assert "Browser Use" in prompt
+        assert "Modal execution is optional" in prompt
+        assert "do not ask the user for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys" in prompt
+
+    def test_non_subscriber_prompt_includes_relevant_upgrade_guidance(self, monkeypatch):
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: True)
+        monkeypatch.setattr(
+            "hermes_cli.nous_subscription.get_nous_subscription_features",
+            lambda config=None: NousSubscriptionFeatures(
+                subscribed=False,
+                nous_auth_present=False,
+                provider_is_nous=False,
+                features={
+                    "web": NousFeatureState("web", "Web tools", True, False, False, False, False, True, ""),
+                    "image_gen": NousFeatureState("image_gen", "Image generation", True, False, False, False, False, True, ""),
+                    "video_gen": NousFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
+                    "tts": NousFeatureState("tts", "OpenAI TTS", True, False, False, False, False, True, ""),
+                    "stt": NousFeatureState("stt", "Speech-to-text", True, False, False, False, False, True, ""),
+                    "browser": NousFeatureState("browser", "Browser automation", True, False, False, False, False, True, ""),
+                    "modal": NousFeatureState("modal", "Modal execution", False, False, False, False, False, True, ""),
+                },
+            ),
+        )
+
+        prompt = build_nous_subscription_prompt({"image_generate"})
+
+        assert "suggest Nous subscription as one option" in prompt
+        assert "Do not mention subscription unless" in prompt
+
+    def test_feature_flag_off_returns_empty_prompt(self, monkeypatch):
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: False)
+
+        prompt = build_nous_subscription_prompt({"web_search"})
+
+        assert prompt == ""
+
+
 # =========================================================================
 # Context files prompt builder
 # =========================================================================
+
+
+def test_soul_is_scanned_but_never_truncated(monkeypatch, tmp_path):
+    import agent.prompt_builder as prompt_builder
+
+    content = "SOUL-BEGIN\n" + ("x" * 600_000) + "\nSOUL-END"
+    (tmp_path / "SOUL.md").write_text(content)
+    monkeypatch.setattr(prompt_builder, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        "hermes_cli.config.ensure_hermes_home", lambda: None
+    )
+
+    loaded = prompt_builder.load_soul_md(context_length=8_000)
+    assert loaded is not None
+    assert loaded.startswith("SOUL-BEGIN")
+    assert loaded.endswith("SOUL-END")
+    assert "truncated SOUL.md" not in loaded
 
 
 class TestBuildContextFilesPrompt:
@@ -728,9 +916,7 @@ class TestPromptBuilderConstants:
         ), "CLI hint should explicitly discourage MEDIA: tags."
         # Messaging hints should still advertise MEDIA: positively (sanity
         # check that this test is calibrated correctly).
-        # Dieted (#95681): messaging hints now share the _MEDIA_NATIVE
-        # spine ("write MEDIA:/absolute/path..."), not per-hint prose.
-        assert "MEDIA:/absolute/path" in PLATFORM_HINTS["telegram"]
+        assert "include MEDIA:" in PLATFORM_HINTS["telegram"]
 
 
 
@@ -1033,5 +1219,3 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
-
