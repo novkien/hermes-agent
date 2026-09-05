@@ -28,6 +28,7 @@ from gateway.platforms.base import (
 # Mock the telegram package if it's not installed
 # ---------------------------------------------------------------------------
 # Now we can safely import
+from plugins.platforms.telegram import adapter as telegram_adapter  # noqa: E402
 from plugins.platforms.telegram.adapter import TelegramAdapter  # noqa: E402
 
 
@@ -541,3 +542,29 @@ class TestSendVideo:
 
         call_kwargs = connected_adapter._bot.send_video.call_args[1]
         assert call_kwargs["message_thread_id"] == 789
+
+    @pytest.mark.asyncio
+    async def test_send_video_forwards_source_metadata(self, connected_adapter, tmp_path, monkeypatch):
+        """Explicit dimensions prevent Telegram's bad square server probe."""
+        test_file = tmp_path / "clip.mp4"
+        test_file.write_bytes(b"not-a-real-mp4")
+
+        mock_msg = MagicMock()
+        mock_msg.message_id = 202
+        connected_adapter._bot.send_video = AsyncMock(return_value=mock_msg)
+        monkeypatch.setattr(
+            telegram_adapter,
+            "_probe_video_metadata",
+            lambda _path: {"width": 736, "height": 416, "duration": 20},
+        )
+
+        result = await connected_adapter.send_video(
+            chat_id="12345",
+            video_path=str(test_file),
+        )
+
+        assert result.success is True
+        call_kwargs = connected_adapter._bot.send_video.call_args.kwargs
+        assert call_kwargs["width"] == 736
+        assert call_kwargs["height"] == 416
+        assert call_kwargs["duration"] == 20

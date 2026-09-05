@@ -353,6 +353,67 @@ def _probe_voice_duration_seconds(path: str) -> Optional[int]:
     return None
 
 
+def _probe_video_metadata(path: str) -> Dict[str, int]:
+    """Read video dimensions and duration for Telegram's ``sendVideo``.
+
+    Telegram's server-side probe can return ``320x320``/``duration=0`` for
+    otherwise valid MP4 uploads (notably HEVC files). Supplying the values
+    explicitly keeps the media message metadata aligned with the bytes we
+    actually upload. This is best effort: an unprobeable file follows the
+    existing send path with no guessed values.
+    """
+    try:
+        try:
+            from tools.transcription_tools import _find_ffprobe_binary
+
+            ffprobe = _find_ffprobe_binary()
+        except ImportError:
+            ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return {}
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height:format=duration",
+                "-of",
+                "json",
+                path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+        payload = json.loads(proc.stdout)
+        streams = payload.get("streams") or []
+        stream = streams[0] if streams else {}
+        result: Dict[str, int] = {}
+        for key in ("width", "height"):
+            try:
+                value = int(stream.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                result[key] = value
+        duration = _coerce_duration_seconds(
+            (payload.get("format") or {}).get("duration")
+        )
+        if duration is not None:
+            result["duration"] = duration
+        return result
+    except Exception:
+        logger.debug("[telegram] video metadata probe failed", exc_info=True)
+        return {}
+
+
 def _mp4_has_trailing_moov(video_path: str) -> bool:
     """Return whether an MP4's top-level ``moov`` follows its media data.
 
@@ -8609,6 +8670,15 @@ class TelegramAdapter(BasePlatformAdapter):
             delivery_path, tmp_delivery = await (
                 _prepare_telegram_delivery_video_path(video_path)
             )
+            # Do not leave dimensions to Telegram's server-side probe. Some
+            # HEVC/ComfyUI MP4s are accepted successfully but come back as a
+            # square 320x320 video with duration 0, so Telegram clients render
+            # a square player even though the uploaded bytes are widescreen.
+            # Probe the final upload copy and pass only verified values; the
+            # payload itself remains byte-for-byte lossless.
+            video_metadata = await asyncio.to_thread(
+                _probe_video_metadata, delivery_path
+            )
 
             _thread = self._metadata_thread_id(metadata)
             reply_to_id = self._reply_to_message_id_for_send(reply_to, metadata, reply_to_mode=self._reply_to_mode)
@@ -8620,18 +8690,20 @@ class TelegramAdapter(BasePlatformAdapter):
                 reply_to_mode=self._reply_to_mode
             )
             with open(delivery_path, "rb") as f:
+                send_kwargs = {
+                    "chat_id": normalize_telegram_chat_id(chat_id),
+                    "video": f,
+                    "filename": os.path.basename(video_path),
+                    "caption": caption[:1024] if caption else None,
+                    "reply_to_message_id": reply_to_id,
+                    "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
+                    **thread_kwargs,
+                    **self._notification_kwargs(metadata),
+                }
+                send_kwargs.update(video_metadata)
                 msg = await self._send_with_dm_topic_reply_anchor_retry(
                     self._bot.send_video,
-                    {
-                        "chat_id": normalize_telegram_chat_id(chat_id),
-                        "video": f,
-                        "filename": os.path.basename(video_path),
-                        "caption": caption[:1024] if caption else None,
-                        "reply_to_message_id": reply_to_id,
-                        "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
-                        **thread_kwargs,
-                        **self._notification_kwargs(metadata),
-                    },
+                    send_kwargs,
                     metadata,
                     reply_to_id,
                     "video",
