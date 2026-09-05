@@ -17,6 +17,19 @@ See also:
 - [Bundled Skills Retirement](/reference/skills-catalog)
 - [Official Optional Skills Catalog](/reference/optional-skills-catalog)
 
+## Role-scoped loading
+
+Skill discovery follows the active role's bootstrap and permissions. Load a required
+role reference before selecting specialist procedures; reuse its content while it remains
+in context. Category headings are groups, not plugin namespaces: a skill shown as
+`comfyui` under category `comfyui` is loaded as `skill_view(name="comfyui")`.
+Use `file_path` for supporting references. A policy denial does not authorize filesystem
+access to the same skill. Skill repair requires task and role authority.
+
+The stored session system prompt excludes ephemeral channel additions. To inspect what
+an API request receives, include the channel prompt appended by the conversation loop.
+A stored prompt alone is not a complete historical request capture.
+
 ## Bundled-skill compatibility controls
 
 This owner fork no longer seeds bundled skills. The following controls remain for compatibility with older installations and upstream profile automation, but they cannot restore a bundled skill because this repository contains no bundled source tree:

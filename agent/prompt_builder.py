@@ -401,17 +401,17 @@ KANBAN_GUIDANCE = (
 
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"
-    "You MUST use your tools to take action — do not describe what you would do "
-    "or plan to do without actually doing it. When you say you will perform an "
-    "action (e.g. 'I will run the tests', 'Let me check the file', 'I will create "
-    "the project'), you MUST immediately make the corresponding tool call in the same "
-    "response. Never end your turn with a promise of future action — execute it now.\n"
-    "Keep working until the task is actually complete. Do not stop with a summary of "
-    "what you plan to do next time. If you have tools available that can accomplish "
-    "the task, use them instead of telling the user what you would do.\n"
-    "Every response should either (a) contain tool calls that make progress, or "
-    "(b) deliver a final result to the user. Responses that only describe intentions "
-    "without acting are not acceptable."
+    "You MUST make the tool call for an authorized action rather than merely "
+    "promising future work. "
+    "First satisfy the active role and prerequisite procedure; available tools "
+    "do not grant execution authority. When specialist work belongs to another "
+    "role, use the authorized handoff instead of executing it yourself.\n"
+    "Continue independent authorized work until the requested outcome is complete. "
+    "When the next step depends on a delegated return, yield when the active "
+    "role contract requires it. Continue supported waiting for your own processes. "
+    "Report a precise dependency when no authorized action "
+    "can make progress; never imply that submission is completion. "
+    "Explicit plan-only or read-only requests keep their stated boundary."
 )
 
 # Model name substrings that trigger tool-use enforcement guidance.
@@ -499,12 +499,14 @@ TASK_COMPLETION_GUIDANCE = (
 PARALLEL_TOOL_CALL_GUIDANCE = (
     "# Parallel tool calls\n"
     "When you need several pieces of information that don't depend on each "
-    "other, request them together in a single response instead of one tool "
+    "other, and all are permitted by the active role, request them together "
+    "in a single response instead of one tool "
     "call per turn. Independent reads, searches, web fetches, and read-only "
     "commands should be batched into the same assistant turn — the runtime "
     "executes independent calls concurrently, and batching avoids resending "
     "the whole conversation on every extra round-trip.\n"
-    "Only serialize calls when a later call genuinely depends on an earlier "
+    "Role-reference bootstrap is a prerequisite: finish it before selecting or "
+    "loading specialist procedures. Serialize calls when a later call depends on an earlier "
     "call's result (e.g. you must read a file before you can patch it). When "
     "in doubt and the calls are independent, batch them."
 )
@@ -528,13 +530,19 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
 # EXECUTION_GUIDANCE_MODELS substring tuple below.
 OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "# Execution discipline\n"
+    "Apply these tool and verification rules only within the active role and task "
+    "authority. For delegated work, assess the authorized executor's evidence; "
+    "do not repeat specialist execution or poll when the role contract forbids it.\n"
     "<tool_persistence>\n"
     "- Use tools whenever they improve correctness, completeness, or grounding.\n"
     "- Do not stop early when another tool call would materially improve the result.\n"
     "- If a tool returns empty, partial, or suspiciously narrow results, retry "
-    "with a broader or different query or strategy before concluding.\n"
-    "- Keep calling tools until: (1) the task is complete, AND (2) you have verified "
-    "the result.\n"
+    "with a materially different authorized query or strategy before concluding. "
+    "A policy denial is a boundary, not permission to try another access path.\n"
+    "- Continue available authorized actions. For a pending delegated handoff, "
+    "yield instead of polling only when the active role contract requires it. "
+    "For your own tool-launched processes, use the supported process poll/wait "
+    "operations to obtain completion and verification evidence.\n"
     "</tool_persistence>\n"
     "\n"
     "<mandatory_tool_use>\n"
@@ -2106,11 +2114,6 @@ def _build_skills_system_prompt_inner(
     if not skills_by_category:
         result = ""
     else:
-        # "basic tools like web_search or terminal" — don't name web_search
-        # when the session has no web tools (dangling reference otherwise).
-        _basic_tools = "web_search or terminal"
-        if available_tools is not None and "web_search" not in available_tools:
-            _basic_tools = "terminal"
         index_lines = []
         for category in sorted(skills_by_category.keys()):
             # Deduplicate by rendered name and sort skills within each category.
@@ -2167,26 +2170,27 @@ def _build_skills_system_prompt_inner(
 
         result = (
             "## Skills\n"
-            "Before replying, scan the skills below. If a skill matches or is even partially relevant "
-            "to your task, you MUST load it with skill_view(name) and follow its instructions. "
-            "Err on the side of loading — it is always better to have context you don't need "
-            "than to miss critical steps, pitfalls, or established workflows. "
-            "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
-            "and proven workflows that outperform general-purpose approaches. Load the skill "
-            f"even if you think you could handle the task with basic tools like {_basic_tools}. "
-            "Skills also encode the user's preferred approach, conventions, and quality standards "
-            "for tasks like code review, planning, and testing — load them even for tasks you "
-            "already know how to do, because the skill defines how it should be done here.\n"
-            "If a skill has issues, fix it with skill_manage(action='patch').\n"
-            "After difficult/iterative tasks, offer to save as a skill. "
-            "If a skill you loaded was missing steps, had wrong commands, or needed "
-            "pitfalls you discovered, update it before finishing.\n"
+            "First follow the active role's bootstrap procedure. Then load the relevant "
+            "skills needed for your authorized part of the task with skill_view(name). "
+            "Reuse substantive guidance already in context; a catalog entry is not a "
+            "loaded reference. Skill visibility does not expand role authority.\n"
+            "Category headings group skills; they are not plugin namespaces. Use the "
+            "listed skill name, not category:name. Use plugin:skill only when that "
+            "qualified identity is explicitly listed. Read supporting files with "
+            "skill_view(name=..., file_path=...).\n"
+            "On a load error, distinguish an incorrect name from a policy denial. "
+            "Correct an evidenced invocation error once; never bypass the policy "
+            "with terminal/file reads. Report the exact missing dependency and "
+            "continue unaffected authorized work.\n"
+            "Repair or save a skill only when the task and active role authorize "
+            "that persistent change. Otherwise report the defect through the "
+            "established owner; do not make unrelated skill edits a completion gate.\n"
             "\n"
             "<available_skills>\n"
             + "\n".join(index_lines) + "\n"
             "</available_skills>\n"
             "\n"
-            "Only proceed without loading a skill if genuinely none are relevant to the task."
+            "Follow the loaded procedure within the active role and task boundary."
             + hidden_note
         )
 
