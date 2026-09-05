@@ -46,6 +46,26 @@ High-value scopes include:
 
 Do not reconstruct subsystem behavior from this root file when current source or scoped context can answer it.
 
+## Cross-repository Hermes skill development
+
+Owner-managed shared skills and profile-selectable skill packs are a separate project context, not a subtree convention of `hermes-agent`.
+
+When a task creates, repairs, consolidates, reviews, renames, moves, or otherwise changes an owner-managed package under `novkien/hermes-skills` — including the live views `/home/jarvis/.hermes/skills/**` and `/home/jarvis/.hermes/workspace/skills-pack/**` or the canonical child checkout `/home/jarvis/.hermes/.sources/hermes-skills/**` — switch to the physical `novkien/hermes-skills` repository before authoring the skill change.
+
+Before changing skill semantics or package contents:
+
+1. read the current `novkien/hermes-skills/AGENTS.md` from the exact intended source ref;
+2. read its `.agents/README.md` and only the task-specific context it routes to; and
+3. for skill creation, repair, consolidation, or skill-package review, read `.agents/skills/skill-creator/SKILL.md` before authoring.
+
+Treat that child repository context as the governing development contract for the skill change. Do not substitute this repository's bundled/optional skill conventions, copied prose, memory, an older project snapshot, or a previously loaded Hermes skill for the current `hermes-skills` context. Do not copy the child `.agents` context into this repository to make it easier to reach; that would create another stale source of truth.
+
+This handoff applies even when the agent harness originally started from `novkien/hermes-agent` or from the parent `novkien/hermes` superproject. Carry the owner request and relevant verified evidence across the repository boundary, then follow the physical owner's instructions. Commit, PR, version lineage, package validation, parent projection, and deployment remain owned by the repository that actually contains the changed source.
+
+If the required `hermes-skills` context is absent from the exact intended ref or cannot be read, do not guess its rules from this repository. Establish the correct child ref/context or report that bounded dependency; continue independent `hermes-agent` work that does not depend on the missing skill contract.
+
+This rule does not reclassify Hermes Agent's own upstream/bundled skill source as owner-managed `hermes-skills`. Resolve source ownership from the requested target and current repository topology first.
+
 ## Source ownership boundaries
 
 - Hermes executable/core/runtime framework work belongs here.
