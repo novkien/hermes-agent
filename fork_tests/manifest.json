@@ -2556,6 +2556,22 @@
       "runner": "javascript",
       "sha256": "3b2a1a8969558edb4b554f0dca286a1fc4ef3cd89b9c00583ba20a3a75df8841",
       "shared_path": "web/src/lib/pty-resume-sanitizer.test.ts"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_documents.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "0756f010deb360d371e5f29fa83bc7f816845803",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_documents.py::test_send_video_forwards_source_metadata"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "562d2cbaceb5f041624666e9eca20871225a2f0f04cb6523c1922f81664c245e",
+      "shared_path": "tests/gateway/test_telegram_documents.py"
     }
   ],
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
