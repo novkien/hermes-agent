@@ -2488,6 +2488,22 @@
       "shared_path": "tests/tools/test_skill_manager_tool.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/tools/test_skills_tool.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "8cca43f86e3c11d9b2e668a6b572e74895f957fb",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/tools/test_skills_tool.py::TestSkillView::test_view_binary_support_file_returns_metadata_only"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "a384697a0e44d12bf6015410c02c931e0519ff72510dbfb473c27b648dc8b1da",
+      "shared_path": "tests/tools/test_skills_tool.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/tui_gateway/test_goal_command.py",
       "kind": "owner-modified-shared-test",
       "lineage": {
@@ -2545,8 +2561,8 @@
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
     "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
-    "generated_at": "2026-09-04T10:33:32.313221+00:00",
-    "owner_sha": "6e592018d7358aadf92ed4b562750a39233beb77",
+    "generated_at": "2026-09-05T18:19:27.621753+00:00",
+    "owner_sha": "8cca43f86e3c11d9b2e668a6b572e74895f957fb",
     "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
   },
   "version": 1

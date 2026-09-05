@@ -376,6 +376,26 @@ class TestSkillView:
         assert skill["linked_files"] is not None
         assert "references" in skill["linked_files"]
 
+    def test_view_binary_support_file_returns_metadata_only(self, tmp_path):
+        """Compressed templates must never be decoded into model context."""
+        import gzip
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = _make_skill(tmp_path, "my-skill")
+            templates_dir = skill_dir / "templates"
+            templates_dir.mkdir()
+            graph = b'{"private_node":"secret graph payload"}'
+            (templates_dir / "workflow.api.json.gz").write_bytes(gzip.compress(graph, mtime=0))
+
+            result = json.loads(
+                skill_view("my-skill", file_path="templates/workflow.api.json.gz")
+            )
+
+        assert result["success"] is True
+        assert result["is_binary"] is True
+        assert result["content"].startswith("[Binary file:")
+        assert "private_node" not in result["content"]
+
     def test_view_file_path_directory_returns_available_files(self, tmp_path):
         """Requesting a directory (e.g. 'references') must not raise.
 
