@@ -132,6 +132,22 @@
       "shared_path": "tests/agent/test_session_event_relay.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/agent/test_skill_access.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "a225943d55f98de879e5220412d60481d7769268",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/agent/test_skill_access.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "067b8ded2c6d8a96552fc55ecf5df58c959c45c3ccb713eee66856bcc65b356d",
+      "shared_path": "tests/agent/test_skill_access.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/agent/test_skill_artifact_contracts.py",
       "kind": "owner-only-shared-test",
       "lineage": {
@@ -254,6 +270,22 @@
       "shared_path": "tests/agent/test_system_prompt.py"
     },
     {
+      "case_path": "fork_tests/cases/tests/cli/test_worktree_managed.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "a225943d55f98de879e5220412d60481d7769268",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/cli/test_worktree_managed.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "2861196119fed3c16ccba012e6e9cd66a0583fb4f55e9edc9d9224d97540e54e",
+      "shared_path": "tests/cli/test_worktree_managed.py"
+    },
+    {
       "case_path": "fork_tests/cases/tests/gateway/test_73771_media_resend_dedup.py",
       "kind": "owner-modified-shared-test",
       "lineage": {
@@ -366,6 +398,22 @@
       "runner": "python",
       "sha256": "196e717bce5fde6f27cb02fa9c1711f5fd47ace5f24e08e42abecd39177ad03e",
       "shared_path": "tests/gateway/test_pii_redaction.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_profile_skill_access.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "a225943d55f98de879e5220412d60481d7769268",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/gateway/test_profile_skill_access.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "237d35893a796494d5b538be375d4b734b3ca502faa477f0c3162145b77479a7",
+      "shared_path": "tests/gateway/test_profile_skill_access.py"
     },
     {
       "case_path": "fork_tests/cases/tests/gateway/test_prompt_tail_freeze.py",
@@ -512,6 +560,22 @@
       "runner": "python",
       "sha256": "1bb60b0b010a941f25b7a49ee2342677b86f6850451b471de42d6a10da2f354b",
       "shared_path": "tests/gateway/test_session_info.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/gateway/test_telegram_documents.py",
+      "kind": "owner-modified-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "0756f010deb360d371e5f29fa83bc7f816845803",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/gateway/test_telegram_documents.py::test_send_video_forwards_source_metadata"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "562d2cbaceb5f041624666e9eca20871225a2f0f04cb6523c1922f81664c245e",
+      "shared_path": "tests/gateway/test_telegram_documents.py"
     },
     {
       "case_path": "fork_tests/cases/tests/gateway/test_telegram_rich_messages.py",
@@ -696,6 +760,22 @@
       "runner": "python",
       "sha256": "7273a0a53d3c8337ee6d75023cc32c877f838f069878ee9463cc778a459cf860",
       "shared_path": "tests/hermes_cli/test_mission_control.py"
+    },
+    {
+      "case_path": "fork_tests/cases/tests/hermes_cli/test_oneshot_lifecycle.py",
+      "kind": "owner-only-shared-test",
+      "lineage": {
+        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
+        "owner_sha": "a225943d55f98de879e5220412d60481d7769268",
+        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
+      },
+      "nodeids": [
+        "tests/hermes_cli/test_oneshot_lifecycle.py"
+      ],
+      "replaced_upstream_nodeids": [],
+      "runner": "python",
+      "sha256": "b13645a7456b3f3781623dc12de982167e6130cf6a4b43c8a81546453bc63801",
+      "shared_path": "tests/hermes_cli/test_oneshot_lifecycle.py"
     },
     {
       "case_path": "fork_tests/cases/tests/hermes_cli/test_profile_config_inheritance.py",
@@ -2556,29 +2636,13 @@
       "runner": "javascript",
       "sha256": "3b2a1a8969558edb4b554f0dca286a1fc4ef3cd89b9c00583ba20a3a75df8841",
       "shared_path": "web/src/lib/pty-resume-sanitizer.test.ts"
-    },
-    {
-      "case_path": "fork_tests/cases/tests/gateway/test_telegram_documents.py",
-      "kind": "owner-modified-shared-test",
-      "lineage": {
-        "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
-        "owner_sha": "0756f010deb360d371e5f29fa83bc7f816845803",
-        "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
-      },
-      "nodeids": [
-        "tests/gateway/test_telegram_documents.py::test_send_video_forwards_source_metadata"
-      ],
-      "replaced_upstream_nodeids": [],
-      "runner": "python",
-      "sha256": "562d2cbaceb5f041624666e9eca20871225a2f0f04cb6523c1922f81664c245e",
-      "shared_path": "tests/gateway/test_telegram_documents.py"
     }
   ],
   "description": "Maintained fork regression cases isolated from the shared upstream test surface. These are executable sources, not snapshots.",
   "last_isolation": {
     "common_base_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5",
-    "generated_at": "2026-09-05T18:19:27.621753+00:00",
-    "owner_sha": "8cca43f86e3c11d9b2e668a6b572e74895f957fb",
+    "generated_at": "2026-09-06T23:07:05.710402+00:00",
+    "owner_sha": "a225943d55f98de879e5220412d60481d7769268",
     "upstream_target_sha": "f6c9cb7b904679df8b6fdc2e6368fed00e3faab5"
   },
   "version": 1
