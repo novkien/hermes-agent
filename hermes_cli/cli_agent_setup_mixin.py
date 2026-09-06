@@ -535,6 +535,7 @@ class CLIAgentSetupMixin:
                 quiet_mode=not self.verbose,
                 tool_progress_mode=getattr(self, "tool_progress_mode", "all"),
                 ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
+                preloaded_skill_names=getattr(self, "preloaded_skills", None),
                 prefill_messages=self.prefill_messages or None,
                 reasoning_config=self.reasoning_config,
                 service_tier=self.service_tier,

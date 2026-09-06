@@ -181,6 +181,7 @@ def _write_usage_file(path: Optional[str], result: dict, failure: Optional[str] 
             "model": result.get("model"),
             "provider": result.get("provider"),
             "session_id": result.get("session_id"),
+            "managed_run": result.get("managed_run"),
             "completed": result.get("completed"),
             "failed": bool(result.get("failed")) or failure is not None,
             # Billing-audit field: the service tier this run REQUESTED via
@@ -326,6 +327,9 @@ def run_oneshot(
         if not response.endswith("\n"):
             real_stdout.write("\n")
         real_stdout.flush()
+
+    if result.get("managed_run") and (result.get("failed") or result.get("partial") or not result.get("completed")):
+        return 2
 
     if (result.get("failed") or result.get("partial")) and not (response or "").strip():
         return 2
@@ -503,6 +507,7 @@ def _run_agent(
             credential_pool=runtime.get("credential_pool"),
             fallback_model=_fb or None,
             ephemeral_system_prompt=skills_prompt,
+            preloaded_skill_names=_normalize_skills(skills),
             # Interactive callbacks are intentionally NOT wired beyond this
             # one.  In oneshot mode there's no user sitting at a terminal:
             #   - clarify  → returns a synthetic "pick a default" instruction
@@ -523,7 +528,10 @@ def _run_agent(
         agent.stream_delta_callback = None
         agent.tool_gen_callback = None
 
-        result = agent.run_conversation(prompt)
+        from hermes_cli.oneshot_lifecycle import oneshot_run
+
+        with oneshot_run(agent, cfg) as run:
+            result = run(prompt)
         return (result.get("final_response") or "", result)
     finally:
         # Ordering deliberately mirrors gateway/run.py:_cleanup_agent_resources,

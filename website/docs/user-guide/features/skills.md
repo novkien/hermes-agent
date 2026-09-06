@@ -1030,3 +1030,26 @@ All the same commands work with `/skills`:
 ```
 
 Official optional skills still use identifiers like `official/security/1password` and `official/migration/openclaw-migration`.
+
+### Profile access and required preloads
+
+Profiles can restrict their canonical skill inventory and load governing skills
+once at agent construction:
+
+```yaml
+skills:
+  enabled: [coder-manager]
+  preload: [coder-manager]
+```
+
+`enabled` controls catalog visibility, model-facing skill access, and explicit
+CLI preload requests. An empty list denies all skills; omitting the setting
+preserves legacy access. `preload` must be a subset of the effective allowed set.
+Unknown names, duplicate entries, and missing required preloads fail before work.
+Use installed canonical frontmatter names, not categories or filesystem paths.
+
+The same policy applies to CLI, oneshot, gateway, and Worker agents. A Telegram
+topic allowlist can narrow a profile allowlist, never expand it. `skills.mode`
+only changes catalog presentation and does not grant access. Profile preloads
+already supplied by a CLI or channel are not loaded again. Existing sessions
+keep their frozen policy; start a fresh session after configuration changes.

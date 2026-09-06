@@ -571,6 +571,7 @@ class AIAgent:
         pass_session_id: bool = False,
         requested_provider: str = None,
         auto_loaded_skill_prompt: str = "",
+        preloaded_skill_names: List[str] = None,
         enabled_skills: List[str] = None,
         skills_mode: dict = None,
         capabilities: Dict[str, bool] | None = None,
@@ -667,6 +668,7 @@ class AIAgent:
             checkpoint_max_file_size_mb=checkpoint_max_file_size_mb,
             pass_session_id=pass_session_id,
             auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+            preloaded_skill_names=preloaded_skill_names,
             enabled_skills=enabled_skills,
             skills_mode=skills_mode,
         )
@@ -9651,7 +9653,11 @@ class AIAgent:
             # replaces the value with the live runtime after fallback restoration.
             # Keep the scope local instead of storing ContextVar tokens on the agent,
             # which may be observed from another thread.
-            with bind_subagent_parent(self), scoped_runtime_main({}):
+            from agent.skill_policy_context import bind_enabled_skills
+
+            with bind_subagent_parent(self), scoped_runtime_main({}), bind_enabled_skills(
+                getattr(self, "enabled_skills", None)
+            ):
                 try:
                     if durable_turn_lease_thread is not None:
                         with durable_turn_lease_activity_lock:

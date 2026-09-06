@@ -1756,3 +1756,18 @@ def handler(args, **kwargs):
 # Good — model knows exactly when and how
 "description": "Evaluate a mathematical expression. Use for arithmetic, trig, logarithms. Supports: +, -, *, /, **, sqrt, sin, cos, log, pi, e."
 ```
+## Delegated oneshot lifecycle
+
+A profile may set `oneshot.lifecycle: worker-pool` (or another installed plugin
+name) when its oneshot must survive delegated work. Core invokes
+`on_oneshot_start(agent, config, owner)` once. The selected plugin returns
+`{"owner": "worker-pool", "run": callable, "close": callable}`. `run(prompt)`
+returns the normal conversation result after authenticated continuation and
+synthesis; `close()` settles owned work on success, error, or cancellation.
+
+Construct the handle in the hook; perform waiting inside `run`, outside the hook
+dispatcher. Exactly one matching handle is required. Missing/broken configured
+lifecycles fail rather than silently becoming single-turn oneshots. Core still
+owns final stdout, usage capture, and agent cleanup. Unconfigured profiles keep
+the ordinary oneshot path. Native delivery/correlation and task storage remain
+the plugin's responsibility; this hook does not provide another task scheduler.
