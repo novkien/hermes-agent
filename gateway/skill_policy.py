@@ -1,4 +1,4 @@
-"""Authoritative, fail-closed Telegram topic skill policy."""
+"""Fail-closed topic narrowing of the shared profile skill policy."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +7,7 @@ from hashlib import sha256
 from typing import Iterable
 
 from agent.skill_context import validate_skills_mode
+from agent.skill_access import canonical_skill_identity, resolve_skill_access
 
 
 class SkillPolicyStatus(str, Enum):
@@ -32,20 +33,6 @@ class EnabledSkillsPolicy:
             self.status is SkillPolicyStatus.CONFIGURED_VALID
             and identity in self.identities
         )
-
-
-def canonical_skill_identity(value: object) -> str:
-    value = str(value or "").strip()
-    if not value or "/" in value or ":" in value or "\\" in value:
-        raise ValueError(f"unsupported enabled_skills identity: {value!r}")
-    from agent.skill_utils import normalize_skill_lookup_name
-
-    identity = normalize_skill_lookup_name(value)
-    if not identity or identity != value:
-        raise ValueError(
-            f"enabled_skills must use canonical frontmatter names: {value!r}"
-        )
-    return identity
 
 
 def _failure(status: SkillPolicyStatus, error: str) -> EnabledSkillsPolicy:
@@ -77,7 +64,13 @@ def resolve_enabled_skills_policy(
             or not getattr(source, "chat_id", None)
             or not getattr(source, "thread_id", None)
         ):
-            return EnabledSkillsPolicy(SkillPolicyStatus.UNCONFIGURED)
+            profile = resolve_skill_access(config, known=skill_names)
+            if profile.enabled is None:
+                return EnabledSkillsPolicy(SkillPolicyStatus.UNCONFIGURED)
+            return EnabledSkillsPolicy(
+                SkillPolicyStatus.CONFIGURED_VALID, profile.enabled,
+                sha256("|".join(sorted(profile.enabled)).encode()).hexdigest(),
+            )
         if not isinstance(config, dict):
             return _failure(
                 SkillPolicyStatus.RESOLUTION_ERROR,
@@ -89,7 +82,13 @@ def resolve_enabled_skills_policy(
             _topic_extra(config), str(source.chat_id), str(source.thread_id)
         )
         if topic is None or "enabled_skills" not in topic:
-            return EnabledSkillsPolicy(SkillPolicyStatus.UNCONFIGURED)
+            profile = resolve_skill_access(config, known=skill_names)
+            if profile.enabled is None:
+                return EnabledSkillsPolicy(SkillPolicyStatus.UNCONFIGURED)
+            return EnabledSkillsPolicy(
+                SkillPolicyStatus.CONFIGURED_VALID, profile.enabled,
+                sha256("|".join(sorted(profile.enabled)).encode()).hexdigest(),
+            )
         raw = topic.get("enabled_skills")
         if not isinstance(raw, list) or not raw:
             return _failure(
@@ -115,6 +114,9 @@ def resolve_enabled_skills_policy(
                     SkillPolicyStatus.CONFIGURED_INVALID,
                     "unknown enabled_skills: " + ", ".join(unknown),
                 )
+        identities = list(resolve_skill_access(
+            config, enabled=identities, known=skill_names
+        ).enabled or ())
         canonical = str(topic.get("thread_id", ""))
         material = "|".join([canonical, *sorted(identities), *sorted(skill_names or ())])
         return EnabledSkillsPolicy(

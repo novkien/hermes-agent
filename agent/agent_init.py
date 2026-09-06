@@ -615,6 +615,7 @@ def init_agent(
     pass_session_id: bool = False,
     requested_provider: str = None,
     auto_loaded_skill_prompt: str = "",
+    preloaded_skill_names: List[str] = None,
     enabled_skills: List[str] = None,
     skills_mode: dict = None,
     capabilities: Optional[Dict[str, bool]] = None,
@@ -1833,6 +1834,10 @@ def init_agent(
         _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}
+
+    from agent.skill_access import materialize_profile_preloads
+
+    materialize_profile_preloads(agent, _agent_cfg, preloaded_skill_names or ())
 
     if agent.skills_mode is None:
         from agent.skill_context import resolve_profile_skills_mode

@@ -6246,6 +6246,7 @@ class TurnRunner:
                 # a single small file, not part of the expensive walk.
                 load_soul_identity=True,
                 auto_loaded_skill_prompt=ctx.auto_loaded_skill_prompt,
+                preloaded_skill_names=ctx.auto_skill_names,
                 enabled_skills=ctx.enabled_skills,
                 skills_mode=ctx.skills_mode,
             )
@@ -30888,6 +30889,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _topic_policy.get("toolsets_fingerprint") or "legacy"
             ),
             auto_loaded_skill_prompt=auto_loaded_skill_prompt,
+            auto_skill_names=auto_skill_names,
             log_mode_enabled=log_mode_enabled,
             interim_assistant_messages_enabled=interim_assistant_messages_enabled,
             needs_progress_queue=needs_progress_queue,

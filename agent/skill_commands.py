@@ -864,6 +864,18 @@ def build_preloaded_skills_prompt(
     except Exception:
         disabled_names = set()
 
+    from agent.skill_access import resolve_configured_skill_access
+    from agent.skill_policy_context import current_enabled_skills
+    from hermes_cli.config import load_config_readonly
+
+    policy = resolve_configured_skill_access(
+        load_config_readonly(), enabled=current_enabled_skills()
+    )
+    if policy.enabled is not None:
+        denied = set(skill_identifiers) - set(policy.enabled)
+        if denied:
+            raise ValueError("Skill policy denied preload: " + ", ".join(sorted(denied)))
+
     seen: set[str] = set()
     for raw_identifier in skill_identifiers:
         identifier = (raw_identifier or "").strip()
