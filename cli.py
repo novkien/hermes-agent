@@ -1849,7 +1849,9 @@ def _resolve_worktree_base(
 
 
 def _setup_worktree(repo_root: str = None, sync_base: bool = True,
-                    name: Optional[str] = None) -> Optional[Dict[str, str]]:
+                    name: Optional[str] = None, *,
+                    base_commit: Optional[str] = None,
+                    managed_owner: Optional[str] = None) -> Optional[Dict[str, str]]:
     """Create an isolated git worktree for this CLI session.
 
     Returns a dict with worktree metadata on success, None on failure.
@@ -1867,11 +1869,25 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
     """
     import subprocess
 
+    if base_commit is not None and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_commit):
+        raise ValueError("base_commit must be an exact commit SHA")
+    if managed_owner is not None and (not base_commit or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", managed_owner)):
+        raise ValueError("Managed worktrees require an exact commit and stable owner")
+
     repo_root = repo_root or _git_repo_root()
     if not repo_root:
         _cprint("\033[31m✗ --worktree requires being inside a git repository.\033[0m")
         print("  cd into your project repo first, then run hermes -w")
         return None
+
+    git_kwargs = {}
+    if managed_owner:
+        git_env = dict(os.environ)
+        for key in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+            git_env.pop(key, None)
+        git_env["GIT_WORK_TREE"] = str(Path(repo_root).resolve())
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+        git_kwargs["env"] = git_env
 
     if name:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._")[:40]
@@ -1893,8 +1909,16 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
               f"git worktree remove {wt_path}")
         return None
 
-    # Ensure .worktrees/ is in .gitignore
+    # Managed callers must not edit tracked source in the parent checkout.
+    # They use the same native location, excluded through local Git metadata.
     gitignore = Path(repo_root) / ".gitignore"
+    if managed_owner:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=repo_root, capture_output=True, text=True, check=True, timeout=10, **git_kwargs,
+        ).stdout.strip()
+        gitignore = Path(common) / "info" / "exclude"
+        gitignore.parent.mkdir(parents=True, exist_ok=True)
     _ignore_entry = ".worktrees/"
     try:
         # utf-8-sig: git files are UTF-8 and Notepad prepends a BOM, which
@@ -1917,7 +1941,9 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
     # Resolve the base ref. By default branch from the freshly-fetched remote
     # tip so the worktree starts current with the project, not from the
     # (possibly stale) local HEAD of the standalone clone (#10760 follow-up).
-    if sync_base:
+    if base_commit:
+        base_ref, base_label = base_commit, base_commit
+    elif sync_base:
         base_ref, base_label = _resolve_worktree_base(repo_root)
     else:
         base_ref, base_label = "HEAD", "HEAD (local — worktree_sync disabled)"
@@ -1931,6 +1957,8 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         "-c", "checkout.workers=8",
         "-c", "checkout.thresholdForParallelism=100",
     ]
+    ownership_flags = (["--lock", "--reason", f"hermes managed={managed_owner}"]
+                       if managed_owner else [])
     try:
         # 120s, not 30: on a multi-agent box the ~10k-file materialization
         # contends with sibling sessions' checkouts/fetches/Electron dev
@@ -1938,26 +1966,28 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         # under load vs 1.2s idle (Aug 2026). A too-tight timeout kills a
         # legitimately slow create and wastes the work already done.
         result = subprocess.run(
-            ["git", *_wt_add_cfg, "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
+            ["git", *_wt_add_cfg, "worktree", "add", *ownership_flags, str(wt_path), "-b", branch_name, base_ref],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root, **git_kwargs,
         )
         if result.returncode != 0:
             # If branching from the resolved remote ref failed for any reason
             # (e.g. a partial fetch left the ref unusable), retry from local
             # HEAD so worktree creation never hard-fails on a sync hiccup.
-            if base_ref != "HEAD":
+            if base_ref != "HEAD" and base_commit is None:
                 logger.warning(
                     "worktree add from %s failed (%s); retrying from local HEAD",
                     base_ref, result.stderr.strip(),
                 )
-                _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
+                if not managed_owner:
+                    _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
                 base_ref, base_label = "HEAD", "HEAD (fallback — remote base failed)"
                 result = subprocess.run(
                     ["git", "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root, **git_kwargs,
                 )
             if result.returncode != 0:
-                _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
+                if not managed_owner:
+                    _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
                 _cprint(f"\033[31m✗ Failed to create worktree: {result.stderr.strip()}\033[0m")
                 return None
     except Exception as e:
@@ -1968,13 +1998,14 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         # the same name fails. Clean up our own wreckage before surfacing
         # the error (Aug 2026 incident: 30s timeout during pack-sprawl left
         # exactly this poison).
-        _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
+        if not managed_owner:
+            _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
         _cprint(f"\033[31m✗ Failed to create worktree: {e}\033[0m")
         return None
 
     # Copy files listed in .worktreeinclude (gitignored files the agent needs)
     include_file = Path(repo_root) / ".worktreeinclude"
-    if include_file.exists():
+    if include_file.exists() and not managed_owner:
         try:
             repo_root_resolved = Path(repo_root).resolve()
             wt_path_resolved = wt_path.resolve()
@@ -2045,6 +2076,12 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
                                 raise
         except Exception as e:
             logger.debug("Error copying .worktreeinclude entries: %s", e)
+
+    # Managed trees were locked atomically at creation and retain their owner
+    # lock across process exits; assignment reconciliation owns release.
+    if managed_owner:
+        return {"path": str(wt_path), "branch": branch_name,
+                "repo_root": repo_root, "base": base_ref, "owner": managed_owner}
 
     # Lock the worktree so other processes (and `git worktree remove`) can see
     # it is actively in use.  Fail-soft: a lock failure never blocks the session.
@@ -2548,6 +2585,8 @@ def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10
             if current != target:
                 continue
             reason = line[len("locked"):].strip()
+            if reason.startswith("hermes managed="):
+                return "live"  # Durable assignment ownership, not PID lifetime.
             m = re.search(r"hermes pid=(\d+)", reason)
             if not m:
                 # Locked by something we don't recognize as a hermes session
@@ -2577,7 +2616,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     """
     global _active_worktree
     info = info or _active_worktree
-    if not info:
+    if not info or info.get("owner"):
         return
 
     import subprocess

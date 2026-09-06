@@ -194,3 +194,22 @@ This combination gives you:
 ## Developing the UI surfaces across worktrees
 
 The TypeScript surfaces (`ui-tui/`, `apps/desktop/`) each need a `node_modules`, which a fresh `npm ci` per worktree duplicates across every branch. If you hack on the TUI or desktop app from multiple worktrees, see [TUI & Desktop from Worktrees](../developer-guide/worktree-ui-dev.md) for the `htui` / `hgui` helpers that share one install by symlink.
+
+### Worktrees owned by background assignments
+
+The native `_setup_worktree` allocator also accepts `base_commit` (an exact
+commit SHA) and `managed_owner` for host-managed assignments. These callers use
+this same `.worktrees/` layout and `hermes/<name>` branches, visible to
+`/worktree list`. Exact candidates never fall back to a different local HEAD.
+The host serializes allocation by the repository's common Git directory.
+
+Managed allocation adds a local Git exclude instead of editing the parent's
+tracked `.gitignore`, and skips `.worktreeinclude`: its directory symlinks can
+share writable files between Workers. Install task dependencies and create test
+outputs inside the assigned tree or a separate assignment-owned scratch area.
+
+A managed tree is locked atomically with its durable assignment owner. CLI exit
+cleanup and native garbage collection preserve this lock even after the creator
+process exits. The owning host must reconcile stopped writers and preserve the
+branch/PR before explicitly releasing it; process death alone is insufficient.
+Failed allocations retain partial work and any pre-existing branch for recovery.
